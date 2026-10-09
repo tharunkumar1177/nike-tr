@@ -214,7 +214,7 @@ mod tests {
     fn angles_normalize_into_one_turn() {
         assert_eq!(Angle::from_decidegrees(3600).decidegrees(), 0);
         assert_eq!(Angle::from_decidegrees(-900).decidegrees(), 2700);
-        assert_eq!(Angle::from_decidegrees(7250).decidegrees(), 250);
+        assert_eq!(Angle::from_decidegrees(7250).decidegrees(), 50);
         let half_turn = Angle::from_decidegrees(1800);
         assert_eq!(
             Angle::from_decidegrees(2700)
