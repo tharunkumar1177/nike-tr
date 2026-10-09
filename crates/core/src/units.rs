@@ -216,7 +216,12 @@ mod tests {
         assert_eq!(Angle::from_decidegrees(-900).decidegrees(), 2700);
         assert_eq!(Angle::from_decidegrees(7250).decidegrees(), 250);
         let half_turn = Angle::from_decidegrees(1800);
-        assert_eq!(Angle::from_decidegrees(2700).rotate(half_turn).decidegrees(), 900);
+        assert_eq!(
+            Angle::from_decidegrees(2700)
+                .rotate(half_turn)
+                .decidegrees(),
+            900
+        );
     }
 
     #[test]

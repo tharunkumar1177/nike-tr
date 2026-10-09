@@ -35,6 +35,9 @@ mod tests {
             version: "0.1.0".to_owned(),
         };
         let json = serde_json::to_value(&info).expect("AppInfo serializes");
-        assert_eq!(json, serde_json::json!({ "name": "Tron", "version": "0.1.0" }));
+        assert_eq!(
+            json,
+            serde_json::json!({ "name": "Tron", "version": "0.1.0" })
+        );
     }
 }
