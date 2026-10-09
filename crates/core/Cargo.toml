@@ -1,0 +1,13 @@
+[package]
+name = "tron-core"
+description = "Design document model and geometry primitives for Tron"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "tron_core"
+
+[lints.rust]
+unsafe_code = "forbid"
