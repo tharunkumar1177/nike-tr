@@ -6,9 +6,13 @@ Every push is installed, linted, type-checked, tested, and built into a Windows 
 
 ## Current verified status
 
-**Status:** Planned
+**Status:** Implemented (Windows only)
 
-No workflow exists yet. Slice 1 delivers it.
+Verified on 2026-10-10 by these CI runs:
+
+- [Run 37982619266](https://github.com/tharunkumar1177/tron/actions/runs/37982619266): bootstrap run. It generated the `lockfiles` artifact, and `cargo fmt --check` failed the run as intended.
+- [Run 37983461090](https://github.com/tharunkumar1177/tron/actions/runs/37983461090): the first run on committed lockfiles. A failing `cargo test` failed the run.
+- [Run 37985560054](https://github.com/tharunkumar1177/tron/actions/runs/37985560054): all four jobs green, including the IPC bindings drift check. It uploaded `windows-installer` (NSIS and MSI).
 
 ## Architecture dependencies
 
@@ -25,6 +29,10 @@ When a lockfile is missing, the workflow generates it and uploads it as an artif
 ### Verification boundaries
 
 The jobs map onto the verification levels: Rust format, clippy with warnings denied, and tests; TypeScript eslint, `tsc --noEmit`, and Vitest; then the Tauri bundle. The bundle job depends on the check jobs passing.
+
+### Releases
+
+Only pushes to `main`, which include merged PRs, publish a GitHub Release. The `release` job runs after `bundle` and attaches the NSIS and MSI installers to the tag `v<version>-build.<run number>`, where the version comes from `src-tauri/tauri.conf.json`. Re-running a run uploads to the same tag and replaces its assets. Pull-request and branch runs publish only the `windows-installer` artifact, because unmerged code is never released. Runs on `main` are never cancelled by newer runs, so a release can't be cut off partway.
 
 ### Component model
 
@@ -43,18 +51,32 @@ None
 
 ## Relevant implementation and tests
 
-- `.github/workflows/ci.yml` — Planned
-- `src-tauri/tauri.conf.json` — Planned
+- `.github/workflows/ci.yml` — jobs `lockfiles`, then `web` and `rust`, then `bundle`, then `release` (on `main` only)
+- `.cargo/config.toml` — points the ts-rs export directory at `ui/src/bindings`
+- `src-tauri/tauri.conf.json` — bundle targets and icon set
+- `app-icon.svg` — the icon source. CI runs `tauri icon` on it, so no binary icons are committed.
+- `crates/core/src/units.rs` — unit tests for the nanometer and angle contracts
+- `src-tauri/src/ipc.rs` — the `AppInfo` IPC type, its serialization test, and the ts-rs export
+- `ui/src/App.test.tsx`, `ui/src/ipc.test.ts` — Vitest tests for UI states and IPC error handling
 
 ## Acceptance or verification criteria
 
-- [ ] A push to any branch runs the check jobs (Rust and TypeScript) and the Windows bundle job.
-- [ ] Clippy warnings, eslint errors, type errors, and failing tests each fail the run.
-- [ ] A successful run uploads the Windows installer as an artifact.
-- [ ] A run without committed lockfiles uploads generated lockfiles as an artifact.
-- [ ] Once lockfiles are committed, installs are locked and fail on drift.
+- [x] A push to any branch runs the check jobs (Rust and TypeScript) and the Windows bundle job.
+- [x] Clippy warnings, eslint errors, type errors, and failing tests each fail the run. A failing format check and a failing test were each observed failing a run. Clippy, eslint, and tsc failures fail through the same exit-code path: `-D warnings` and non-zero exit codes.
+- [x] A successful run uploads the Windows installer as an artifact.
+- [x] A run without committed lockfiles uploads generated lockfiles as an artifact.
+- [ ] A push to `main` publishes a GitHub Release with the NSIS and MSI installers attached. PR runs don't publish one.
+- [x] Once lockfiles are committed, installs are locked (`npm ci`, `cargo --locked`) and fail on drift.
+
+## Local notes
+
+- TypeScript is pinned to 6.0.x because `typescript-eslint` 8.71 supports only `typescript <6.1.0`. Move to 7.x once its peer range allows.
+- Node is pinned to 24.21.0 in CI. Vitest 5 and jsdom 30 require Node 22.12 or newer and Node 24.15 or newer.
+- The bootstrap `package-lock.json` is generated on Linux with `--package-lock-only` and was confirmed to include the Windows native bindings (`@tauri-apps/cli-win32-x64-msvc`, `@rolldown/binding-win32-x64-msvc`).
+- When the drift check fails, CI uploads an `ipc-bindings` artifact with the regenerated TypeScript files to commit.
 
 ## Remaining gaps and unknowns
 
 - Code signing for Windows and macOS installers is not planned yet.
 - The macOS and Linux matrix is slice 13.
+- The `reviewer` subagent's sandbox can't run shell commands, so it can't use `gh`. For slice 1 the main agent read only the failing step logs with `gh` instead.
