@@ -17,7 +17,7 @@ Tron is a local-first desktop app (Tauri 2, Rust, React) for schematic capture, 
 
 ## Slices
 
-- [ ] **1. Walking skeleton** — repo scaffold, CI runs lint, type-check, test, and the Windows installer build. Lockfiles come from CI. Blueprint: [build-and-release](blueprints/build-and-release.md)
+- [x] **1. Walking skeleton** — repo scaffold, CI runs lint, type-check, test, and the Windows installer build. Lockfiles come from CI. Blueprint: [build-and-release](blueprints/build-and-release.md)
 - [ ] **2. Project shell** (UI) — create, open, and save a project. Empty canvas with zoom, pan, undo, and redo. Blueprint: [project-files](blueprints/project-files.md)
 - [ ] **3. Library pipeline** (UI) — CI builds the SQLite index, the app downloads it on first launch, and the library browser offers search. Blueprint: [component-library](blueprints/component-library.md)
 - [ ] **4. Schematic capture** (UI) — place symbols, wires, junctions, labels, and properties. Netlist and ERC. Blueprint: [schematic-capture](blueprints/schematic-capture.md)
@@ -33,4 +33,6 @@ Tron is a local-first desktop app (Tauri 2, Rust, React) for schematic capture, 
 
 ## Current checkpoint
 
-Phase 0 docs are written. Next step: slice 1.
+Slice 1 is done: a green CI run ([37985560054](https://github.com/tharunkumar1177/tron/actions/runs/37985560054)) built the Windows installer. Next step: slice 2, the project shell. It needs an architect plan and a design plan before any code.
+
+Codebase entry points: `crates/core` (units), `src-tauri/src/ipc.rs` (IPC commands and ts-rs types), `ui/src` (React), `.github/workflows/ci.yml`.

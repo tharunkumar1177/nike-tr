@@ -1,0 +1,252 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24.21.0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lockfiles:
+    name: Resolve lockfiles
+    runs-on: ubuntu-latest
+    outputs:
+      generated: ${{ steps.check.outputs.generated }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check for committed lockfiles
+        id: check
+        run: |
+          if [ -f Cargo.lock ] && [ -f package-lock.json ]; then
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node.js
+        if: steps.check.outputs.generated == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Rust
+        if: steps.check.outputs.generated == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate missing lockfiles
+        if: steps.check.outputs.generated == 'true'
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          fi
+          if [ ! -f Cargo.lock ]; then
+            cargo generate-lockfile
+          fi
+
+      - name: Upload generated lockfiles
+        if: steps.check.outputs.generated == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: lockfiles
+          path: |
+            Cargo.lock
+            package-lock.json
+          if-no-files-found: error
+
+  web:
+    name: Web checks
+    needs: lockfiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use generated lockfiles
+        if: needs.lockfiles.outputs.generated == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: lockfiles
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+  rust:
+    name: Rust checks
+    needs: lockfiles
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use generated lockfiles
+        if: needs.lockfiles.outputs.generated == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: lockfiles
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: checks
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build frontend assets
+        run: npm run build
+
+      - name: Generate app icons
+        run: npx tauri icon app-icon.svg
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked --no-fail-fast
+
+      - name: Check generated IPC bindings
+        id: bindings
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          changes="$(git status --porcelain -- ui/src/bindings)"
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            git diff -- ui/src/bindings
+            echo "::error::Generated IPC bindings differ from the committed files. Commit the ipc-bindings artifact."
+            exit 1
+          fi
+
+      - name: Upload regenerated IPC bindings
+        if: failure() && steps.bindings.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ipc-bindings
+          path: ui/src/bindings
+
+  bundle:
+    name: Windows installer
+    needs: [lockfiles, web, rust]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use generated lockfiles
+        if: needs.lockfiles.outputs.generated == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: lockfiles
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate app icons
+        run: npx tauri icon app-icon.svg
+
+      - name: Build installers
+        run: npx tauri build --ci -- --locked
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer
+          path: |
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: bundle
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download Windows installers
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-installer
+          path: installers
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(jq -r .version src-tauri/tauri.conf.json)"
+          tag="v${version}-build.${GITHUB_RUN_NUMBER}"
+          mapfile -t files < <(find installers -type f \( -name '*.exe' -o -name '*.msi' \))
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No installers found in the windows-installer artifact."
+            exit 1
+          fi
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" "${files[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "Tron ${version} (build ${GITHUB_RUN_NUMBER})" \
+              --generate-notes \
+              --latest
+          fi
