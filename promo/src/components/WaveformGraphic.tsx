@@ -96,8 +96,12 @@ export function WaveformGraphic({
           strokeWidth={2}
         />
         <g fontFamily={fonts.mono} fontSize={32} textAnchor="end">
-          <text x={1480} y={160} fill={colors.error}>V(in)</text>
-          <text x={PLOT.right} y={160} fill={colors.accent}>V(out)</text>
+          <text x={1480} y={160} fill={colors.error}>
+            V(in)
+          </text>
+          <text x={PLOT.right} y={160} fill={colors.accent}>
+            V(out)
+          </text>
         </g>
       </g>
       <DrawPath
