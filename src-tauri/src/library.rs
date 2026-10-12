@@ -159,7 +159,10 @@ impl LibraryState {
         let consent = match settings::settings_path(app).and_then(|path| Settings::read(&path)) {
             Ok(settings) => LibraryConsent::from_setting(settings.library_download),
             Err(error) => {
-                eprintln!("could not read the library download consent: {}", error.message);
+                eprintln!(
+                    "could not read the library download consent: {}",
+                    error.message
+                );
                 LibraryConsent::Unasked
             }
         };
@@ -675,7 +678,12 @@ fn remove_stale_partials(dir: &Path, pin: &PinnedIndex) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path != keep && entry.file_name().to_string_lossy().ends_with(PARTIAL_SUFFIX) {
+        if path != keep
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with(PARTIAL_SUFFIX)
+        {
             remove_logged(&path);
         }
     }
@@ -750,7 +758,6 @@ fn library_error(error: &LibraryError) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fmt::Write as _;
     use std::io::{BufRead, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::Arc;
@@ -984,18 +991,13 @@ mod tests {
         let partial = partial_path(&setup.dir, &pin);
         let client = reqwest::Client::new();
         let cancel = CancellationToken::new();
-        let completed = tauri::async_runtime::block_on(fetch(
-            &client,
-            &pin,
-            &partial,
-            &cancel,
-            |downloaded| {
+        let completed =
+            tauri::async_runtime::block_on(fetch(&client, &pin, &partial, &cancel, |downloaded| {
                 if downloaded > 0 {
                     cancel.cancel();
                 }
-            },
-        ))
-        .unwrap();
+            }))
+            .unwrap();
         assert!(!completed);
         let kept = fs::read(&partial).unwrap();
         assert!(!kept.is_empty());
@@ -1069,7 +1071,9 @@ mod tests {
     fn partial_downloads_of_other_pins_are_removed() {
         let setup = setup();
         let pin = pin_for(&setup.body, "https://example.org/library.db.gz");
-        let stale = setup.dir.join(format!("{}{PARTIAL_SUFFIX}", "a".repeat(64)));
+        let stale = setup
+            .dir
+            .join(format!("{}{PARTIAL_SUFFIX}", "a".repeat(64)));
         fs::write(&stale, b"old").unwrap();
         fs::write(partial_path(&setup.dir, &pin), b"new").unwrap();
         remove_stale_partials(&setup.dir, &pin);
