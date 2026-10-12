@@ -13,6 +13,8 @@ Verified on 2026-10-10 by these CI runs:
 - [Run 37982619266](https://github.com/tharunkumar1177/tron/actions/runs/37982619266): bootstrap run. It generated the `lockfiles` artifact, and `cargo fmt --check` failed the run as intended.
 - [Run 37983461090](https://github.com/tharunkumar1177/tron/actions/runs/37983461090): the first run on committed lockfiles. A failing `cargo test` failed the run.
 - [Run 37985560054](https://github.com/tharunkumar1177/tron/actions/runs/37985560054): all four jobs green, including the IPC bindings drift check. It uploaded `windows-installer` (NSIS and MSI).
+- [Run 38166582257](https://github.com/tharunkumar1177/tron/actions/runs/38166582257) (pull request #1): green, and `Publish GitHub Release` was skipped.
+- [Run 38168340413](https://github.com/tharunkumar1177/tron/actions/runs/38168340413) (merge to `main`): green, and it published [v0.1.0-build.6](https://github.com/tharunkumar1177/tron/releases/tag/v0.1.0-build.6) on commit `54fe35e`. Checked with `gh release download`: the `.exe` has an `MZ` header and the `.msi` has an OLE compound-file header.
 
 ## Architecture dependencies
 
@@ -65,7 +67,7 @@ None
 - [x] Clippy warnings, eslint errors, type errors, and failing tests each fail the run. A failing format check and a failing test were each observed failing a run. Clippy, eslint, and tsc failures fail through the same exit-code path: `-D warnings` and non-zero exit codes.
 - [x] A successful run uploads the Windows installer as an artifact.
 - [x] A run without committed lockfiles uploads generated lockfiles as an artifact.
-- [ ] A push to `main` publishes a GitHub Release with the NSIS and MSI installers attached. PR runs don't publish one.
+- [x] A push to `main` publishes a GitHub Release with the NSIS and MSI installers attached. PR runs don't publish one.
 - [x] Once lockfiles are committed, installs are locked (`npm ci`, `cargo --locked`) and fail on drift.
 
 ## Local notes

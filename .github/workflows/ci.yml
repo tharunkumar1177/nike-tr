@@ -85,21 +85,32 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        id: install
         run: npm ci --no-audit --no-fund
 
       - name: Lint
         run: npm run lint
 
       - name: Check formatting
-        run: npm run format:check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          if ! npm run format:check; then
+            npx prettier --write . > /dev/null
+            git --no-pager diff
+            git checkout -- .
+            exit 1
+          fi
 
       - name: Type-check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run typecheck
 
       - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm test
 
       - name: Build frontend
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm run build
 
   rust:
@@ -138,15 +149,18 @@ jobs:
         run: npm run build
 
       - name: Generate app icons
+        id: icons
         run: npx tauri icon app-icon.svg
 
       - name: Check formatting
         run: cargo fmt --all --check
 
       - name: Clippy
+        if: ${{ !cancelled() && steps.icons.outcome == 'success' }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test
+        if: ${{ !cancelled() && steps.icons.outcome == 'success' }}
         run: cargo test --workspace --locked --no-fail-fast
 
       - name: Check generated IPC bindings
