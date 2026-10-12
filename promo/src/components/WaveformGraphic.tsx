@@ -82,22 +82,10 @@ export function WaveformGraphic({
       <g opacity={gridOpacity}>
         <g stroke={colors.surface} strokeWidth={2}>
           {GRID_X.map((x) => (
-            <line
-              key={`x-${x}`}
-              x1={x}
-              y1={PLOT.top}
-              x2={x}
-              y2={PLOT.bottom}
-            />
+            <line key={x} x1={x} y1={PLOT.top} x2={x} y2={PLOT.bottom} />
           ))}
           {GRID_Y.map((y) => (
-            <line
-              key={`y-${y}`}
-              x1={PLOT.left}
-              y1={y}
-              x2={PLOT.right}
-              y2={y}
-            />
+            <line key={y} x1={PLOT.left} y1={y} x2={PLOT.right} y2={y} />
           ))}
         </g>
         <path
