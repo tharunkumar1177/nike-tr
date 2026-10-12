@@ -6,9 +6,13 @@ A 30-second, 1920×1080, 30 fps motion-graphics advertisement for Tron, built wi
 
 ## Current verified status
 
-**Status:** Planned
+**Status:** Implemented
 
-Code exists in `promo/` and `.github/workflows/promo.yml`. No CI run has verified it yet.
+Verified on 2026-10-12 by these CI runs:
+
+- [Run 38292312905](https://github.com/tharunkumar1177/tron/actions/runs/38292312905): bootstrap run. It generated and uploaded `promo-lockfile`, and a Prettier violation failed the run as intended.
+- [Run 38293101023](https://github.com/tharunkumar1177/tron/actions/runs/38293101023): the format check failed and the diff step printed the exact Prettier changes.
+- [Run 38293438957](https://github.com/tharunkumar1177/tron/actions/runs/38293438957): every step green on the committed lockfile. ffprobe reported `1920,1080,30/1,900`, and the `promo-video` artifact (about 618 KB) was uploaded.
 
 ## Architecture dependencies
 
@@ -25,7 +29,7 @@ Code exists in `promo/` and `.github/workflows/promo.yml`. No CI run has verifie
 
 ### Verification boundaries
 
-`.github/workflows/promo.yml` runs eslint, Prettier, and `tsc --noEmit`, then renders the composition. After rendering, it checks the MP4 with Remotion's bundled ffprobe: width 1920, height 1080, 30/1 fps, and 900 frames. It triggers only on changes under `promo/` or to the workflow itself. The root eslint and Prettier configs ignore `promo/`, so the app's CI never lints or builds it.
+`.github/workflows/promo.yml` runs eslint, Prettier, and `tsc --noEmit`, then renders the composition. When the Prettier check fails, the next step runs `prettier --write` and prints the `git diff`, because no formatter runs locally. After rendering, it checks the MP4 with Remotion's bundled ffprobe: width 1920, height 1080, 30/1 fps, and 900 frames. It triggers only on changes under `promo/` or to the workflow itself. The root eslint and Prettier configs ignore `promo/`, so the app's CI never lints or builds it.
 
 ### Content rules
 
@@ -56,13 +60,14 @@ None
 
 ## Acceptance or verification criteria
 
-- [ ] The promo package lints, passes the Prettier check, and type-checks in CI.
-- [ ] CI renders `TronPromo` to an MP4 that ffprobe reports as 1920×1080, 30 fps, 900 frames.
-- [ ] The MP4 is uploaded as the `promo-video` artifact.
-- [ ] A run without a committed lockfile uploads `promo-lockfile`.
-- [ ] The app's `CI` workflow stays green and doesn't lint or install `promo/`.
+- [x] The promo package lints, passes the Prettier check, and type-checks in CI.
+- [x] CI renders `TronPromo` to an MP4 that ffprobe reports as 1920×1080, 30 fps, 900 frames.
+- [x] The MP4 is uploaded as the `promo-video` artifact.
+- [x] A run without a committed lockfile uploads `promo-lockfile`.
+- [x] The app's `CI` workflow stays green and doesn't lint or install `promo/`. Verified by [run 38293438881](https://github.com/tharunkumar1177/tron/actions/runs/38293438881).
 
 ## Remaining gaps and unknowns
 
 - No vertical (1080×1920) cut exists yet.
+- CI checks the video's format but not how it looks. Frame-by-frame visual review is manual.
 - Rendering depends on Google Fonts being reachable from the CI runner.
