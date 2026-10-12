@@ -8,9 +8,14 @@ The work ships in three slices: 3a builds and publishes the index, 3b downloads 
 
 ## Current verified status
 
-**Status:** Planned
+**Status:** Partial
 
-Slice 3a code is written on branch `slice-3-library-pipeline`. None of it has been verified in CI yet.
+Evidence for slice 3a:
+
+- [CI run 38308133670](https://github.com/tharunkumar1177/tron/actions/runs/38308133670) is green: lint, rustfmt, clippy, the `crates/library` unit and integration tests, and the Windows installer.
+- [Library run 38308133672](https://github.com/tharunkumar1177/tron/actions/runs/38308133672) built the full index from KiCad 10.0.7: 22,905 symbols from 223 libraries and 15,464 footprints from 155 libraries. `library.db.gz` is 16.5 MB. The slowest benchmark query, the single letter `r`, had a median of 30.0 ms. Every other query took under 3 ms. `R`, `LM358`, and `R_0603_1608Metric` each rank first for their own names.
+
+Not yet verified: publishing a release and its pinning pull request. That needs a manual run of the `Component library` workflow on `main`. Slices 3b and 3c are Planned.
 
 ## Architecture dependencies
 
@@ -79,8 +84,9 @@ None
 
 Slice 3a:
 
-- [ ] A CI job builds the index from a pinned KiCad library tag and attaches it to a release along with its checksum.
-- [ ] A full-text search returns ranked symbols and footprints in under 50 ms on the full index.
+- [ ] The publish run attaches the index to a release along with its checksum.
+- [x] A full-text search returns ranked symbols and footprints in under 50 ms on the full index.
+- [x] A CI job builds the full index from the pinned KiCad tag, and its integration tests run on real KiCad 10.0.7 files.
 - [ ] The publish run opens a pull request that pins the asset URL and SHA-256, and CI runs on it.
 
 Slice 3b:
