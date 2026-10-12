@@ -61,7 +61,14 @@ jobs:
         run: npm run lint
 
       - name: Check formatting
+        id: format
         run: npm run format:check
+
+      - name: Show formatting diff
+        if: failure() && steps.format.outcome == 'failure'
+        run: |
+          npx prettier --write .
+          git --no-pager diff --color=never
 
       - name: Type-check
         run: npm run typecheck
