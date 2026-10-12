@@ -93,7 +93,11 @@ pub struct ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "line {}, column {}: {}", self.line, self.column, self.message)
+        write!(
+            f,
+            "line {}, column {}: {}",
+            self.line, self.column, self.message
+        )
     }
 }
 
@@ -293,21 +297,36 @@ mod tests {
     fn parses_atoms_strings_and_nested_lists() {
         let expr = parse("(kicad_sch (version 20231120) (title \"Amp\"))").unwrap();
         assert_eq!(expr.head(), Some("kicad_sch"));
-        assert_eq!(expr.child("version").and_then(|v| v.args()[0].text()), Some("20231120"));
-        assert_eq!(expr.child("title").map(|t| t.args()[0].clone()), Some(SExpr::string("Amp")));
+        assert_eq!(
+            expr.child("version").and_then(|v| v.args()[0].text()),
+            Some("20231120")
+        );
+        assert_eq!(
+            expr.child("title").map(|t| t.args()[0].clone()),
+            Some(SExpr::string("Amp"))
+        );
     }
 
     #[test]
     fn unescapes_and_reescapes_strings() {
         let expr = parse(r#"(t "a \"quoted\" back\\slash\nline")"#).unwrap();
-        assert_eq!(expr.args()[0], SExpr::string("a \"quoted\" back\\slash\nline"));
-        assert_eq!(expr.to_pretty_string(), "(t \"a \\\"quoted\\\" back\\\\slash\\nline\")\n");
+        assert_eq!(
+            expr.args()[0],
+            SExpr::string("a \"quoted\" back\\slash\nline")
+        );
+        assert_eq!(
+            expr.to_pretty_string(),
+            "(t \"a \\\"quoted\\\" back\\\\slash\\nline\")\n"
+        );
     }
 
     #[test]
     fn writes_nested_lists_on_indented_lines() {
         let expr = parse("(a (b 1 2) (c (d \"x\")) e)").unwrap();
-        assert_eq!(expr.to_pretty_string(), "(a\n\t(b 1 2)\n\t(c\n\t\t(d \"x\")\n\t) e\n)\n");
+        assert_eq!(
+            expr.to_pretty_string(),
+            "(a\n\t(b 1 2)\n\t(c\n\t\t(d \"x\")\n\t) e\n)\n"
+        );
     }
 
     #[test]
@@ -348,6 +367,9 @@ mod tests {
     #[test]
     fn rejects_excessive_nesting() {
         let source = "(".repeat(MAX_DEPTH + 1) + &")".repeat(MAX_DEPTH + 1);
-        assert_eq!(parse(&source).unwrap_err().message, "lists are nested too deeply");
+        assert_eq!(
+            parse(&source).unwrap_err().message,
+            "lists are nested too deeply"
+        );
     }
 }

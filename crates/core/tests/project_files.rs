@@ -84,7 +84,12 @@ fn save_as_writes_a_copy_and_moves_the_session() {
     assert!(!session.is_dirty());
     assert_eq!(session.project().dir(), temp.path().join("amp copy"));
     assert_eq!(session.project().name(), "amp copy");
-    assert!(session.project().schematic_path().ends_with("amp copy.kicad_sch"));
+    assert!(
+        session
+            .project()
+            .schematic_path()
+            .ends_with("amp copy.kicad_sch")
+    );
 
     let copy = Project::load(session.project().dir()).unwrap();
     assert_eq!(&copy, session.project());

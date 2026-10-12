@@ -17,8 +17,8 @@ pub const PROPERTIES_LABEL: &str = "Project Properties";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     SetTitleBlock {
-        before: TitleBlock,
-        after: TitleBlock,
+        before: Box<TitleBlock>,
+        after: Box<TitleBlock>,
     },
     SetGridSize {
         before: Nm,
@@ -159,8 +159,8 @@ impl Session {
         let current_block = self.project.title_block();
         if current_block != title_block {
             commands.push(Command::SetTitleBlock {
-                before: current_block,
-                after: title_block,
+                before: Box::new(current_block),
+                after: Box::new(title_block),
             });
         }
         let current_grid = self.project.grid_size();
@@ -182,7 +182,10 @@ impl Session {
     pub fn undo(&mut self) -> Result<Changes, CoreError> {
         let entry = self.undo.pop().ok_or(CoreError::NothingToUndo)?;
         let mut changes = Changes::default();
-        entry.command.inverse().apply(&mut self.project, &mut changes);
+        entry
+            .command
+            .inverse()
+            .apply(&mut self.project, &mut changes);
         self.redo.push(entry);
         Ok(changes)
     }
@@ -306,7 +309,9 @@ mod tests {
     fn an_edit_that_changes_nothing_records_nothing() {
         let mut session = session();
         let grid = session.project().grid_size();
-        let changes = session.edit_properties(TitleBlock::default(), grid).unwrap();
+        let changes = session
+            .edit_properties(TitleBlock::default(), grid)
+            .unwrap();
         assert!(!changes.any());
         assert!(!session.can_undo());
         assert!(!session.is_dirty());

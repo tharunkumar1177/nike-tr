@@ -78,7 +78,9 @@ impl Manifest {
             return Err(ManifestError::UnsupportedVersion(manifest.format_version));
         }
         if manifest.format_version == 0 {
-            return Err(ManifestError::Invalid("formatVersion must be at least 1".to_owned()));
+            return Err(ManifestError::Invalid(
+                "formatVersion must be at least 1".to_owned(),
+            ));
         }
         let grid = Nm(manifest.schematic.grid_size_nm);
         if !(MIN_GRID..=MAX_GRID).contains(&grid) {

@@ -67,7 +67,11 @@ impl fmt::Display for CoreError {
                 write!(f, "{} already exists and is not empty", path.display())
             }
             CoreError::NotAProject(path) => {
-                write!(f, "{} does not contain a Tron or KiCad project", path.display())
+                write!(
+                    f,
+                    "{} does not contain a Tron or KiCad project",
+                    path.display()
+                )
             }
             CoreError::NothingToUndo => f.write_str("there is nothing to undo"),
             CoreError::NothingToRedo => f.write_str("there is nothing to redo"),

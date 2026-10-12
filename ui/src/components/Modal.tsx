@@ -10,9 +10,7 @@ const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function focusableElements(root: HTMLElement | null): HTMLElement[] {
-  return root
-    ? Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE))
-    : [];
+  return root ? Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)) : [];
 }
 
 interface ModalProps {

@@ -95,12 +95,17 @@ impl From<CoreError> for AppError {
             CoreError::UnsupportedVersion { path, found } => AppError::new(
                 Kind::UnsupportedVersion,
                 format!("{} was saved by a newer version of Tron.", file_name(&path)),
-                Some(format!("Format version {found} is not supported by this version.")),
+                Some(format!(
+                    "Format version {found} is not supported by this version."
+                )),
             ),
             CoreError::InvalidName(message) => AppError::new(Kind::InvalidName, message, None),
             CoreError::AlreadyExists(path) => AppError::new(
                 Kind::AlreadyExists,
-                format!("The folder {} already exists and is not empty.", path.display()),
+                format!(
+                    "The folder {} already exists and is not empty.",
+                    path.display()
+                ),
                 None,
             ),
             CoreError::NotAProject(path) => AppError::new(

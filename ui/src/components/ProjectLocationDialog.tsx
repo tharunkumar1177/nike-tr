@@ -116,9 +116,7 @@ export function ProjectLocationDialog({
         )}
         {error && (
           <p id={errorId} className="form__error" role="alert">
-            {error.detail
-              ? `${error.message} ${error.detail}`
-              : error.message}
+            {error.detail ? `${error.message} ${error.detail}` : error.message}
           </p>
         )}
         <div className="modal__actions">

@@ -37,20 +37,56 @@ fn item(
 }
 
 pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
-    let new_project = item(app, "new-project", "&New Project...", Some("CmdOrCtrl+N"), true)?;
-    let open_project = item(app, "open-project", "&Open Project...", Some("CmdOrCtrl+O"), true)?;
+    let new_project = item(
+        app,
+        "new-project",
+        "&New Project...",
+        Some("CmdOrCtrl+N"),
+        true,
+    )?;
+    let open_project = item(
+        app,
+        "open-project",
+        "&Open Project...",
+        Some("CmdOrCtrl+O"),
+        true,
+    )?;
     let recent = SubmenuBuilder::new(app, "Open &Recent").build()?;
     let save = item(app, "save", "&Save", Some("CmdOrCtrl+S"), false)?;
-    let save_as = item(app, "save-as", "Save &As...", Some("CmdOrCtrl+Shift+S"), false)?;
-    let properties = item(app, "project-properties", "Project &Properties...", None, false)?;
-    let close_project = item(app, "close-project", "&Close Project", Some("CmdOrCtrl+W"), false)?;
+    let save_as = item(
+        app,
+        "save-as",
+        "Save &As...",
+        Some("CmdOrCtrl+Shift+S"),
+        false,
+    )?;
+    let properties = item(
+        app,
+        "project-properties",
+        "Project &Properties...",
+        None,
+        false,
+    )?;
+    let close_project = item(
+        app,
+        "close-project",
+        "&Close Project",
+        Some("CmdOrCtrl+W"),
+        false,
+    )?;
     let exit = item(app, "exit", "E&xit", None, true)?;
     let undo = item(app, "undo", "&Undo", Some("CmdOrCtrl+Z"), false)?;
     let redo = item(app, "redo", "&Redo", Some("CmdOrCtrl+Y"), false)?;
     let zoom_in = item(app, "zoom-in", "Zoom &In", Some("CmdOrCtrl+="), false)?;
     let zoom_out = item(app, "zoom-out", "Zoom &Out", Some("CmdOrCtrl+-"), false)?;
     let zoom_fit = item(app, "zoom-fit", "Zoom to &Fit", Some("CmdOrCtrl+0"), false)?;
-    let zoom_actual = item(app, "zoom-actual", "&Actual Size", Some("CmdOrCtrl+1"), false)?;
+    let zoom_actual = item(
+        app,
+        "zoom-actual",
+        "&Actual Size",
+        Some("CmdOrCtrl+1"),
+        false,
+    )?;
 
     let file = SubmenuBuilder::new(app, "&File")
         .item(&new_project)
@@ -154,8 +190,9 @@ pub fn rebuild_recent(app: &AppHandle, recent: &[RecentProject]) -> tauri::Resul
     for project in recent {
         // A single `&` marks a mnemonic in Windows menus.
         let label = project.path.replace('&', "&&");
-        let entry = MenuItemBuilder::with_id(format!("{OPEN_RECENT_PREFIX}{}", project.path), label)
-            .build(app)?;
+        let entry =
+            MenuItemBuilder::with_id(format!("{OPEN_RECENT_PREFIX}{}", project.path), label)
+                .build(app)?;
         handles.recent.append(&entry)?;
     }
     Ok(())

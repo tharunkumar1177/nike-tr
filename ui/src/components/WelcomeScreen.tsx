@@ -36,10 +36,7 @@ export function WelcomeScreen({
           </p>
         </header>
         <div className="welcome__columns">
-          <section
-            className="welcome__section"
-            aria-labelledby="start-heading"
-          >
+          <section className="welcome__section" aria-labelledby="start-heading">
             <h2 id="start-heading" className="welcome__heading">
               Start
             </h2>

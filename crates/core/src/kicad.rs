@@ -14,7 +14,10 @@ pub const GENERATOR_VERSION: &str = "0.1";
 pub const TITLE_BLOCK_COMMENTS: usize = 9;
 
 fn is_title_block_field(node: &SExpr) -> bool {
-    matches!(node.head(), Some("title" | "date" | "rev" | "company" | "comment"))
+    matches!(
+        node.head(),
+        Some("title" | "date" | "rev" | "company" | "comment")
+    )
 }
 
 fn is_sheet_header(node: &SExpr) -> bool {
@@ -399,7 +402,8 @@ mod tests {
 
     #[test]
     fn editing_the_title_block_keeps_unknown_children() {
-        let source = "(kicad_sch (version 20231120) (title_block (title \"Old\") (vendor_note \"keep\")))";
+        let source =
+            "(kicad_sch (version 20231120) (title_block (title \"Old\") (vendor_note \"keep\")))";
         let mut schematic = Schematic::parse(source).unwrap();
         let block = TitleBlock {
             title: "New".to_owned(),
@@ -439,6 +443,9 @@ mod tests {
                 expected: "kicad_sch",
             })
         );
-        assert!(matches!(Board::parse("(kicad_pcb"), Err(FileError::Syntax(_))));
+        assert!(matches!(
+            Board::parse("(kicad_pcb"),
+            Err(FileError::Syntax(_))
+        ));
     }
 }

@@ -32,9 +32,14 @@ pub fn validate_name(name: &str) -> Result<(), CoreError> {
         return invalid("Project names can't start or end with a space.".to_owned());
     }
     if name.chars().count() > MAX_NAME_CHARS {
-        return invalid(format!("Project names can be at most {MAX_NAME_CHARS} characters."));
+        return invalid(format!(
+            "Project names can be at most {MAX_NAME_CHARS} characters."
+        ));
     }
-    if name.chars().any(|c| FORBIDDEN_NAME_CHARS.contains(&c) || c.is_control()) {
+    if name
+        .chars()
+        .any(|c| FORBIDDEN_NAME_CHARS.contains(&c) || c.is_control())
+    {
         return invalid(
             "Project names can't contain any of these characters: < > : \" / \\ | ? *".to_owned(),
         );
@@ -43,8 +48,13 @@ pub fn validate_name(name: &str) -> Result<(), CoreError> {
         return invalid("Project names can't end with a period.".to_owned());
     }
     let stem = name.split('.').next().unwrap_or(name);
-    if RESERVED_NAMES.iter().any(|reserved| reserved.eq_ignore_ascii_case(stem)) {
-        return invalid(format!("\"{name}\" is reserved by Windows. Choose another name."));
+    if RESERVED_NAMES
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(stem))
+    {
+        return invalid(format!(
+            "\"{name}\" is reserved by Windows. Choose another name."
+        ));
     }
     Ok(())
 }
@@ -90,9 +100,10 @@ impl Project {
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .ok_or_else(|| CoreError::NotAProject(path.to_path_buf()))?;
             let stem = match path.extension().and_then(|ext| ext.to_str()) {
-                Some("kicad_sch" | "kicad_pcb" | "kicad_pro") => {
-                    path.file_stem().and_then(|stem| stem.to_str()).map(str::to_owned)
-                }
+                Some("kicad_sch" | "kicad_pcb" | "kicad_pro") => path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(str::to_owned),
                 _ => None,
             };
             (dir.to_path_buf(), stem)
@@ -139,7 +150,8 @@ impl Project {
 
         let board_path = dir.join(format!("{}.kicad_pcb", manifest.name));
         let board = if board_path.is_file() {
-            Board::parse(&read_text(&board_path)?).map_err(|error| file_error(&board_path, error))?
+            Board::parse(&read_text(&board_path)?)
+                .map_err(|error| file_error(&board_path, error))?
         } else {
             Board::new_empty()
         };
@@ -221,7 +233,11 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), CoreError> {
             io::Error::new(io::ErrorKind::InvalidInput, "not a file path"),
         ));
     };
-    let temp = dir.join(format!(".{}.{}.tmp", file_name.to_string_lossy(), std::process::id()));
+    let temp = dir.join(format!(
+        ".{}.{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
     write_then_rename(&temp, path, contents).map_err(|error| {
         // The temporary file is only debris at this point; the target is intact.
         let _ = fs::remove_file(&temp);
@@ -349,7 +365,10 @@ mod tests {
     #[test]
     fn rejects_names_that_cannot_be_file_names() {
         assert_eq!(name_error(""), "Enter a project name.");
-        assert_eq!(name_error(" amp"), "Project names can't start or end with a space.");
+        assert_eq!(
+            name_error(" amp"),
+            "Project names can't start or end with a space."
+        );
         assert!(name_error("a/b").contains("can't contain"));
         assert!(name_error("a:b").contains("can't contain"));
         assert!(name_error("tab\there").contains("can't contain"));

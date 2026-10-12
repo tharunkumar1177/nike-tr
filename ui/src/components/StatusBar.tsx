@@ -19,9 +19,7 @@ export function StatusBar({ cursor, gridSizeNm, zoomLabel }: StatusBarProps) {
         <span className="status-bar__item">Y {coordinate(cursor?.y)} mm</span>
       </span>
       <span className="status-bar__group">
-        <span className="status-bar__item">
-          Grid {formatMm(gridSizeNm)} mm
-        </span>
+        <span className="status-bar__item">Grid {formatMm(gridSizeNm)} mm</span>
         <span className="status-bar__item">Zoom {zoomLabel}</span>
       </span>
     </footer>
