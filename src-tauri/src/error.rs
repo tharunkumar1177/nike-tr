@@ -22,6 +22,14 @@ pub enum AppErrorKind {
     NothingToRedo,
     Settings,
     Window,
+    /// A download failed; retrying resumes it.
+    Network,
+    /// A download did not match its pinned checksum and was discarded.
+    Checksum,
+    /// The component library has not been downloaded.
+    LibraryNotReady,
+    /// The cached component library could not be read.
+    Library,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]

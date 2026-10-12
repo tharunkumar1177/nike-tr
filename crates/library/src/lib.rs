@@ -7,6 +7,7 @@ mod index;
 mod kicad;
 pub mod kicad_mod;
 pub mod kicad_sym;
+mod pinned;
 pub mod preview;
 mod search;
 
@@ -18,4 +19,5 @@ pub use index::{
 };
 pub use kicad_mod::{FootprintRecord, Mount};
 pub use kicad_sym::SymbolRecord;
+pub use pinned::PinnedIndex;
 pub use search::match_expression;
