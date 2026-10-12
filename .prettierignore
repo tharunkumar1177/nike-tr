@@ -5,6 +5,7 @@ src-tauri/gen
 src-tauri/icons
 ui/src/bindings
 crates/core/tests/golden
+crates/library/tests/fixtures
 promo
 package-lock.json
 *.md

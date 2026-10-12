@@ -26,34 +26,31 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check for committed lockfiles
-        id: check
-        run: |
-          if [ -f Cargo.lock ] && [ -f package-lock.json ]; then
-            echo "generated=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "generated=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Set up Node.js
-        if: steps.check.outputs.generated == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Set up Rust
-        if: steps.check.outputs.generated == 'true'
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Generate missing lockfiles
-        if: steps.check.outputs.generated == 'true'
+      - name: Generate missing or stale lockfiles
+        id: check
         run: |
+          generated=false
           if [ ! -f package-lock.json ]; then
             npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+            generated=true
           fi
           if [ ! -f Cargo.lock ]; then
             cargo generate-lockfile
+            generated=true
+          elif ! cargo metadata --locked --format-version 1 > /dev/null; then
+            echo "::warning::Cargo.lock does not match the manifests. Resolving only the changed dependencies."
+            cargo update --workspace
+            generated=true
           fi
+          echo "generated=$generated" >> "$GITHUB_OUTPUT"
 
       - name: Upload generated lockfiles
         if: steps.check.outputs.generated == 'true'
@@ -64,6 +61,17 @@ jobs:
             Cargo.lock
             package-lock.json
           if-no-files-found: error
+
+  lockfiles-committed:
+    name: Committed lockfiles
+    needs: lockfiles
+    if: needs.lockfiles.outputs.generated == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the generated lockfiles to be committed
+        run: |
+          echo "::error::This run used lockfiles generated in CI. Commit Cargo.lock and package-lock.json from the lockfiles artifact."
+          exit 1
 
   web:
     name: Web checks
@@ -230,8 +238,8 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: bundle
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lockfiles, bundle]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.lockfiles.outputs.generated == 'false'
     runs-on: ubuntu-latest
     permissions:
       contents: write
