@@ -1,0 +1,106 @@
+name: Promo video
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "promo/**"
+      - ".github/workflows/promo.yml"
+  pull_request:
+    paths:
+      - "promo/**"
+      - ".github/workflows/promo.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: promo-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24.21.0"
+
+defaults:
+  run:
+    working-directory: promo
+
+jobs:
+  render:
+    name: Render promo video
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        id: install
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+          else
+            npm install --no-audit --no-fund
+            echo "generated=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload generated lockfile
+        if: steps.install.outputs.generated == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: promo-lockfile
+          path: promo/package-lock.json
+          if-no-files-found: error
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check formatting
+        id: format
+        run: npm run format:check
+
+      - name: Show formatting diff
+        if: failure() && steps.format.outcome == 'failure'
+        run: |
+          npx prettier --write .
+          git --no-pager diff --color=never
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Install headless browser libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libnss3 libdbus-1-3 libatk1.0-0t64 libatk-bridge2.0-0t64 \
+            libcups2t64 libgbm1 libasound2t64 libxrandr2 libxkbcommon0 \
+            libxfixes3 libxcomposite1 libxdamage1 libpango-1.0-0 libcairo2
+
+      - name: Download headless browser
+        run: npx remotion browser ensure
+
+      - name: Render
+        run: npm run render
+
+      - name: Verify video
+        run: |
+          probe="$(npx remotion ffprobe -v error -select_streams v:0 \
+            -show_entries stream=width,height,r_frame_rate,nb_frames \
+            -of csv=p=0 out/promo.mp4)"
+          echo "ffprobe: ${probe}"
+          if [ "${probe}" != "1920,1080,30/1,900" ]; then
+            echo "::error::Expected 1920,1080,30/1,900 but got ${probe}."
+            exit 1
+          fi
+
+      - name: Upload video
+        uses: actions/upload-artifact@v7
+        with:
+          name: promo-video
+          path: promo/out/promo.mp4
+          if-no-files-found: error

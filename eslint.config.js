@@ -6,7 +6,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default defineConfig([
-  globalIgnores(["dist", "target", "src-tauri", "ui/src/bindings"]),
+  globalIgnores(["dist", "target", "src-tauri", "ui/src/bindings", "promo"]),
   {
     files: ["**/*.js"],
     extends: [js.configs.recommended],

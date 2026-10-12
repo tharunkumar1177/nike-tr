@@ -5,6 +5,7 @@ src-tauri/gen
 src-tauri/icons
 ui/src/bindings
 crates/core/tests/golden
+promo
 package-lock.json
 *.md
 .cursor

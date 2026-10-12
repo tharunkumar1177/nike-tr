@@ -14,10 +14,12 @@ Tron is a local-first desktop app (Tauri 2, Rust, React) for schematic capture, 
 - The component library is downloaded on first launch, not bundled. This was defaulted and can be revisited before slice 3.
 - Windows ships first. macOS and Linux come in slice 13.
 - Repository: `tharunkumar1177/tron`.
+- Promo video side slice (approved 2026-10-12): Remotion, 30 seconds, 1920×1080, graphics only with no mocked app screens, rendered in its own CI workflow, no audio.
 
 ## Slices
 
 - [x] **1. Walking skeleton** — repo scaffold, CI runs lint, type-check, test, and the Windows installer build. Lockfiles come from CI. Blueprint: [build-and-release](blueprints/build-and-release.md)
+- [x] **Side slice: Promo video** — a 30-second, 1920×1080 motion-graphics ad built with Remotion in `promo/`. A separate workflow renders it to MP4 and uploads it as an artifact. Graphics only, with no app screens. Blueprint: [promo-video](blueprints/promo-video.md)
 - [x] **2. Project shell** (UI) — create, open, and save a project. Empty canvas with zoom, pan, undo, and redo. Blueprint: [project-files](blueprints/project-files.md)
 - [ ] **3. Library pipeline** (UI) — CI builds the SQLite index, the app downloads it on first launch, and the library browser offers search. Blueprint: [component-library](blueprints/component-library.md)
 - [ ] **4. Schematic capture** (UI) — place symbols, wires, junctions, labels, and properties. Netlist and ERC. Blueprint: [schematic-capture](blueprints/schematic-capture.md)
@@ -33,6 +35,6 @@ Tron is a local-first desktop app (Tauri 2, Rust, React) for schematic capture, 
 
 ## Current checkpoint
 
-Slice 2 is done: a green CI run ([38296991964](https://github.com/tharunkumar1177/tron/actions/runs/38296991964)) passed every check and built the Windows installer. The menu and canvas interactions still need a manual check in the installer (see the project-files blueprint gaps). Next step: slice 3, the library pipeline. It needs an architect plan and a design plan before any code.
+Slice 2 is done: a green CI run ([38296991964](https://github.com/tharunkumar1177/tron/actions/runs/38296991964)) passed every check and built the Windows installer. The menu and canvas interactions still need a manual check in the installer (see the project-files blueprint gaps). The promo video side slice is also done: a green run ([38293438957](https://github.com/tharunkumar1177/tron/actions/runs/38293438957)) rendered it and uploaded it as the `promo-video` artifact. Next step: slice 3, the library pipeline. It needs an architect plan and a design plan before any code.
 
 Codebase entry points: `crates/core` (S-expressions, KiCad files, project lifecycle, undo engine), `src-tauri/src/ipc.rs` (IPC commands and ts-rs types), `src-tauri/src/shell.rs` (native menu), `ui/src` (React), `.github/workflows/ci.yml`.
