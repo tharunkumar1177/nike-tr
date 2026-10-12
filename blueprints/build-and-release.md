@@ -32,6 +32,8 @@ When a lockfile is missing, the workflow generates it and uploads it as an artif
 
 The jobs map onto the verification levels: Rust format, clippy with warnings denied, and tests; TypeScript eslint, `tsc --noEmit`, and Vitest; then the Tauri bundle. The bundle job depends on the check jobs passing.
 
+Once dependencies are installed, every check step in a job runs even if an earlier check failed, so one run reports all failures. When the Prettier check fails, the step runs `prettier --write` and prints the `git diff`, because no formatter runs locally. `cargo fmt --check` prints its own diff.
+
 ### Releases
 
 Only pushes to `main`, which include merged PRs, publish a GitHub Release. The `release` job runs after `bundle` and attaches the NSIS and MSI installers to the tag `v<version>-build.<run number>`, where the version comes from `src-tauri/tauri.conf.json`. Re-running a run uploads to the same tag and replaces its assets. Pull-request and branch runs publish only the `windows-installer` artifact, because unmerged code is never released. Runs on `main` are never cancelled by newer runs, so a release can't be cut off partway.
