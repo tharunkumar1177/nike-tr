@@ -1,0 +1,195 @@
+name: Component library
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "crates/library/**"
+      - "crates/core/src/sexpr.rs"
+      - "crates/core/src/units.rs"
+      - "Cargo.lock"
+      - ".github/workflows/library.yml"
+  workflow_dispatch:
+    inputs:
+      kicad_tag:
+        description: KiCad library tag present in both kicad-symbols and kicad-footprints. Empty uses the pinned default.
+        required: false
+        default: ""
+      revision:
+        description: Index revision for this tag. Bump it to republish the same tag.
+        required: true
+        default: "1"
+      publish:
+        description: Publish a release and open a pull request that pins it (main only)
+        type: boolean
+        default: true
+
+concurrency:
+  group: library-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+permissions:
+  contents: read
+
+env:
+  KICAD_TAG_DEFAULT: "10.0.7"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build and benchmark index
+    runs-on: ubuntu-latest
+    outputs:
+      kicad_tag: ${{ steps.inputs.outputs.kicad_tag }}
+      revision: ${{ steps.inputs.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve inputs
+        id: inputs
+        env:
+          INPUT_KICAD_TAG: ${{ inputs.kicad_tag }}
+          INPUT_REVISION: ${{ inputs.revision }}
+        run: |
+          tag="${INPUT_KICAD_TAG:-$KICAD_TAG_DEFAULT}"
+          revision="${INPUT_REVISION:-1}"
+          if ! [[ "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::KiCad tag '$tag' must be a release version such as 10.0.7."
+            exit 1
+          fi
+          if ! [[ "$revision" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Revision '$revision' must be a positive whole number."
+            exit 1
+          fi
+          echo "kicad_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: library
+
+      - name: Download KiCad libraries
+        env:
+          KICAD_TAG: ${{ steps.inputs.outputs.kicad_tag }}
+        run: |
+          mkdir -p kicad
+          for repo in kicad-symbols kicad-footprints; do
+            archive="kicad/${repo}.tar.gz"
+            curl --fail --silent --show-error --location --retry 3 --output "$archive" \
+              "https://gitlab.com/kicad/libraries/${repo}/-/archive/${KICAD_TAG}/${repo}-${KICAD_TAG}.tar.gz"
+            (cd kicad && sha256sum "${repo}.tar.gz") >> kicad/sources.sha256
+            mkdir -p "kicad/${repo}"
+            tar -xzf "$archive" -C "kicad/${repo}" --strip-components=1
+          done
+          cat kicad/sources.sha256
+
+      - name: Build index
+        env:
+          KICAD_TAG: ${{ steps.inputs.outputs.kicad_tag }}
+        run: >-
+          cargo run --release --locked -p tron-library --bin build-index --
+          --symbols kicad/kicad-symbols
+          --footprints kicad/kicad-footprints
+          --kicad-tag "$KICAD_TAG"
+          --output library.db
+
+      - name: Benchmark search
+        run: cargo run --release --locked -p tron-library --bin search-benchmark -- library.db
+
+      - name: Package index
+        run: |
+          gzip -9 -n library.db
+          sha256sum library.db.gz > library.db.gz.sha256
+          cat library.db.gz.sha256
+          ls -l library.db.gz
+
+      - name: Upload index
+        uses: actions/upload-artifact@v7
+        with:
+          name: component-library
+          path: |
+            library.db.gz
+            library.db.gz.sha256
+            kicad/sources.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish index and pin it
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KICAD_TAG: ${{ needs.build.outputs.kicad_tag }}
+      REVISION: ${{ needs.build.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download index
+        uses: actions/download-artifact@v8
+        with:
+          name: component-library
+          path: dist
+
+      - name: Create release
+        id: release
+        run: |
+          tag="library-kicad-${KICAD_TAG}-r${REVISION}"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "::error::Release $tag already exists. Published index assets never change; run again with a higher revision."
+            exit 1
+          fi
+          {
+            echo "Component library index built from KiCad library tag ${KICAD_TAG}."
+            echo
+            echo "Symbols and footprints from the KiCad libraries (https://gitlab.com/kicad/libraries), licensed CC-BY-SA 4.0 with the KiCad libraries exception."
+            echo
+            echo "SHA-256 of the KiCad source archives:"
+            echo
+            echo '```'
+            cat dist/kicad/sources.sha256
+            echo '```'
+          } > notes.md
+          gh release create "$tag" dist/library.db.gz dist/library.db.gz.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "Component library: KiCad ${KICAD_TAG}, revision ${REVISION}" \
+            --notes-file notes.md \
+            --latest=false
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request pinning the index
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          sha256="$(cut -d ' ' -f 1 dist/library.db.gz.sha256)"
+          size="$(stat -c %s dist/library.db.gz)"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/library.db.gz"
+          jq -n \
+            --arg kicad_tag "$KICAD_TAG" \
+            --arg release "$RELEASE_TAG" \
+            --arg url "$url" \
+            --arg sha256 "$sha256" \
+            --argjson size "$size" \
+            '{kicad_tag: $kicad_tag, release: $release, url: $url, sha256: $sha256, size: $size}' \
+            > crates/library/pinned.json
+          cat crates/library/pinned.json
+
+          branch="library/${RELEASE_TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add crates/library/pinned.json
+          git commit -m "chore: pin component library ${RELEASE_TAG}"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "Pin component library ${RELEASE_TAG}" \
+            --body "Pins the component library index published in release [${RELEASE_TAG}](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}), built from KiCad library tag ${KICAD_TAG}. CI was started on this branch with workflow_dispatch, because pull requests opened by GitHub Actions do not start it."
+          gh workflow run ci.yml --ref "$branch"

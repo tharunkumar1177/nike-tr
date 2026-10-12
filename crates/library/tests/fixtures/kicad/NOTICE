@@ -1,0 +1,7 @@
+These files are unmodified copies from the KiCad libraries at tag 10.0.7:
+
+- symbols/ from https://gitlab.com/kicad/libraries/kicad-symbols
+- footprints/ from https://gitlab.com/kicad/libraries/kicad-footprints
+
+They are licensed CC-BY-SA 4.0 with the KiCad libraries exception. See
+https://www.kicad.org/libraries/license/ for the full terms.
