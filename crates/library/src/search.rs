@@ -24,7 +24,7 @@ pub fn match_expression(query: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::match_expression;
+    use super::{MAX_TERMS, match_expression};
 
     #[test]
     fn quotes_every_term_as_a_prefix() {
