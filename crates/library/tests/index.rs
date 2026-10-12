@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use tron_library::preview::{Fill, FootprintGraphic, Layer, Pad, PadKind, PadShape, Pin, Shape, Xy};
+use tron_library::preview::{
+    Fill, FootprintGraphic, Layer, Pad, PadKind, PadShape, Pin, Shape, Xy,
+};
 use tron_library::{
     ATTRIBUTION, Index, ItemKind, LibraryError, META_ATTRIBUTION, META_KICAD_TAG, Mount,
     SCHEMA_VERSION, SearchHit, build_index,

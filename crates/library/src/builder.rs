@@ -35,8 +35,7 @@ pub fn build_index(
     let partial = partial_path(output);
     remove_if_present(&partial)?;
     let report = write_index(&partial, kicad_tag, &symbol_libraries, &footprint_libraries)?;
-    fs::rename(&partial, output)
-        .map_err(|source| LibraryError::io(output, source))?;
+    fs::rename(&partial, output).map_err(|source| LibraryError::io(output, source))?;
     Ok(report)
 }
 

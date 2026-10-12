@@ -11,8 +11,7 @@ use tron_core::units::{Angle, Nm, Point};
 use crate::error::LibraryError;
 
 pub(crate) fn parse_file(path: &Path) -> Result<SExpr, LibraryError> {
-    let source = fs::read_to_string(path)
-        .map_err(|source| LibraryError::io(path, source))?;
+    let source = fs::read_to_string(path).map_err(|source| LibraryError::io(path, source))?;
     sexpr::parse(&source).map_err(|err| LibraryError::Parse {
         path: path.to_path_buf(),
         line: err.line,
@@ -102,16 +101,14 @@ pub(crate) fn number(node: &SExpr, index: usize) -> Result<f64, String> {
 pub(crate) fn length(node: &SExpr, index: usize) -> Result<Nm, String> {
     let value = number(node, index)?;
     let head = node.head().unwrap_or("?");
-    Nm::from_mm(value)
-        .map_err(|err| format!("({head}) length {value}: {err}"))
+    Nm::from_mm(value).map_err(|err| format!("({head}) length {value}: {err}"))
 }
 
 /// Argument `index` read as degrees.
 pub(crate) fn angle(node: &SExpr, index: usize) -> Result<Angle, String> {
     let value = number(node, index)?;
     let head = node.head().unwrap_or("?");
-    Angle::from_degrees(value)
-        .map_err(|err| format!("({head}) angle {value}: {err}"))
+    Angle::from_degrees(value).map_err(|err| format!("({head}) angle {value}: {err}"))
 }
 
 /// `(head x y ...)` read as a point in millimeters.

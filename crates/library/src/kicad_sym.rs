@@ -66,7 +66,10 @@ pub fn read_symbol_library(path: &Path) -> Result<Vec<SymbolRecord>, LibraryErro
     for file in files {
         let root = parse_file(&file)?;
         if root.head() != Some("kicad_symbol_lib") {
-            return Err(LibraryError::invalid(&file, "is not a KiCad symbol library"));
+            return Err(LibraryError::invalid(
+                &file,
+                "is not a KiCad symbol library",
+            ));
         }
         documents.push((file, root));
     }
@@ -166,7 +169,9 @@ fn symbol(
         extends: child_text(own.node, "extends").map(str::to_owned),
         unit_count,
         pin_count: u32::try_from(pin_numbers.len()).unwrap_or(u32::MAX),
-        power: chain.iter().any(|definition| flag(definition.node, "power")),
+        power: chain
+            .iter()
+            .any(|definition| flag(definition.node, "power")),
         preview: SymbolPreview {
             shapes,
             pins,
@@ -189,7 +194,9 @@ fn ancestry<'m, 'a>(
             return Err(format!("its extends chain loops back to {current:?}"));
         }
         let Some(definition) = definitions.get(current) else {
-            return Err(format!("it extends {current:?}, which is not in the library"));
+            return Err(format!(
+                "it extends {current:?}, which is not in the library"
+            ));
         };
         chain.push(definition);
         match child_text(definition.node, "extends") {
@@ -206,7 +213,9 @@ fn units(base: &SExpr) -> Result<Vec<Unit<'_>>, String> {
     for node in children(base, "symbol") {
         let name = text_arg(node, 0).unwrap_or_default();
         let Some((number, style)) = unit_and_style(name) else {
-            return Err(format!("unit {name:?} is not named <symbol>_<unit>_<style>"));
+            return Err(format!(
+                "unit {name:?} is not named <symbol>_<unit>_<style>"
+            ));
         };
         units.push(Unit {
             number,

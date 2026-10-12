@@ -63,8 +63,8 @@ pub fn read_footprint_library(dir: &Path) -> Result<Vec<FootprintRecord>, Librar
     let mut records = Vec::new();
     for file in library_files(dir, "kicad_mod")? {
         let root = parse_file(&file)?;
-        let record = footprint(&lib, &root)
-            .map_err(|message| LibraryError::invalid(&file, message))?;
+        let record =
+            footprint(&lib, &root).map_err(|message| LibraryError::invalid(&file, message))?;
         records.push(record);
     }
     records.sort_by(|a, b| a.name.cmp(&b.name));
@@ -193,13 +193,13 @@ fn read_shape(item: &SExpr) -> Result<Option<Shape>, String> {
 }
 
 fn read_pad(item: &SExpr) -> Result<Pad, String> {
-    let number = text_arg(item, 0).unwrap_or_default().to_owned();
+    let pad_number = text_arg(item, 0).unwrap_or_default().to_owned();
     let kind = match text_arg(item, 1) {
         Some("smd") => PadKind::Smd,
         Some("thru_hole") => PadKind::ThroughHole,
         Some("np_thru_hole") => PadKind::NonPlatedHole,
         Some("connect") => PadKind::Connect,
-        other => return Err(format!("pad {number:?} has an unknown type {other:?}")),
+        other => return Err(format!("pad {pad_number:?} has an unknown type {other:?}")),
     };
     let shape = match text_arg(item, 2) {
         Some("rect") => PadShape::Rect,
@@ -208,7 +208,7 @@ fn read_pad(item: &SExpr) -> Result<Pad, String> {
         Some("oval") => PadShape::Oval,
         Some("trapezoid") => PadShape::Trapezoid,
         Some("custom") => PadShape::Custom,
-        other => return Err(format!("pad {number:?} has an unknown shape {other:?}")),
+        other => return Err(format!("pad {pad_number:?} has an unknown shape {other:?}")),
     };
     let at = required(item, "at")?;
     let rotation = if at.args().len() > 2 {
@@ -229,7 +229,7 @@ fn read_pad(item: &SExpr) -> Result<Pad, String> {
         None => None,
     };
     Ok(Pad {
-        number,
+        number: pad_number,
         kind,
         shape,
         center: point(at)?.into(),

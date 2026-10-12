@@ -26,12 +26,12 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.state::<ipc::AppState>().is_dirty() {
-                    api.prevent_close();
-                    if let Err(error) = window.emit(shell::CLOSE_REQUESTED_EVENT, ()) {
-                        eprintln!("could not ask to save before closing: {error}");
-                    }
+            if let WindowEvent::CloseRequested { api, .. } = event
+                && window.state::<ipc::AppState>().is_dirty()
+            {
+                api.prevent_close();
+                if let Err(error) = window.emit(shell::CLOSE_REQUESTED_EVENT, ()) {
+                    eprintln!("could not ask to save before closing: {error}");
                 }
             }
         })

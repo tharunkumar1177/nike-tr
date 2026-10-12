@@ -140,8 +140,7 @@ impl FromSql for ItemKind {
 
 impl FromSql for Mount {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Mount> {
-        Mount::from_name(value.as_str()?)
-            .ok_or(FromSqlError::InvalidType)
+        Mount::from_name(value.as_str()?).ok_or(FromSqlError::InvalidType)
     }
 }
 

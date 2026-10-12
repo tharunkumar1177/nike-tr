@@ -77,10 +77,10 @@ impl TitleBlock {
                         .and_then(SExpr::text)
                         .and_then(|n| n.parse::<usize>().ok());
                     let text = child.args().get(1).and_then(SExpr::text);
-                    if let (Some(number), Some(text)) = (number, text) {
-                        if (1..=TITLE_BLOCK_COMMENTS).contains(&number) {
-                            block.comments[number - 1] = text.to_owned();
-                        }
+                    if let (Some(number), Some(text)) = (number, text)
+                        && (1..=TITLE_BLOCK_COMMENTS).contains(&number)
+                    {
+                        block.comments[number - 1] = text.to_owned();
                     }
                 }
                 _ => {}
