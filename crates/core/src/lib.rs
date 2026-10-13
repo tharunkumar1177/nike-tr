@@ -1,5 +1,6 @@
 //! Design document model and geometry primitives shared by every Tron component.
 
+pub mod erc;
 pub mod error;
 pub mod kicad;
 pub mod kicad_value;
@@ -12,6 +13,7 @@ pub mod symbol;
 pub mod units;
 pub mod wiring;
 
+pub use erc::{ErcRule, Severity, Violation};
 pub use error::CoreError;
 pub use kicad::{
     MANDATORY_FIELDS, Mirror, PageSize, PinConnection, PlacedPin, PlacedSymbol, Placement,

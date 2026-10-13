@@ -5,6 +5,7 @@
  * The context arrives in screen space (CSS pixels); world geometry is in
  * nanometers with Y down.
  */
+import type { ErcSeverity } from "./bindings/ErcSeverity";
 import type { GlobalLabelShape } from "./bindings/GlobalLabelShape";
 import type { JunctionDot } from "./bindings/JunctionDot";
 import type { MirrorAxis } from "./bindings/MirrorAxis";
@@ -71,8 +72,23 @@ export interface SceneState {
   labelGhost: LabelAppearance | null;
   /** Where a no-connect flag would be placed, while placing one. */
   noConnectGhost: ScreenPoint | null;
+  /** Violations from the last ERC run. */
+  markers: ErcMarker[];
+  selectedMarkerId: string | null;
+  /** The schematic changed since the markers were found. */
+  markersStale: boolean;
   gridSizeNm: number;
 }
+
+/** Where an ERC violation is, drawn as a diamond over the item it names. */
+export interface ErcMarker {
+  id: string;
+  position: Xy;
+  severity: ErcSeverity;
+}
+
+/** Width of an ERC marker diamond, in screen pixels at any zoom. */
+export const MARKER_PX = 12;
 
 const WIRE_PX = 2;
 const JUNCTION_PX = 6;
@@ -380,6 +396,26 @@ function drawNoConnect(
   context.stroke();
 }
 
+/** Draws an ERC marker: a hollow diamond centered on the violation. */
+function drawMarker(
+  context: CanvasRenderingContext2D,
+  viewport: Viewport,
+  position: Xy,
+  color: string,
+) {
+  const at = worldToScreen(viewport, position[0], position[1]);
+  const half = MARKER_PX / 2;
+  context.beginPath();
+  context.moveTo(at.x, at.y - half);
+  context.lineTo(at.x + half, at.y);
+  context.lineTo(at.x, at.y + half);
+  context.lineTo(at.x - half, at.y);
+  context.closePath();
+  context.strokeStyle = color;
+  context.lineWidth = WIRE_PX;
+  context.stroke();
+}
+
 function moved(xy: Xy, offset: { dx: number; dy: number } | null): ScreenPoint {
   return offset
     ? { x: xy[0] + offset.dx, y: xy[1] + offset.dy }
@@ -493,6 +529,23 @@ export function drawSchematicScene(
     const position = moved(flag.position, offsetOf(flag.uuid));
     const selected = flag.uuid === scene.selectedUuid;
     drawNoConnect(context, viewport, position, selected ? focus : stroke);
+  }
+
+  if (scene.markers.length > 0) {
+    context.save();
+    if (scene.markersStale) {
+      context.globalAlpha = GHOST_ALPHA;
+    }
+    for (const marker of scene.markers) {
+      const color =
+        marker.id === scene.selectedMarkerId
+          ? focus
+          : marker.severity === "error"
+            ? pin
+            : warning;
+      drawMarker(context, viewport, marker.position, color);
+    }
+    context.restore();
   }
 
   if (scene.wirePreview) {

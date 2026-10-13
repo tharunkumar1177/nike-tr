@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { HistoryStatus } from "../bindings/HistoryStatus";
 import type { CanvasTool } from "./SchematicCanvas";
 import {
+  ErcIcon,
   GlobalLabelIcon,
   LabelIcon,
   LibraryIcon,
@@ -52,6 +53,8 @@ interface ToolbarProps {
   onUndo: () => void;
   onRedo: () => void;
   onOpenProperties: () => void;
+  ercOpen: boolean;
+  onToggleErc: () => void;
   libraryOpen: boolean;
   onToggleLibrary: () => void;
   wireMode: boolean;
@@ -68,6 +71,8 @@ export function Toolbar({
   onUndo,
   onRedo,
   onOpenProperties,
+  ercOpen,
+  onToggleErc,
   libraryOpen,
   onToggleLibrary,
   wireMode,
@@ -95,6 +100,14 @@ export function Toolbar({
           <RedoIcon />
         </IconButton>
         <span className="toolbar__separator" aria-hidden="true" />
+        <IconButton
+          label="Electrical Rules Checker"
+          pressed={ercOpen}
+          disabled={disabled}
+          onClick={onToggleErc}
+        >
+          <ErcIcon />
+        </IconButton>
         <IconButton
           label="Project Properties"
           disabled={disabled}

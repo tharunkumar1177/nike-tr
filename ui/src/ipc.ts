@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppErrorKind } from "./bindings/AppErrorKind";
 import type { AppInfo } from "./bindings/AppInfo";
+import type { ErcViolation } from "./bindings/ErcViolation";
 import type { LabelPlacement } from "./bindings/LabelPlacement";
 import type { LibraryFootprint } from "./bindings/LibraryFootprint";
 import type { LibraryHit } from "./bindings/LibraryHit";
@@ -141,6 +142,11 @@ export function placeNoConnect(position: Xy): Promise<void> {
 /** Numbers every unannotated symbol; resolves to how many were numbered. */
 export function annotateSchematic(): Promise<number> {
   return invoke<number>("annotate_schematic");
+}
+
+/** Runs the electrical rules check: errors first, then warnings. */
+export function runErc(): Promise<ErcViolation[]> {
+  return invoke<ErcViolation[]>("run_erc");
 }
 
 export function listRecentProjects(): Promise<RecentProject[]> {

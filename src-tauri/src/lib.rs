@@ -60,6 +60,7 @@ pub fn run() {
             ipc::delete_wiring,
             ipc::place_no_connect,
             ipc::annotate_schematic,
+            ipc::run_erc,
             ipc::get_symbol_fields,
             ipc::edit_symbol_fields,
             ipc::set_symbol_field,
