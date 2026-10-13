@@ -303,9 +303,9 @@ describe("Component library", () => {
     fireEvent.keyDown(dialog, { key: "Escape" });
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(
-      calls.some((call) => call.cmd.endsWith("library_download")),
-    ).toBe(false);
+    expect(calls.some((call) => call.cmd.endsWith("library_download"))).toBe(
+      false,
+    );
   });
 
   it("does not offer the download again once the user answered", async () => {
@@ -393,9 +393,9 @@ describe("Component library", () => {
 
     fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
     await screen.findByRole("dialog", { name: "Downloading Library..." });
-    expect(calls.filter((call) => call.cmd === "download_library")).toHaveLength(
-      1,
-    );
+    expect(
+      calls.filter((call) => call.cmd === "download_library"),
+    ).toHaveLength(1);
   });
 
   it("searches the library and previews the selected symbol", async () => {
@@ -476,17 +476,18 @@ describe("Component library", () => {
     const options = await screen.findAllByRole("option");
     expect(options).toHaveLength(2);
     expect(within(options[1]!).getByText("Footprint")).toBeTruthy();
-    expect(
-      calls.find((call) => call.cmd === "search_library")?.args,
-    ).toEqual({ query: "R", limit: 200 });
+    expect(calls.find((call) => call.cmd === "search_library")?.args).toEqual({
+      query: "R",
+      limit: 200,
+    });
 
     fireEvent.click(options[0]!);
     expect(
       await screen.findByRole("img", { name: "Symbol Device:R" }),
     ).toBeTruthy();
-    expect(calls.find((call) => call.cmd === "get_library_symbol")?.args).toEqual(
-      { id: 7 },
-    );
+    expect(
+      calls.find((call) => call.cmd === "get_library_symbol")?.args,
+    ).toEqual({ id: 7 });
   });
 
   it("says when a search has no matches", async () => {

@@ -2,4 +2,7 @@
 import type { FootprintGraphic } from "./FootprintGraphic";
 import type { Pad } from "./Pad";
 
+/**
+ * The front side of a footprint: its pads plus silkscreen, fabrication, and courtyard graphics.
+ */
 export type FootprintPreview = { graphics: Array<FootprintGraphic>, pads: Array<Pad>, };

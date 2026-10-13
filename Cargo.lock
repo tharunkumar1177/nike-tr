@@ -4147,6 +4147,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tron-core",
+ "ts-rs",
 ]
 
 [[package]]
