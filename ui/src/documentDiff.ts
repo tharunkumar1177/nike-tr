@@ -22,6 +22,7 @@ export function applyDiff(
     wires: diff.wires ?? project.wires,
     junctions: diff.junctions ?? project.junctions,
     labels: diff.labels ?? project.labels,
+    noConnects: diff.noConnects ?? project.noConnects,
     history: diff.history,
   };
 }

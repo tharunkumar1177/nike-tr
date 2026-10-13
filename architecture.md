@@ -56,6 +56,7 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 ### File format
 
 - Projects are saved as KiCad-compatible S-expression files: `.kicad_sch` for the schematic and `.kicad_pcb` for the board. A `tron.json` project manifest records Tron-only settings.
+- Tron reads and writes the ERC section of the KiCad `.kicad_pro` JSON (rule severities and violation exclusions). Every other key is kept and written back unchanged. Changing a severity or an exclusion is an undoable command that marks the project unsaved, like any document edit.
 - Every write is atomic: write to a temporary file in the same directory, flush it, then rename it over the target.
 - Unknown S-expression nodes are kept and written back unchanged, so a round trip never loses data Tron doesn't understand.
 

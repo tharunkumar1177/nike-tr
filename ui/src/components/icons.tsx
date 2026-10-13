@@ -78,6 +78,16 @@ export function GlobalLabelIcon() {
   );
 }
 
+export function NoConnectIcon() {
+  return (
+    <Icon>
+      <path d="M3 12h12" />
+      <path d="M10 7l10 10" />
+      <path d="M10 17L20 7" />
+    </Icon>
+  );
+}
+
 export function PowerIcon() {
   return (
     <Icon>

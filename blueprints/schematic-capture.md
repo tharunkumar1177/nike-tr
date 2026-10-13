@@ -20,7 +20,13 @@ Slice 4b (connectivity and netlist) is green in [CI run 38434705527](https://git
 - IPC: wiring fields in diffs and the label payload.
 - UI: Vitest covers drawing a bent wire, toggling the bend and finishing on a pin, Escape cancelling and then exiting, selecting and deleting a wire, repeated local labels with counting names and rotation, a global label with a shape (Alt+L), the power picker from the toolbar, and the picker without the library. `wiring.test.ts` covers routes, snapping, hit-testing, and label names.
 
-Slice 4c (properties and ERC) is Planned.
+Slice 4c (properties and ERC) is Partial. 4c-1 (no-connect flags and annotation) is green in [CI run 38451138951](https://github.com/tharunkumar1177/tron/actions/runs/38451138951), including the Windows installer. Covered by tests:
+
+- Core: placing a no-connect flag on the `divider` golden's free R3 pin round-trips, leaves the nets unchanged, and rejects a second flag at the same point. Moving, deleting, and rotating (rejected) flags undo back to the original bytes. Annotation numbers new resistors top to bottom and reuses a freed number (`R2`, then `R4`, `R5`), updates `(instances)`, leaves `#PWR01` alone, records nothing when nothing needs numbering, and undoes in one step. Unit tests cover reference prefix parsing.
+- IPC: `noConnects` in snapshots and diffs, and the "Place No-Connect Flag" undo label.
+- UI: Vitest covers Q mode with pin snapping and repeated placement, Escape, the core's duplicate-flag message, selecting and deleting a flag (R does nothing), and Tools > Annotate Schematic with both result messages. `wiring.test.ts` covers flag hit-testing.
+
+4c-2 to 4c-4 are Planned.
 
 ## Architecture dependencies
 
@@ -93,6 +99,59 @@ Interaction design (designer plans):
 - L places a local label and Alt+L (Option+L) a global label, because Ctrl+L toggles the Component Library. The toolbar also has "Add net label (L)", "Add global label (Alt+L)", and "Add power symbol (P)". An inline popover at the cursor takes the name: non-empty, no whitespace, up to 256 characters, and a shape select for global labels. Enter attaches a ghost, and clicking places it. Placement repeats, and trailing digits auto-increment (D0, then D1). R rotates the label in 90° steps. A local label is `--color-text-primary` `--text-sm` text with a 3 px `--color-primary` anchor square. A global label has a `--color-text-warning` outline shaped by its type, a `--color-canvas` fill, and `--color-text-warning` text.
 - P opens a power picker at the cursor with GND, +5V, +3V3, and VCC, each resolved through the library search and listed only when the index has it, plus "Search library...". Without the library, it shows "Component library required" and a Download button.
 - Status hints: "Click to start wire. Esc: Exit", "Click to anchor. Double-click/Enter/Pin to finish. /: Toggle bend. Esc: Cancel", "Wire selected. Drag to move. Del: Remove", "Enter label name. Esc: Cancel", "Click to place. R: Rotate. Esc: Cancel", and "Label selected. Drag to move. R: Rotate. Del: Remove". The `aria-live` region announces mode and placement changes.
+
+### Slice 4c plan: properties and ERC (approved 2026-10-13)
+
+Four PRs, each green in CI on its own, built in this order.
+
+**4c-1. No-connect flags and annotation.**
+
+- A no-connect flag is `(no_connect (at x y) (uuid "…"))`, kept with wires and junctions in `wiring.rs`. Q places one at the snapped point. Flags are moved and deleted through `EditItems`, like wires.
+- Annotation is one `EditItems` command over the whole schematic. It skips references that start with `#` and references that don't end in `?`. Candidates are sorted by Y (top to bottom), then X, then UUID. Each gets the lowest unused number at or above 1 for its prefix. For a multi-unit `lib_id`, consecutive unannotated instances share one reference and take units 1 to N. The Reference property and the `(instances (project (path (reference) (unit))))` entry change together.
+- As built: annotation is a `Group` ("Annotate Schematic") of one `TransformSymbols`, which replaces whole symbol nodes. Instances keep their own unit instead of being packed into units 1 to N, because the canvas only draws unit 1 and every placed symbol is unit 1. An instance of a multi-unit `lib_id` joins a reference numbered earlier in the same pass when it has the same `Value` and its unit is still free there. Placed power symbols keep `#PWR?`, as planned.
+- As built (UI): the toolbar's "Add no-connect flag" button (Q, `aria-pressed`) toggles placing mode. A ghost X follows the cursor, snapping to pins and wire ends like the wire tool, and each click places a flag until Escape, Q, or right-click. Flags draw as a 1.27 mm X in `--color-primary` (`--color-focus` when selected), select and drag like labels, and can't be rotated. Hints: "Click to place flag. Esc: Cancel" and "Flag selected. Drag to move. Del: Remove". The native **Tools > Annotate Schematic** item has no shortcut and no confirmation. It shows "Annotated N symbols" or "Schematic is already fully annotated" in the status bar until the next input, and announces the same text.
+
+**4c-2. Property editing.** `edit_symbol_properties(uuid, properties)` replaces the symbol node in one `EditItems` step. Each property has a key, a value, a position, a rotation, and visibility, and Reference edits also update `(instances)`. E or a double-click opens the dialog; U and V edit Reference and Value inline. References must not be empty. Duplicates are left to ERC.
+
+**4c-3. ERC.** `erc.rs` checks the schematic and its derived netlist and returns transient violations: kind, severity, position, the item UUIDs, and KiCad's message. Violations are never saved in `.kicad_sch`.
+
+| Rule | Message | Default | Position |
+| --- | --- | --- | --- |
+| `unannotated` | Symbol is not annotated | Error | Symbol anchor |
+| `duplicate_reference` | Duplicate reference designators | Error | Symbol anchor |
+| `pin_not_connected` | Pin not connected | Error | Pin |
+| `pin_not_driven` | Input pin not driven by any Output pins | Error | Input pin |
+| `power_pin_not_driven` | Input Power pin not driven by any Output Power pins | Error | Power input pin |
+| `pin_to_pin` | Conflict problem between pins | Matrix | Pin |
+| `label_dangling` | Label not connected | Error | Label anchor |
+| `isolated_pin_label` | Label connected to only one pin | Warning | Label anchor |
+| `unconnected_wire_endpoint` | Unconnected wire endpoint | Warning | Wire end |
+| `no_connect_connected` | (KiCad text, verify in 4c-3) | Warning | Flag |
+| `no_connect_dangling` | (KiCad text, verify in 4c-3) | Warning | Flag |
+
+- Inputs are driven by output, bidirectional, tri-state, passive, and power output pins. Open collector and open emitter pins don't drive. Power inputs need a power output, which a `PWR_FLAG` provides.
+- A no-connect flag on a pin satisfies `pin_not_connected` and `isolated_pin_label`. Duplicate references exclude `#` references and units of one multi-unit symbol.
+- The default pin matrix, from KiCad's `erc_settings.cpp` (O is OK, W is warning, E is error), with rows and columns in this order: input, output, bidirectional, tri-state, passive, not internally connected, unspecified, power input, power output, open collector, open emitter, no connect.
+
+```text
+      I  O  Bi 3S Pa NI Un PI PO OC OE NC
+I     O  O  O  O  O  O  W  O  O  O  O  E
+O     O  E  O  W  O  O  W  O  E  E  E  E
+Bi    O  O  O  O  O  O  W  O  W  O  W  E
+3S    O  W  O  O  O  O  W  W  E  W  W  E
+Pa    O  O  O  O  O  O  W  O  O  O  O  E
+NI    O  O  O  O  O  O  O  O  O  O  O  E
+Un    W  W  W  W  W  O  W  W  W  W  W  E
+PI    O  O  O  W  O  O  W  O  O  O  O  E
+PO    O  E  W  E  O  O  W  O  E  E  E  E
+OC    O  E  O  W  O  O  W  O  E  O  O  E
+OE    O  E  W  W  O  O  W  O  E  O  O  E
+NC    E  E  E  E  E  E  E  E  E  E  E  E
+```
+
+- The ERC panel runs the check, lists violations by severity, and pans the canvas to a violation when it's clicked.
+
+**4c-4. Exclusions and severities.** `.kicad_pro` is read as JSON with every key kept. Only the ERC section changes: `rule_severities` and the exclusion list. An `EditErcSettings` command makes changes undoable and marks the project unsaved. The exact KiCad 10 exclusion string identity must be verified against a KiCad-written `.kicad_pro` before 4c-4 is built.
 
 ## Related blueprints
 

@@ -2,6 +2,7 @@
 import type { HistoryStatus } from "./HistoryStatus";
 import type { JunctionDot } from "./JunctionDot";
 import type { NetLabel } from "./NetLabel";
+import type { NoConnectFlag } from "./NoConnectFlag";
 import type { SymbolInstance } from "./SymbolInstance";
 import type { SymbolPreview } from "./SymbolPreview";
 import type { TitleBlockFields } from "./TitleBlockFields";
@@ -22,6 +23,6 @@ definitions: { [key in string]: SymbolPreview } | null,
  */
 instances: Array<SymbolInstance> | null, 
 /**
- * Every wire, junction, and label when the wiring changed.
+ * Every wire, junction, label, and no-connect flag when the wiring changed.
  */
-wires: Array<WireSegment> | null, junctions: Array<JunctionDot> | null, labels: Array<NetLabel> | null, history: HistoryStatus, };
+wires: Array<WireSegment> | null, junctions: Array<JunctionDot> | null, labels: Array<NetLabel> | null, noConnects: Array<NoConnectFlag> | null, history: HistoryStatus, };

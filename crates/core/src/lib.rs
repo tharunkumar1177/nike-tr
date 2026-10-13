@@ -20,6 +20,6 @@ pub use kicad::{
 pub use netlist::{Net, NetNode, netlist};
 pub use project::{Project, validate_name, write_atomic};
 pub use session::{Changes, Command, Session, SymbolTransform};
-pub use symbol::{Fill, Pin, Shape, SymbolGraphics, SymbolPreview, Xy};
+pub use symbol::{Fill, Pin, Shape, SymbolGraphics, SymbolPreview, Xy, unit_count};
 pub use units::{Angle, Nm, Point, UnitError};
-pub use wiring::{Junction, Label, LabelKind, LabelShape, Wire};
+pub use wiring::{Junction, Label, LabelKind, LabelShape, NoConnect, Wire};

@@ -7,7 +7,7 @@ use crate::kicad_value::{angle, child_text, children, flag, point, text_arg};
 use crate::sexpr::{self, ParseError, SExpr};
 use crate::symbol::{SymbolPreview, Xy};
 use crate::units::{Angle, Nm, Point};
-use crate::wiring::{Junction, Label, Sheet, Wire, node_uuid};
+use crate::wiring::{Junction, Label, NoConnect, Sheet, Wire, node_uuid};
 use uuid::Uuid;
 
 pub const SCHEMATIC_FORMAT_VERSION: &str = "20231120";
@@ -346,6 +346,15 @@ impl Schematic {
     /// Every local and global label with readable text, position, and UUID, in file order.
     pub fn labels(&self) -> Vec<Label> {
         self.root.args().iter().filter_map(Label::read).collect()
+    }
+
+    /// Every no-connect flag with a readable position and UUID, in file order.
+    pub fn no_connects(&self) -> Vec<NoConnect> {
+        self.root
+            .args()
+            .iter()
+            .filter_map(NoConnect::read)
+            .collect()
     }
 
     /// Every pin connection point of every placed symbol whose definition is embedded and
@@ -829,6 +838,20 @@ impl PlacedSymbol {
             .unwrap_or("?")
     }
 
+    /// The symbol with its `Reference` property set to `reference`. The `(instances ...)`
+    /// entries follow when the node is rebuilt.
+    pub fn with_reference(&self, reference: &str) -> PlacedSymbol {
+        let mut next = self.clone();
+        if let Some(property) = next
+            .properties
+            .iter_mut()
+            .find(|property| property.key == "Reference")
+        {
+            property.value = reference.to_owned();
+        }
+        next
+    }
+
     /// The symbol moved by `(dx, dy)`, properties included.
     pub fn moved_by(&self, dx: Nm, dy: Nm) -> PlacedSymbol {
         let mut next = self.clone();
@@ -984,6 +1007,7 @@ impl PlacedSymbol {
                     Some(pin) => items.push(pin_node(pin, Some(child))),
                     None => items.push(child.clone()),
                 },
+                Some("instances") => items.push(instances_node(child, self.reference(), self.unit)),
                 _ => items.push(child.clone()),
             }
         }
@@ -1047,6 +1071,32 @@ fn pin_node(pin: &PlacedPin, previous: Option<&SExpr>) -> SExpr {
         );
     }
     SExpr::List(items)
+}
+
+/// Rewrites the `(reference ...)` and `(unit ...)` of every `(path ...)` in an
+/// `(instances (project ... (path ...)))` block, keeping everything else.
+fn instances_node(instances: &SExpr, reference: &str, unit: u32) -> SExpr {
+    let reference = SExpr::node("reference", vec![SExpr::string(reference)]);
+    let unit = SExpr::node("unit", vec![SExpr::atom(unit.to_string())]);
+    let mut node = instances.clone();
+    for project in node.items_mut().into_iter().flatten().skip(1) {
+        if project.head() != Some("project") {
+            continue;
+        }
+        for path in project.items_mut().into_iter().flatten().skip(1) {
+            if path.head() != Some("path") {
+                continue;
+            }
+            for field in path.items_mut().into_iter().flatten().skip(1) {
+                match field.head() {
+                    Some("reference") => *field = reference.clone(),
+                    Some("unit") => *field = unit.clone(),
+                    _ => {}
+                }
+            }
+        }
+    }
+    node
 }
 
 /// The parsed `(uuid ...)` of a placed `(symbol ...)` node.

@@ -219,6 +219,17 @@ pub fn unit_pins(definition: &SExpr, unit: u32) -> Result<Vec<(Pin, bool)>, Stri
     Ok(pins)
 }
 
+/// How many units a definition has: the highest unit number among its drawings, at least 1.
+pub fn unit_count(definition: &SExpr) -> u32 {
+    let drawings = units(definition).unwrap_or_default();
+    drawings
+        .iter()
+        .map(|drawing| drawing.number)
+        .max()
+        .unwrap_or(1)
+        .max(1)
+}
+
 /// Whether a definition is a power symbol, marked `(power)` (or `(power global)` and
 /// `(power local)` in newer files). Its `Value` names the net it drives.
 pub fn is_power_symbol(definition: &SExpr) -> bool {

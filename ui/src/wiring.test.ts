@@ -5,6 +5,7 @@ import {
   connectionPoints,
   dedupePath,
   findLabelAt,
+  findNoConnectAt,
   findWireAt,
   isOnPin,
   isOnWire,
@@ -21,6 +22,23 @@ const wire = {
   start: [0, 0] as [number, number],
   end: [10_160_000, 0] as [number, number],
 };
+
+describe("no-connect hit-testing", () => {
+  const flags = [
+    { uuid: "flag-1", position: [GRID, GRID] as [number, number] },
+    { uuid: "flag-2", position: [GRID, GRID] as [number, number] },
+  ];
+
+  it("finds the topmost flag within its X and the tolerance", () => {
+    const center = { x: GRID, y: GRID };
+    expect(findNoConnectAt(flags, center, 0)?.uuid).toBe("flag-2");
+    const corner = { x: GRID + GRID / 2, y: GRID - GRID / 2 };
+    expect(findNoConnectAt(flags, corner, 0)?.uuid).toBe("flag-2");
+    const outside = { x: GRID * 2 + 1, y: GRID };
+    expect(findNoConnectAt(flags, outside, 0)).toBeNull();
+    expect(findNoConnectAt(flags, outside, GRID)?.uuid).toBe("flag-2");
+  });
+});
 
 describe("orthogonal routes", () => {
   it("bends once, horizontal first unless toggled", () => {

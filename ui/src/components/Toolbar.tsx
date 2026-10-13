@@ -5,6 +5,7 @@ import {
   GlobalLabelIcon,
   LabelIcon,
   LibraryIcon,
+  NoConnectIcon,
   PowerIcon,
   PropertiesIcon,
   RedoIcon,
@@ -55,6 +56,8 @@ interface ToolbarProps {
   onToggleLibrary: () => void;
   wireMode: boolean;
   onToggleWireMode: () => void;
+  noConnectMode: boolean;
+  /** Starts a canvas tool; for `noConnect`, toggles the mode. */
   onStartTool: (tool: CanvasTool) => void;
 }
 
@@ -69,6 +72,7 @@ export function Toolbar({
   onToggleLibrary,
   wireMode,
   onToggleWireMode,
+  noConnectMode,
   onStartTool,
 }: ToolbarProps) {
   return (
@@ -140,6 +144,15 @@ export function Toolbar({
           onClick={() => onStartTool("power")}
         >
           <PowerIcon />
+        </IconButton>
+        <IconButton
+          label="Add no-connect flag"
+          shortcut="Q"
+          pressed={noConnectMode}
+          disabled={disabled}
+          onClick={() => onStartTool("noConnect")}
+        >
+          <NoConnectIcon />
         </IconButton>
       </div>
       <output className="toolbar__zoom" aria-label="Zoom level">

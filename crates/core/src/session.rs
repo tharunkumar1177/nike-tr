@@ -14,15 +14,17 @@ use crate::kicad_value::text_arg;
 use crate::manifest::{MAX_GRID, MIN_GRID};
 use crate::project::Project;
 use crate::sexpr::SExpr;
+use crate::symbol::unit_count;
 use crate::units::{Angle, Nm, Point};
 use crate::wiring::{
-    self, ChangedItem, Label, LabelKind, Wire, WiringPlan, WiringRequest, node_uuid,
+    self, ChangedItem, Label, LabelKind, NoConnect, Wire, WiringPlan, WiringRequest, node_uuid,
 };
 
 pub const MAX_FIELD_CHARS: usize = 256;
 /// The most points one drawn wire can have.
 pub const MAX_WIRE_POINTS: usize = 1024;
 pub const PROPERTIES_LABEL: &str = "Project Properties";
+pub const ANNOTATE_LABEL: &str = "Annotate Schematic";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -537,8 +539,36 @@ impl Session {
         Ok(self.edit_wiring("Place Label", request, fresh))
     }
 
-    /// Moves the wires and labels in `uuids` by `(dx, dy)` as one undo step. Wires keep
-    /// their own ends; connected neighbors don't stretch.
+    /// Places a no-connect flag at `position` as one undo step. A point holds at most one
+    /// flag.
+    pub fn place_no_connect(
+        &mut self,
+        position: Point,
+        fresh: &mut impl FnMut() -> Uuid,
+    ) -> Result<Changes, CoreError> {
+        let schematic = self.project.schematic();
+        if schematic
+            .no_connects()
+            .iter()
+            .any(|flag| flag.position == position)
+        {
+            return Err(CoreError::InvalidEdit(
+                "A no-connect flag is already there.".to_owned(),
+            ));
+        }
+        let flag = NoConnect {
+            uuid: fresh(),
+            position,
+        };
+        let request = WiringRequest {
+            new_no_connects: vec![flag],
+            ..WiringRequest::default()
+        };
+        Ok(self.edit_wiring("Place No-Connect Flag", request, fresh))
+    }
+
+    /// Moves the wires, labels, and no-connect flags in `uuids` by `(dx, dy)` as one undo
+    /// step. Wires keep their own ends; connected neighbors don't stretch.
     pub fn move_wiring(
         &mut self,
         uuids: &[Uuid],
@@ -550,16 +580,26 @@ impl Session {
         if uuids.is_empty() || (dx == Nm::ZERO && dy == Nm::ZERO) {
             return Ok(Changes::default());
         }
-        let (wires, labels) = self.wiring_selection(&uuids)?;
-        let noun = wiring_noun(&wires, &labels);
-        let moved_wires = wires.iter().map(|wire| wire.moved_by(dx, dy)).collect();
-        let mut changed_labels = labels;
+        let selection = self.wiring_selection(&uuids)?;
+        let noun = selection.noun();
+        let moved_wires = selection
+            .wires
+            .iter()
+            .map(|wire| wire.moved_by(dx, dy))
+            .collect();
+        let mut changed_labels = selection.labels;
         for label in &mut changed_labels {
             label.position = label.position.offset(dx, dy);
         }
+        let moved_no_connects = selection
+            .no_connects
+            .iter()
+            .map(|flag| flag.moved_by(dx, dy))
+            .collect();
         let request = WiringRequest {
             moved_wires,
             changed_labels,
+            moved_no_connects,
             ..WiringRequest::default()
         };
         Ok(self.edit_wiring(&format!("Move {noun}"), request, fresh))
@@ -577,13 +617,13 @@ impl Session {
         if uuids.is_empty() || steps.rem_euclid(4) == 0 {
             return Ok(Changes::default());
         }
-        let (wires, labels) = self.wiring_selection(&uuids)?;
-        if !wires.is_empty() {
+        let selection = self.wiring_selection(&uuids)?;
+        if !selection.wires.is_empty() || !selection.no_connects.is_empty() {
             return Err(CoreError::InvalidEdit(
                 "Only labels can be rotated.".to_owned(),
             ));
         }
-        let mut changed_labels = labels;
+        let mut changed_labels = selection.labels;
         for label in &mut changed_labels {
             label.rotation = label.rotation.rotate(quarter_turns(steps));
         }
@@ -594,8 +634,8 @@ impl Session {
         Ok(self.edit_wiring("Rotate Label", request, fresh))
     }
 
-    /// Deletes the wires and labels in `uuids` as one undo step, with the junctions that
-    /// are no longer needed.
+    /// Deletes the wires, labels, and no-connect flags in `uuids` as one undo step, with
+    /// the junctions that are no longer needed.
     pub fn delete_wiring(
         &mut self,
         uuids: &[Uuid],
@@ -605,8 +645,7 @@ impl Session {
         if uuids.is_empty() {
             return Ok(Changes::default());
         }
-        let (wires, labels) = self.wiring_selection(&uuids)?;
-        let noun = wiring_noun(&wires, &labels);
+        let noun = self.wiring_selection(&uuids)?.noun();
         let request = WiringRequest {
             deleted: uuids.into_iter().collect(),
             ..WiringRequest::default()
@@ -614,25 +653,102 @@ impl Session {
         Ok(self.edit_wiring(&format!("Delete {noun}"), request, fresh))
     }
 
-    /// The wires and labels named by `uuids`, or an error when any is neither.
-    fn wiring_selection(&self, uuids: &[Uuid]) -> Result<(Vec<Wire>, Vec<Label>), CoreError> {
+    /// The wires, labels, and no-connect flags named by `uuids`, or an error when any is
+    /// none of those.
+    fn wiring_selection(&self, uuids: &[Uuid]) -> Result<WiringSelection, CoreError> {
         let schematic = self.project.schematic();
         let all_wires = schematic.wires();
         let all_labels = schematic.labels();
-        let mut wires = Vec::new();
-        let mut labels = Vec::new();
+        let all_flags = schematic.no_connects();
+        let mut selection = WiringSelection::default();
         for uuid in uuids {
             if let Some(wire) = all_wires.iter().find(|wire| wire.uuid == *uuid) {
-                wires.push(*wire);
+                selection.wires.push(*wire);
             } else if let Some(label) = all_labels.iter().find(|label| label.uuid == *uuid) {
-                labels.push(label.clone());
+                selection.labels.push(label.clone());
+            } else if let Some(flag) = all_flags.iter().find(|flag| flag.uuid == *uuid) {
+                selection.no_connects.push(*flag);
             } else {
                 return Err(CoreError::InvalidEdit(
-                    "A selected item is not a wire or label on the schematic.".to_owned(),
+                    "A selected item is not a wire, label, or no-connect flag on the schematic."
+                        .to_owned(),
                 ));
             }
         }
-        Ok((wires, labels))
+        Ok(selection)
+    }
+
+    /// Numbers every unannotated symbol as one undo step and returns how many changed.
+    /// A reference ending in `?` gets the lowest unused number for its prefix, in order
+    /// top to bottom, then left to right. References starting with `#` are left alone.
+    /// Units keep their numbers: an instance of a multi-unit symbol joins an instance
+    /// numbered earlier in the same pass with the same `lib_id` and `Value` whose
+    /// reference doesn't have its unit yet.
+    pub fn annotate(&mut self) -> (Changes, usize) {
+        let schematic = self.project.schematic();
+        let symbols = schematic.symbols();
+        let mut used: HashMap<String, Vec<u32>> = HashMap::new();
+        for symbol in &symbols {
+            if let Some((prefix, number)) = annotated_reference(symbol.reference()) {
+                used.entry(prefix.to_owned()).or_default().push(number);
+            }
+        }
+        let mut pending: Vec<&PlacedSymbol> = symbols
+            .iter()
+            .filter(|symbol| unannotated_prefix(symbol.reference()).is_some())
+            .collect();
+        pending.sort_by_key(|symbol| {
+            let at = symbol.position;
+            (at.y, at.x, symbol.uuid)
+        });
+
+        let mut shared: Vec<SharedReference> = Vec::new();
+        let mut edits = Vec::with_capacity(pending.len());
+        for symbol in pending {
+            let Some(prefix) = unannotated_prefix(symbol.reference()) else {
+                continue;
+            };
+            let value = symbol.property("Value").unwrap_or_default();
+            let multi_unit = schematic
+                .lib_symbol(&symbol.lib_id)
+                .is_some_and(|definition| unit_count(definition) > 1);
+            let joined = shared.iter_mut().find(|entry| {
+                multi_unit
+                    && entry.lib_id == symbol.lib_id
+                    && entry.value == value
+                    && !entry.units.contains(&symbol.unit)
+            });
+            let reference = match joined {
+                Some(entry) => {
+                    entry.units.push(symbol.unit);
+                    entry.reference.clone()
+                }
+                None => {
+                    let numbers = used.entry(prefix.to_owned()).or_default();
+                    let number = (1..).find(|n| !numbers.contains(n)).unwrap_or(1);
+                    numbers.push(number);
+                    let reference = format!("{prefix}{number}");
+                    shared.push(SharedReference {
+                        lib_id: symbol.lib_id.clone(),
+                        value: value.to_owned(),
+                        reference: reference.clone(),
+                        units: vec![symbol.unit],
+                    });
+                    reference
+                }
+            };
+            let after = symbol.with_reference(&reference);
+            edits.push((symbol.uuid, symbol.clone(), after));
+        }
+        if edits.is_empty() {
+            return (Changes::default(), 0);
+        }
+        let count = edits.len();
+        let command = Command::Group {
+            label: ANNOTATE_LABEL.to_owned(),
+            commands: vec![Command::TransformSymbols { symbols: edits }],
+        };
+        (self.execute(command), count)
     }
 
     /// Plans a wiring edit and records it as one undo step. An edit that changes no node
@@ -740,6 +856,7 @@ fn item_edits(schematic: &Schematic, plan: &WiringPlan) -> (NodeEdits, NodeEdits
         let node = match item {
             ChangedItem::Wire(wire) => wire.node(previous),
             ChangedItem::Label(label) => label.to_node(previous),
+            ChangedItem::NoConnect(flag) => flag.node(previous),
         };
         changed.insert(*uuid, node);
     }
@@ -777,13 +894,57 @@ fn insert_new(plan: &WiringPlan, inserted: &mut NodeEdits, next: &mut usize) {
     }
 }
 
-/// The word undo labels use for a wiring selection.
-fn wiring_noun(wires: &[Wire], labels: &[Label]) -> &'static str {
-    match (wires.is_empty(), labels.is_empty()) {
-        (false, true) => "Wire",
-        (true, false) => "Label",
-        _ => "Wiring",
+/// The wiring items a selection names, by kind.
+#[derive(Debug, Default)]
+struct WiringSelection {
+    wires: Vec<Wire>,
+    labels: Vec<Label>,
+    no_connects: Vec<NoConnect>,
+}
+
+impl WiringSelection {
+    /// The word undo labels use for the selection.
+    fn noun(&self) -> &'static str {
+        let kinds = (
+            !self.wires.is_empty(),
+            !self.labels.is_empty(),
+            !self.no_connects.is_empty(),
+        );
+        match kinds {
+            (true, false, false) => "Wire",
+            (false, true, false) => "Label",
+            (false, false, true) => "No-Connect Flag",
+            _ => "Wiring",
+        }
     }
+}
+
+/// A reference handed out during annotation, with the units already using it.
+struct SharedReference {
+    lib_id: String,
+    value: String,
+    reference: String,
+    units: Vec<u32>,
+}
+
+/// The prefix of a reference annotation fills in: `R` for `R?`. `None` for annotated
+/// references, references starting with `#`, and a bare `?`.
+fn unannotated_prefix(reference: &str) -> Option<&str> {
+    let prefix = reference.strip_suffix('?')?;
+    if prefix.is_empty() || prefix.starts_with('#') {
+        return None;
+    }
+    Some(prefix)
+}
+
+/// The prefix and number of an annotated reference: `("R", 12)` for `R12`.
+fn annotated_reference(reference: &str) -> Option<(&str, u32)> {
+    let prefix = reference.trim_end_matches(|c: char| c.is_ascii_digit());
+    if prefix.is_empty() || prefix.len() == reference.len() {
+        return None;
+    }
+    let number = reference[prefix.len()..].parse().ok()?;
+    Some((prefix, number))
 }
 
 fn quarter_turns(steps: i32) -> Angle {
@@ -1161,6 +1322,43 @@ mod tests {
         );
         assert!(!session.delete_symbols(&[]).unwrap().any());
         assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn annotation_reads_reference_prefixes_and_numbers() {
+        assert_eq!(unannotated_prefix("R?"), Some("R"));
+        assert_eq!(unannotated_prefix("SW?"), Some("SW"));
+        for skipped in ["R1", "#PWR?", "?", ""] {
+            assert_eq!(unannotated_prefix(skipped), None, "{skipped}");
+        }
+        assert_eq!(annotated_reference("R12"), Some(("R", 12)));
+        assert_eq!(annotated_reference("#PWR01"), Some(("#PWR", 1)));
+        for skipped in ["R?", "R", "12", "U99999999999"] {
+            assert_eq!(annotated_reference(skipped), None, "{skipped}");
+        }
+    }
+
+    #[test]
+    fn annotating_an_empty_schematic_records_nothing() {
+        let mut session = session();
+        let (changes, count) = session.annotate();
+        assert!(!changes.any() && count == 0);
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn annotation_numbers_a_placed_symbol_and_undoes() {
+        let mut session = session();
+        place(&mut session, SYMBOL_1);
+        let (changes, count) = session.annotate();
+        assert!(changes.symbols && count == 1);
+        let symbols = session.project().schematic().symbols();
+        assert_eq!(symbols[0].reference(), "R1");
+        let text = session.project().schematic().to_file_string();
+        assert!(text.contains("(reference \"R1\")"), "{text}");
+        session.undo().unwrap();
+        let symbols = session.project().schematic().symbols();
+        assert_eq!(symbols[0].reference(), "R?");
     }
 
     #[test]

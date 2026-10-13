@@ -140,6 +140,49 @@ impl Junction {
     }
 }
 
+/// A `(no_connect (at x y) ...)` flag, marking a pin as intentionally unconnected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NoConnect {
+    pub uuid: Uuid,
+    pub position: Point,
+}
+
+impl NoConnect {
+    pub(crate) fn read(node: &SExpr) -> Option<NoConnect> {
+        if node.head() != Some("no_connect") {
+            return None;
+        }
+        Some(NoConnect {
+            uuid: node_uuid(node)?,
+            position: read_at(node)?.0,
+        })
+    }
+
+    /// Builds the flag node, keeping every child of `previous` other than the position and
+    /// the UUID.
+    pub(crate) fn node(&self, previous: Option<&SExpr>) -> SExpr {
+        let x = SExpr::atom(mm_text(self.position.x));
+        let y = SExpr::atom(mm_text(self.position.y));
+        let mut items = vec![SExpr::atom("no_connect"), SExpr::node("at", vec![x, y])];
+        if let Some(previous) = previous {
+            for child in previous.args() {
+                if !matches!(child.head(), Some("at" | "uuid")) {
+                    items.push(child.clone());
+                }
+            }
+        }
+        items.push(uuid_node(self.uuid));
+        SExpr::List(items)
+    }
+
+    pub fn moved_by(&self, dx: Nm, dy: Nm) -> NoConnect {
+        NoConnect {
+            uuid: self.uuid,
+            position: self.position.offset(dx, dy),
+        }
+    }
+}
+
 /// The outline of a global label, from its `(shape ...)` node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelShape {
@@ -316,6 +359,10 @@ pub(crate) struct WiringRequest {
     pub changed_labels: Vec<Label>,
     pub new_wires: Vec<Wire>,
     pub new_labels: Vec<Label>,
+    /// No-connect flags neither split wires nor need junctions; they are only placed,
+    /// moved, or removed.
+    pub moved_no_connects: Vec<NoConnect>,
+    pub new_no_connects: Vec<NoConnect>,
 }
 
 /// The node-level outcome of a wiring edit.
@@ -333,6 +380,7 @@ pub(crate) struct WiringPlan {
 pub(crate) enum ChangedItem {
     Wire(Wire),
     Label(Label),
+    NoConnect(NoConnect),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,6 +388,7 @@ pub(crate) enum NewItem {
     Wire(Wire),
     Junction(Junction),
     Label(Label),
+    NoConnect(NoConnect),
 }
 
 impl NewItem {
@@ -348,6 +397,7 @@ impl NewItem {
             NewItem::Wire(wire) => wire.node(None),
             NewItem::Junction(junction) => junction.new_node(),
             NewItem::Label(label) => label.to_node(None),
+            NewItem::NoConnect(flag) => flag.node(None),
         }
     }
 }
@@ -479,6 +529,11 @@ pub(crate) fn plan(
     }
     plan.added
         .extend(request.new_labels.into_iter().map(NewItem::Label));
+    for flag in request.moved_no_connects {
+        plan.changed.push((flag.uuid, ChangedItem::NoConnect(flag)));
+    }
+    plan.added
+        .extend(request.new_no_connects.into_iter().map(NewItem::NoConnect));
 
     let mut junctions_at: HashMap<Point, Vec<Uuid>> = HashMap::new();
     for junction in &sheet.junctions {

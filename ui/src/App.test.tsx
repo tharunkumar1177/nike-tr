@@ -196,6 +196,7 @@ describe("App", () => {
       wires: null,
       junctions: null,
       labels: null,
+      noConnects: null,
       history: {
         dirty: true,
         canUndo: true,
@@ -802,6 +803,7 @@ describe("Symbol placement", () => {
       wires: null,
       junctions: null,
       labels: null,
+      noConnects: null,
       history: {
         ...snapshot.history,
         dirty: true,
@@ -950,7 +952,9 @@ describe("Wiring", () => {
         wires: [{ uuid: "wire-1", start: START, end: [END[0], START[1]] }],
       }),
     );
-    expect(screen.getByText("1 wire, 0 junctions")).toBeTruthy();
+    expect(
+      screen.getByText("1 wire, 0 junctions, 0 no-connect flags"),
+    ).toBeTruthy();
 
     clickAt(canvas, [70_000_000, START[1]]);
     expect(await screen.findByText("Wire selected")).toBeTruthy();
@@ -1094,5 +1098,90 @@ describe("Wiring", () => {
       within(picker).getByRole("button", { name: "Download" }),
     ).toBeTruthy();
     expect(calls.some((call) => call.cmd === "search_library")).toBe(false);
+  });
+
+  function noConnectButton(): HTMLElement {
+    return screen.getByRole("button", { name: "Add no-connect flag" });
+  }
+
+  it("places no-connect flags on pins and leaves the mode with Escape", async () => {
+    const { calls, canvas } = await openSheet({
+      place_no_connect: () => null,
+    });
+
+    fireEvent.keyDown(canvas, { key: "q" });
+    expect(await screen.findByText("Placing no-connect flag")).toBeTruthy();
+    expect(screen.getByText("Click to place flag. Esc: Cancel")).toBeTruthy();
+    expect(noConnectButton().getAttribute("aria-pressed")).toBe("true");
+
+    clickAt(canvas, [PIN_1[0] + 200_000, PIN_1[1] + 200_000]);
+    clickAt(canvas, START);
+    await waitFor(() =>
+      expect(argsOf(calls, "place_no_connect")).toEqual([
+        { position: PIN_1 },
+        { position: START },
+      ]),
+    );
+    expect(await screen.findByText("Flag placed")).toBeTruthy();
+
+    fireEvent.keyDown(canvas, { key: "Escape" });
+    expect(await screen.findByText("No-connect mode ended")).toBeTruthy();
+    expect(noConnectButton().getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("shows the core's reason when a flag can't be placed", async () => {
+    const { canvas } = await openSheet({
+      place_no_connect: () => {
+        throw new Error("A no-connect flag is already there.");
+      },
+    });
+
+    fireEvent.click(noConnectButton());
+    expect(await screen.findByText("Placing no-connect flag")).toBeTruthy();
+    clickAt(canvas, START);
+    expect(
+      await screen.findByText("A no-connect flag is already there."),
+    ).toBeTruthy();
+  });
+
+  it("selects a no-connect flag and deletes it", async () => {
+    const { calls, canvas } = await openSheet(
+      { delete_wiring: () => null },
+      wiredSnapshot({ noConnects: [{ uuid: "flag-1", position: START }] }),
+    );
+    expect(
+      screen.getByText("0 wires, 0 junctions, 1 no-connect flag"),
+    ).toBeTruthy();
+
+    clickAt(canvas, START);
+    expect(await screen.findByText("Flag selected")).toBeTruthy();
+    expect(
+      screen.getByText("Flag selected. Drag to move. Del: Remove"),
+    ).toBeTruthy();
+
+    fireEvent.keyDown(canvas, { key: "r" });
+    fireEvent.keyDown(canvas, { key: "Delete" });
+    await waitFor(() =>
+      expect(argsOf(calls, "delete_wiring")).toEqual([{ uuids: ["flag-1"] }]),
+    );
+    expect(await screen.findByText("Flag deleted")).toBeTruthy();
+    expect(calls.some((call) => call.cmd === "rotate_labels")).toBe(false);
+  });
+
+  it("annotates the schematic from the Tools menu", async () => {
+    let numbered = 2;
+    const { calls } = await openSheet({ annotate_schematic: () => numbered });
+
+    await emitFromCore("menu-action", "annotate-schematic");
+    const annotated = await screen.findAllByText("Annotated 2 symbols");
+    expect(annotated.length).toBeGreaterThan(0);
+
+    numbered = 0;
+    await emitFromCore("menu-action", "annotate-schematic");
+    const done = await screen.findAllByText(
+      "Schematic is already fully annotated",
+    );
+    expect(done.length).toBeGreaterThan(0);
+    expect(argsOf(calls, "annotate_schematic")).toHaveLength(2);
   });
 });

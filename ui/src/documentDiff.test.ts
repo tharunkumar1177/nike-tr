@@ -16,6 +16,7 @@ describe("applyDiff", () => {
       wires: null,
       junctions: null,
       labels: null,
+      noConnects: null,
       history: { ...project.history, dirty: true, canUndo: true },
     };
     const next = applyDiff(project, diff);
@@ -39,6 +40,7 @@ describe("applyDiff", () => {
       wires: null,
       junctions: null,
       labels: null,
+      noConnects: null,
       history: project.history,
     };
     const next = applyDiff(project, diff);
@@ -59,11 +61,15 @@ describe("applyDiff", () => {
       wires: [{ uuid: "wire-1", start: [0, 0], end: [2_540_000, 0] }],
       junctions: [{ uuid: "junction-1", position: [0, 0] }],
       labels: [],
+      noConnects: [{ uuid: "flag-1", position: [2_540_000, 0] }],
       history: project.history,
     };
     const next = applyDiff(project, diff);
     expect(next?.wires).toEqual([wire]);
     expect(next?.junctions).toHaveLength(1);
+    expect(next?.noConnects).toEqual([
+      { uuid: "flag-1", position: [2_540_000, 0] },
+    ]);
     expect(next?.instances).toBe(project.instances);
   });
 
@@ -79,6 +85,7 @@ describe("applyDiff", () => {
       wires: null,
       junctions: null,
       labels: null,
+      noConnects: null,
       history: project.history,
     };
     expect(applyDiff(project, diff)).toBeNull();

@@ -58,6 +58,8 @@ pub fn run() {
             ipc::move_wiring,
             ipc::rotate_labels,
             ipc::delete_wiring,
+            ipc::place_no_connect,
+            ipc::annotate_schematic,
             ipc::list_recent_projects,
             ipc::remove_recent_project,
             ipc::close_window,

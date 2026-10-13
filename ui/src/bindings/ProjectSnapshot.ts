@@ -2,6 +2,7 @@
 import type { HistoryStatus } from "./HistoryStatus";
 import type { JunctionDot } from "./JunctionDot";
 import type { NetLabel } from "./NetLabel";
+import type { NoConnectFlag } from "./NoConnectFlag";
 import type { SheetSize } from "./SheetSize";
 import type { SymbolInstance } from "./SymbolInstance";
 import type { SymbolPreview } from "./SymbolPreview";
@@ -16,4 +17,4 @@ definitions: { [key in string]: SymbolPreview },
 /**
  * Every symbol placed on the schematic.
  */
-instances: Array<SymbolInstance>, wires: Array<WireSegment>, junctions: Array<JunctionDot>, labels: Array<NetLabel>, history: HistoryStatus, };
+instances: Array<SymbolInstance>, wires: Array<WireSegment>, junctions: Array<JunctionDot>, labels: Array<NetLabel>, noConnects: Array<NoConnectFlag>, history: HistoryStatus, };
