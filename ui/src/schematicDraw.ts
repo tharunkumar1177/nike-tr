@@ -357,10 +357,7 @@ function drawSnap(
   }
 }
 
-function moved(
-  xy: Xy,
-  offset: { dx: number; dy: number } | null,
-): ScreenPoint {
+function moved(xy: Xy, offset: { dx: number; dy: number } | null): ScreenPoint {
   return offset
     ? { x: xy[0] + offset.dx, y: xy[1] + offset.dy }
     : { x: xy[0], y: xy[1] };

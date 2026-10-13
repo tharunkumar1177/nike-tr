@@ -26,7 +26,11 @@ describe("orthogonal routes", () => {
   it("bends once, horizontal first unless toggled", () => {
     const from = { x: 0, y: 0 };
     const to = { x: 5, y: 7 };
-    expect(orthogonalRoute(from, to, false)).toEqual([from, { x: 5, y: 0 }, to]);
+    expect(orthogonalRoute(from, to, false)).toEqual([
+      from,
+      { x: 5, y: 0 },
+      to,
+    ]);
     expect(orthogonalRoute(from, to, true)).toEqual([from, { x: 0, y: 7 }, to]);
   });
 

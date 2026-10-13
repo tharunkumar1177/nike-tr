@@ -36,8 +36,7 @@ export function PowerPicker({
   const listRef = useRef<HTMLUListElement>(null);
   const [options, setOptions] = useState<Options>({ status: "loading" });
   const [active, setActive] = useState(0);
-  const ready =
-    library.status === "ready" && library.library.state === "ready";
+  const ready = library.status === "ready" && library.library.state === "ready";
 
   useEffect(() => {
     if (!ready) {
