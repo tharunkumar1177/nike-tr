@@ -1,0 +1,49 @@
+{
+  "fps": 30,
+  "durationInFrames": 900,
+  "voice": {
+    "id": "af_heart",
+    "speed": 1,
+    "peakDbfs": -3
+  },
+  "pad": {
+    "peakDbfs": -18,
+    "duckDb": -6,
+    "duckAttackMs": 150,
+    "duckReleaseMs": 500,
+    "fadeInFrames": 60,
+    "fadeOutFrames": 90
+  },
+  "lines": [
+    {
+      "scene": "Schematic",
+      "text": "Keep your schematic files local on your machine.",
+      "startFrame": 15,
+      "endByFrame": 160
+    },
+    {
+      "scene": "Simulation",
+      "text": "Validate behavior directly on your machine.",
+      "startFrame": 195,
+      "endByFrame": 340
+    },
+    {
+      "scene": "Layout",
+      "text": "Position every P.C.B. trace exactly where it belongs.",
+      "startFrame": 375,
+      "endByFrame": 520
+    },
+    {
+      "scene": "AI",
+      "text": "Generate circuits that pass electrical and simulation checks.",
+      "startFrame": 555,
+      "endByFrame": 700
+    },
+    {
+      "scene": "Outro",
+      "text": "Tron. Local-first E.D.A. Explore the repository.",
+      "startFrame": 730,
+      "endByFrame": 880
+    }
+  ]
+}
