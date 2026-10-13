@@ -357,7 +357,7 @@ impl Index {
             message,
         };
 
-        let mut chain = vec![parse_source(&own.source).map_err(&invalid)?];
+        let mut chain = vec![parse_source(&own.source).map_err(invalid)?];
         let mut visited = vec![name.clone()];
         let mut extends = own.extends;
         let mut select_parent = self.conn.prepare_cached(SELECT_PARENT)?;
@@ -373,7 +373,7 @@ impl Index {
                 let message = format!("it extends {parent:?}, which is not in the index");
                 return Err(invalid(message));
             };
-            chain.push(parse_source(&found.source).map_err(&invalid)?);
+            chain.push(parse_source(&found.source).map_err(invalid)?);
             visited.push(parent);
             extends = found.extends;
         }
