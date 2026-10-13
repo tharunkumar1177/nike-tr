@@ -380,7 +380,9 @@ impl Schematic {
 
     /// The node of the top-level item with `uuid`.
     pub(crate) fn item(&self, uuid: Uuid) -> Option<&SExpr> {
-        self.items().iter().find(|item| node_uuid(item) == Some(uuid))
+        self.items()
+            .iter()
+            .find(|item| node_uuid(item) == Some(uuid))
     }
 
     /// Removes the top-level item at child `index`.

@@ -76,6 +76,9 @@ import { InlineLabelEditor } from "./InlineLabelEditor";
 import { PowerPicker } from "./PowerPicker";
 import type { StatusHint } from "./StatusBar";
 
+/** A canvas tool the toolbar can start. */
+export type CanvasTool = "localLabel" | "globalLabel" | "power";
+
 /** A request from the library browser to start placing a symbol. */
 export interface PlacementRequest {
   hit: LibraryHit;
@@ -161,6 +164,8 @@ interface SchematicCanvasProps {
   library: LibraryStatusState;
   onDownloadLibrary: () => void;
   onOpenLibrary: () => void;
+  toolRequest: CanvasTool | null;
+  onToolRequestConsumed: () => void;
   placementRequest: PlacementRequest | null;
   onPlacementRequestConsumed: () => void;
   /** The symbol being dragged from the library browser, if any. */
@@ -187,6 +192,8 @@ export function SchematicCanvas({
   library,
   onDownloadLibrary,
   onOpenLibrary,
+  toolRequest,
+  onToolRequestConsumed,
   placementRequest,
   onPlacementRequestConsumed,
   symbolDrag,
@@ -386,7 +393,7 @@ export function SchematicCanvas({
   };
 
   /** The cursor, or the middle of the canvas when the pointer is outside it. */
-  const cursorOrCenter = (): ScreenPoint | null => {
+  const cursorOrCenter = useCallback((): ScreenPoint | null => {
     if (cursor) {
       return cursor;
     }
@@ -398,7 +405,46 @@ export function SchematicCanvas({
       sizeRef.current.width / 2,
       sizeRef.current.height / 2,
     );
-  };
+  }, [cursor, viewport]);
+
+  const openLabelPrompt = useCallback(
+    (global: boolean) => {
+      const at = cursorOrCenter();
+      if (!at) {
+        return;
+      }
+      clearTools();
+      leaveWireMode();
+      setSelection(null);
+      setCommandError(null);
+      setLabelPrompt({ global, at });
+    },
+    [cursorOrCenter, clearTools, leaveWireMode],
+  );
+
+  const openPowerPicker = useCallback(() => {
+    const at = cursorOrCenter();
+    if (!at) {
+      return;
+    }
+    clearTools();
+    leaveWireMode();
+    setSelection(null);
+    setCommandError(null);
+    setPowerPickerAt(at);
+  }, [cursorOrCenter, clearTools, leaveWireMode]);
+
+  useEffect(() => {
+    if (toolRequest === null) {
+      return;
+    }
+    onToolRequestConsumed();
+    if (toolRequest === "power") {
+      openPowerPicker();
+    } else {
+      openLabelPrompt(toolRequest === "globalLabel");
+    }
+  }, [toolRequest, onToolRequestConsumed, openPowerPicker, openLabelPrompt]);
 
   const placeAt = (world: ScreenPoint) => {
     if (!placing || !placing.preview) {
@@ -593,30 +639,6 @@ export function SchematicCanvas({
     onCursorMove(position);
   };
 
-  const openLabelPrompt = (global: boolean) => {
-    const at = cursorOrCenter();
-    if (!at) {
-      return;
-    }
-    clearTools();
-    leaveWireMode();
-    setSelection(null);
-    setCommandError(null);
-    setLabelPrompt({ global, at });
-  };
-
-  const openPowerPicker = () => {
-    const at = cursorOrCenter();
-    if (!at) {
-      return;
-    }
-    clearTools();
-    leaveWireMode();
-    setSelection(null);
-    setCommandError(null);
-    setPowerPickerAt(at);
-  };
-
   const handleToolKey = (
     key: string,
     event: KeyboardEvent<HTMLDivElement>,
@@ -630,7 +652,7 @@ export function SchematicCanvas({
     }
     if (key === "l") {
       event.preventDefault();
-      openLabelPrompt(event.shiftKey);
+      openLabelPrompt(false);
       return true;
     }
     if (key === "p") {
@@ -642,7 +664,15 @@ export function SchematicCanvas({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.ctrlKey || event.metaKey || event.altKey) {
+    if (event.ctrlKey || event.metaKey) {
+      return;
+    }
+    if (event.altKey) {
+      // `code`, not `key`: Option+L types a symbol on macOS.
+      if (event.code === "KeyL") {
+        event.preventDefault();
+        openLabelPrompt(true);
+      }
       return;
     }
     const key = event.key.toLowerCase();

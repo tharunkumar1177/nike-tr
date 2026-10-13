@@ -1,7 +1,11 @@
 import type { ReactNode } from "react";
 import type { HistoryStatus } from "../bindings/HistoryStatus";
+import type { CanvasTool } from "./SchematicCanvas";
 import {
+  GlobalLabelIcon,
+  LabelIcon,
   LibraryIcon,
+  PowerIcon,
   PropertiesIcon,
   RedoIcon,
   UndoIcon,
@@ -51,6 +55,7 @@ interface ToolbarProps {
   onToggleLibrary: () => void;
   wireMode: boolean;
   onToggleWireMode: () => void;
+  onStartTool: (tool: CanvasTool) => void;
 }
 
 export function Toolbar({
@@ -64,6 +69,7 @@ export function Toolbar({
   onToggleLibrary,
   wireMode,
   onToggleWireMode,
+  onStartTool,
 }: ToolbarProps) {
   return (
     <div className="toolbar" role="toolbar" aria-label="Editor">
@@ -110,6 +116,30 @@ export function Toolbar({
           onClick={onToggleWireMode}
         >
           <WireIcon />
+        </IconButton>
+        <IconButton
+          label="Add net label"
+          shortcut="L"
+          disabled={disabled}
+          onClick={() => onStartTool("localLabel")}
+        >
+          <LabelIcon />
+        </IconButton>
+        <IconButton
+          label="Add global label"
+          shortcut="Alt+L"
+          disabled={disabled}
+          onClick={() => onStartTool("globalLabel")}
+        >
+          <GlobalLabelIcon />
+        </IconButton>
+        <IconButton
+          label="Add power symbol"
+          shortcut="P"
+          disabled={disabled}
+          onClick={() => onStartTool("power")}
+        >
+          <PowerIcon />
         </IconButton>
       </div>
       <output className="toolbar__zoom" aria-label="Zoom level">

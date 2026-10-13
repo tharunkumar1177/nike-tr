@@ -377,7 +377,11 @@ fn split(wire: Wire, at: &[Point], fresh: &mut impl FnMut() -> Uuid) -> Vec<Wire
     let mut pieces = Vec::with_capacity(cuts.len() + 1);
     let mut start = wire.start;
     for cut in cuts.into_iter().chain([wire.end]) {
-        let uuid = if pieces.is_empty() { wire.uuid } else { fresh() };
+        let uuid = if pieces.is_empty() {
+            wire.uuid
+        } else {
+            fresh()
+        };
         pieces.push(Wire {
             uuid,
             start,
@@ -473,7 +477,8 @@ pub(crate) fn plan(
     for label in request.changed_labels {
         plan.changed.push((label.uuid, ChangedItem::Label(label)));
     }
-    plan.added.extend(request.new_labels.into_iter().map(NewItem::Label));
+    plan.added
+        .extend(request.new_labels.into_iter().map(NewItem::Label));
 
     let mut junctions_at: HashMap<Point, Vec<Uuid>> = HashMap::new();
     for junction in &sheet.junctions {

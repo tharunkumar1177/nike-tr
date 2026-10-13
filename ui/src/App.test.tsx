@@ -1020,7 +1020,7 @@ describe("Wiring", () => {
   it("places a global label with the chosen shape", async () => {
     const { calls, canvas } = await openSheet({ place_label: () => null });
 
-    fireEvent.keyDown(canvas, { key: "L", shiftKey: true });
+    fireEvent.keyDown(canvas, { key: "l", code: "KeyL", altKey: true });
     fireEvent.change(
       await screen.findByRole("textbox", { name: "Global label name" }),
       { target: { value: "VIN" } },
@@ -1046,7 +1046,7 @@ describe("Wiring", () => {
   });
 
   it("starts power symbol placement from the picker", async () => {
-    const { calls, canvas } = await openSheet({
+    const { calls } = await openSheet({
       search_library: ({ query }) => [
         {
           kind: "symbol",
@@ -1059,7 +1059,7 @@ describe("Wiring", () => {
       get_library_symbol: () => deviceRSymbol(),
     });
 
-    fireEvent.keyDown(canvas, { key: "p" });
+    fireEvent.click(screen.getByRole("button", { name: "Add power symbol" }));
     const picker = await screen.findByRole("listbox", {
       name: "Power symbols",
     });

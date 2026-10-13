@@ -58,6 +58,36 @@ export function WireIcon() {
   );
 }
 
+export function LabelIcon() {
+  return (
+    <Icon>
+      <path d="M3 17h18" />
+      <path d="M6 13V7h4" />
+      <path d="M8 7v6" />
+      <rect x="2" y="16" width="2" height="2" />
+    </Icon>
+  );
+}
+
+export function GlobalLabelIcon() {
+  return (
+    <Icon>
+      <path d="M3 12 7 7h13v10H7z" />
+      <path d="M10 12h7" />
+    </Icon>
+  );
+}
+
+export function PowerIcon() {
+  return (
+    <Icon>
+      <path d="M12 21V9" />
+      <path d="M6 9h12" />
+      <path d="M12 3v3" />
+    </Icon>
+  );
+}
+
 export function PropertiesIcon() {
   return (
     <Icon>

@@ -223,9 +223,7 @@ impl Command {
                 changes.symbols = !symbols.is_empty();
             }
             Command::EditItems {
-                removed,
-                inserted,
-                ..
+                removed, inserted, ..
             } => {
                 let schematic = project.schematic_mut();
                 for (index, _) in removed.iter().rev() {
