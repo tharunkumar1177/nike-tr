@@ -21,7 +21,11 @@ Evidence for slice 3b:
 
 - [CI run 38315533279](https://github.com/tharunkumar1177/tron/actions/runs/38315533279) is green, including the `src-tauri/src/library.rs` tests and the Windows installer. The tests serve a real index, built from the KiCad fixtures, over a local HTTP server. They cover a whole download, resuming after a cut connection, a server that ignores or refuses the range, cancelling, rejecting a checksum mismatch, and discarding stale or damaged caches.
 
-Slice 3c is Planned. The first-launch consent prompt moved to 3c along with the rest of the library UI. Slice 3b ships its state and commands.
+Evidence for slice 3c:
+
+- [PR #7](https://github.com/tharunkumar1177/tron/pull/7) merged the library browser while CI was red. [PR #9](https://github.com/tharunkumar1177/tron/pull/9) fixed the lockfile, the generated bindings, and the formatting, and [CI run 38373811172](https://github.com/tharunkumar1177/tron/actions/runs/38373811172) is green. `ui/src/App.test.tsx` covers the consent prompt, declining, progress, a failed download with retry, search, and the symbol preview.
+
+Slice 4a prerequisite (Planned until the new index is published and pinned): each symbol row stores its own KiCad definition, and `Index::symbol_definition` returns it flattened for embedding in a schematic. `SCHEMA_VERSION` is 2, so the app rejects the r1 index until an r2 release is pinned.
 
 ## Architecture dependencies
 
@@ -70,6 +74,7 @@ Preview geometry is stored as `i64` nanometers in a Y-down space. KiCad symbol f
 - `meta` records `kicad_tag`, `symbol_count`, `footprint_count`, and `attribution`.
 - Symbol previews draw unit 1 (or the lowest unit present) in body style 1, together with the unit 0 graphics shared by all units. Hidden pins are counted but not drawn.
 - Derived symbols take graphics and pins from the root of their `extends` chain. Each property comes from the nearest symbol in the chain that defines it.
+- Each symbol row stores its own `(symbol ...)` definition as KiCad text in `source`, without merging ancestors, so derived symbols don't duplicate their base graphics. `Index::symbol_definition(id)` follows `extends` within the same library and returns the standalone form a schematic embeds in `(lib_symbols)`: named `<lib>:<name>`, with settings and properties from the nearest definition, and the root's unit drawings renamed `<name>_<unit>_<style>`. A missing parent or a loop fails with `LibraryError::Definition`.
 - Footprint previews keep pads plus graphics on `F.SilkS`, `F.Fab`, and `F.CrtYd`.
 
 ### Search
@@ -90,7 +95,7 @@ None
 ## Relevant implementation and tests
 
 - `crates/library/src/kicad_sym.rs`, `kicad_mod.rs` — reading KiCad 10 symbol (`.kicad_symdir` and `.kicad_sym`) and footprint (`.pretty`) libraries
-- `crates/library/src/index.rs` — schema, writer, and the read-only `Index` with `search`, `symbol`, `footprint`, and `meta`
+- `crates/library/src/index.rs` — schema, writer, and the read-only `Index` with `search`, `symbol`, `symbol_definition`, `footprint`, and `meta`
 - `crates/library/src/search.rs` — the FTS5 query sanitizer
 - `crates/library/src/builder.rs` and `src/bin/build_index.rs` — the index build
 - `crates/library/src/bin/search_benchmark.rs` — the release gate for size, latency, and ranking
@@ -115,7 +120,7 @@ Slice 3b:
 
 Slice 3c:
 
-- [ ] The first launch asks before downloading. Declining leaves the app usable with an empty library.
+- [x] The first launch asks before downloading. Declining leaves the app usable with an empty library.
 - [ ] The library browser previews symbol and footprint graphics.
 - [ ] The browser shows the KiCad attribution stored in the index.
 

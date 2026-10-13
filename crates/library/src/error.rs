@@ -27,6 +27,12 @@ pub enum LibraryError {
         found: i64,
         expected: i64,
     },
+    /// A stored symbol definition that cannot be read or merged with its ancestors.
+    Definition {
+        lib: String,
+        name: String,
+        message: String,
+    },
 }
 
 impl LibraryError {
@@ -75,6 +81,9 @@ impl fmt::Display for LibraryError {
                 f,
                 "index schema version {found} does not match the supported version {expected}"
             ),
+            LibraryError::Definition { lib, name, message } => {
+                write!(f, "symbol {lib}:{name}: {message}")
+            }
         }
     }
 }
