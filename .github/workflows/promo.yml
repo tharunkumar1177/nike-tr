@@ -88,7 +88,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libnss3 libdbus-1-3 libatk1.0-0t64 libatk-bridge2.0-0t64 \
             libcups2t64 libgbm1 libasound2t64 libxrandr2 libxkbcommon0 \
-            libxfixes3 libxcomposite1 libxdamage1 libpango-1.0-0 libcairo2
+            libxfixes3 libxcomposite1 libxdamage1 libpango-1.0-0 libcairo2 \
+            ffmpeg
 
       - name: Download headless browser
         run: npx remotion browser ensure
@@ -117,7 +118,7 @@ jobs:
       - name: Report loudness
         run: |
           set -o pipefail
-          npx remotion ffmpeg -hide_banner -nostats -i out/promo.mp4 -vn \
+          ffmpeg -hide_banner -nostats -i out/promo.mp4 -vn \
             -af ebur128=framelog=quiet -c:a pcm_s16le -f null - 2>&1 \
             | tail -n 12
 
