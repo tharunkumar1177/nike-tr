@@ -57,6 +57,8 @@ pub fn run() {
             library::decline_library_download,
             library::cancel_library_download,
             library::search_library,
+            library::get_library_symbol,
+            library::get_library_footprint,
         ])
         .run(tauri::generate_context!())
         .expect("the Tron desktop runtime failed to start");

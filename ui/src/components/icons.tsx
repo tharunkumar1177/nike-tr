@@ -38,6 +38,16 @@ export function RedoIcon() {
   );
 }
 
+export function LibraryIcon() {
+  return (
+    <Icon>
+      <rect x="3" y="4" width="5" height="16" rx="1" />
+      <rect x="10" y="4" width="5" height="16" rx="1" />
+      <path d="m17 5 3.5 14.5" />
+    </Icon>
+  );
+}
+
 export function PropertiesIcon() {
   return (
     <Icon>

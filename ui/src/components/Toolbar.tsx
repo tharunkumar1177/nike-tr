@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
 import type { HistoryStatus } from "../bindings/HistoryStatus";
-import { PropertiesIcon, RedoIcon, UndoIcon } from "./icons";
+import { LibraryIcon, PropertiesIcon, RedoIcon, UndoIcon } from "./icons";
 
 interface IconButtonProps {
   label: string;
   shortcut?: string;
+  pressed?: boolean;
   disabled: boolean;
   onClick: () => void;
   children: ReactNode;
@@ -13,6 +14,7 @@ interface IconButtonProps {
 function IconButton({
   label,
   shortcut,
+  pressed,
   disabled,
   onClick,
   children,
@@ -22,6 +24,7 @@ function IconButton({
       type="button"
       className="icon-button"
       aria-label={label}
+      aria-pressed={pressed}
       title={shortcut ? `${label} (${shortcut})` : label}
       disabled={disabled}
       onClick={onClick}
@@ -38,6 +41,8 @@ interface ToolbarProps {
   onUndo: () => void;
   onRedo: () => void;
   onOpenProperties: () => void;
+  libraryOpen: boolean;
+  onToggleLibrary: () => void;
 }
 
 export function Toolbar({
@@ -47,6 +52,8 @@ export function Toolbar({
   onUndo,
   onRedo,
   onOpenProperties,
+  libraryOpen,
+  onToggleLibrary,
 }: ToolbarProps) {
   return (
     <div className="toolbar" role="toolbar" aria-label="Editor">
@@ -74,6 +81,15 @@ export function Toolbar({
           onClick={onOpenProperties}
         >
           <PropertiesIcon />
+        </IconButton>
+        <IconButton
+          label="Component Library"
+          shortcut="Ctrl+L"
+          pressed={libraryOpen}
+          disabled={disabled}
+          onClick={onToggleLibrary}
+        >
+          <LibraryIcon />
         </IconButton>
       </div>
       <output className="toolbar__zoom" aria-label="Zoom level">

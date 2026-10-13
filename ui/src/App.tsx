@@ -13,6 +13,7 @@ import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
 import { EditorShell } from "./components/EditorShell";
 import { ErrorDialog } from "./components/ErrorDialog";
+import { LibraryDialog } from "./components/LibraryDialog";
 import { ProjectLocationDialog } from "./components/ProjectLocationDialog";
 import { ProjectPropertiesDialog } from "./components/ProjectPropertiesDialog";
 import { UnsavedChangesDialog } from "./components/UnsavedChangesDialog";
@@ -38,6 +39,7 @@ import {
   undo,
 } from "./ipc";
 import { parentDirectory } from "./paths";
+import { useLibraryStatus } from "./useLibraryStatus";
 import { useProjectDocument } from "./useProjectDocument";
 import {
   type Size,
@@ -75,6 +77,22 @@ export function App() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [viewport, setViewport] = useState<Viewport | null>(null);
   const [canvasSize, setCanvasSize] = useState<Size>({ width: 0, height: 0 });
+  const [library, adoptLibraryStatus] = useLibraryStatus();
+  const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
+  const libraryOffered = useRef(false);
+  const closeLibraryDialog = useCallback(() => setLibraryDialogOpen(false), []);
+
+  useEffect(() => {
+    // The download is offered once per launch until the user answers.
+    if (libraryOffered.current || library.status !== "ready") {
+      return;
+    }
+    libraryOffered.current = true;
+    const status = library.library;
+    if (status.state === "missing" && status.consent === "unasked") {
+      setLibraryDialogOpen(true);
+    }
+  }, [library]);
 
   useEffect(() => {
     // The version line on the welcome screen is omitted if this fails.
@@ -312,7 +330,7 @@ export function App() {
   }
 
   function handleMenu(id: string) {
-    if (busy !== null || modal !== null) {
+    if (busy !== null || modal !== null || libraryDialogOpen) {
       return;
     }
     if (id.startsWith(OPEN_RECENT_PREFIX)) {
@@ -493,12 +511,14 @@ export function App() {
       <EditorShell
         project={project}
         viewport={viewport}
-        controlsDisabled={modal !== null || busy !== null}
+        controlsDisabled={modal !== null || busy !== null || libraryDialogOpen}
+        library={library}
         onViewportChange={updateViewport}
         onCanvasResize={setCanvasSize}
         onUndo={() => void runHistory(undo, "Couldn't undo")}
         onRedo={() => void runHistory(redo, "Couldn't redo")}
         onOpenProperties={() => setModal({ type: "properties" })}
+        onDownloadLibrary={() => setLibraryDialogOpen(true)}
       />
     );
   }
@@ -507,6 +527,13 @@ export function App() {
     <>
       {content}
       {modal && renderModal(modal)}
+      {!modal && libraryDialogOpen && library.status === "ready" && (
+        <LibraryDialog
+          library={library.library}
+          onStatus={adoptLibraryStatus}
+          onClose={closeLibraryDialog}
+        />
+      )}
       {busy !== null && (
         <div className="busy-overlay" role="status">
           <p className="busy-overlay__label">{busy}</p>

@@ -12,6 +12,9 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 import type { DocumentDiff } from "./bindings/DocumentDiff";
+import type { LibraryHit } from "./bindings/LibraryHit";
+import type { LibraryStatus } from "./bindings/LibraryStatus";
+import type { LibrarySymbol } from "./bindings/LibrarySymbol";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
 import { projectSnapshot } from "./testData";
@@ -24,10 +27,35 @@ const recentProjects: RecentProject[] = [
   { path: "D:\\old\\gone", name: "gone", exists: false },
 ];
 
+const ATTRIBUTION =
+  "Symbols and footprints from the KiCad libraries (https://gitlab.com/kicad/libraries), licensed CC-BY-SA 4.0 with the KiCad libraries exception.";
+
+const readyLibrary: LibraryStatus = {
+  state: "ready",
+  kicadTag: "10.0.7",
+  symbolCount: 22_905,
+  footprintCount: 15_464,
+  attribution: ATTRIBUTION,
+};
+
+function missingLibrary(
+  consent: "unasked" | "declined" | "accepted",
+): LibraryStatus {
+  return {
+    state: "missing",
+    kicadTag: "10.0.7",
+    sizeBytes: 16_517_663,
+    resumeBytes: 0,
+    consent,
+    error: null,
+  };
+}
+
 const core: Handlers = {
   get_app_info: () => ({ name: "Tron", version: "0.1.0" }),
   get_project: () => null,
   list_recent_projects: () => [],
+  get_library_status: () => readyLibrary,
 };
 
 function mockCore(handlers: Handlers) {
@@ -239,5 +267,245 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("No recent projects.")).toBeTruthy();
+  });
+});
+
+describe("Component library", () => {
+  it("offers the download on first launch and records a decline", async () => {
+    const calls = mockCore({
+      ...core,
+      get_library_status: () => missingLibrary("unasked"),
+      decline_library_download: () => missingLibrary("declined"),
+    });
+
+    render(<App />);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Component Library",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Decline" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls.some((call) => call.cmd === "decline_library_download")).toBe(
+      true,
+    );
+  });
+
+  it("closes the offer on Escape without recording an answer", async () => {
+    const calls = mockCore({
+      ...core,
+      get_library_status: () => missingLibrary("unasked"),
+    });
+
+    render(<App />);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Component Library",
+    });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(
+      calls.some((call) => call.cmd.endsWith("library_download")),
+    ).toBe(false);
+  });
+
+  it("does not offer the download again once the user answered", async () => {
+    mockCore({
+      ...core,
+      get_library_status: () => missingLibrary("declined"),
+    });
+
+    render(<App />);
+    expect(await screen.findByText("No recent projects.")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows download progress and closes when the library is ready", async () => {
+    const calls = mockCore({
+      ...core,
+      get_library_status: () => missingLibrary("unasked"),
+      download_library: () => ({
+        state: "downloading",
+        kicadTag: "10.0.7",
+        downloadedBytes: 0,
+        totalBytes: 16_517_663,
+      }),
+    });
+
+    render(<App />);
+    const offer = await screen.findByRole("dialog", {
+      name: "Component Library",
+    });
+    fireEvent.click(within(offer).getByRole("button", { name: "Download" }));
+
+    await screen.findByRole("dialog", { name: "Downloading Library..." });
+    await emitFromCore("library-status", {
+      state: "downloading",
+      kicadTag: "10.0.7",
+      downloadedBytes: 8_258_832,
+      totalBytes: 16_517_663,
+    });
+    expect(
+      screen.getByText("Downloading component index... (8.3 MB / 16.5 MB)"),
+    ).toBeTruthy();
+    expect(screen.getByText("Downloaded 50%")).toBeTruthy();
+
+    await emitFromCore("library-status", readyLibrary);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(calls.some((call) => call.cmd === "download_library")).toBe(true);
+  });
+
+  it("explains a failed download and retries it", async () => {
+    const calls = mockCore({
+      ...core,
+      get_library_status: () => missingLibrary("accepted"),
+      get_project: () => projectSnapshot(),
+      download_library: () => ({
+        state: "downloading",
+        kicadTag: "10.0.7",
+        downloadedBytes: 4_000_000,
+        totalBytes: 16_517_663,
+      }),
+    });
+
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Component Library" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Download Library" }));
+    await screen.findByRole("dialog", { name: "Component Library" });
+
+    await emitFromCore("library-status", {
+      ...missingLibrary("accepted"),
+      resumeBytes: 4_000_000,
+      error: {
+        kind: "network",
+        message: "Could not download the component library.",
+        detail: "connection reset",
+      },
+    });
+    const failed = await screen.findByRole("dialog", {
+      name: "Download Failed",
+    });
+    expect(
+      within(failed).getByText("A network or disk error occurred."),
+    ).toBeTruthy();
+    expect(within(failed).getByText("connection reset")).toBeTruthy();
+
+    fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+    await screen.findByRole("dialog", { name: "Downloading Library..." });
+    expect(calls.filter((call) => call.cmd === "download_library")).toHaveLength(
+      1,
+    );
+  });
+
+  it("searches the library and previews the selected symbol", async () => {
+    const hits: LibraryHit[] = [
+      {
+        kind: "symbol",
+        id: 7,
+        name: "R",
+        lib: "Device",
+        description: "Resistor",
+      },
+      {
+        kind: "footprint",
+        id: 3,
+        name: "R_0603_1608Metric",
+        lib: "Resistor_SMD",
+        description: "Resistor SMD 0603 (1608 Metric)",
+      },
+    ];
+    const symbol: LibrarySymbol = {
+      lib: "Device",
+      name: "R",
+      description: "Resistor",
+      keywords: "R res resistor",
+      datasheet: "",
+      reference: "R",
+      footprint: "",
+      unitCount: 1,
+      pinCount: 2,
+      power: false,
+      preview: {
+        shapes: [
+          {
+            type: "rect",
+            start: [-1_016_000, -2_540_000],
+            end: [1_016_000, 2_540_000],
+            width: 254_000,
+            fill: "none",
+          },
+        ],
+        pins: [
+          {
+            connection: [0, -3_810_000],
+            body: [0, -2_540_000],
+            number: "1",
+            name: "~",
+            electrical: "passive",
+          },
+          {
+            connection: [0, 3_810_000],
+            body: [0, 2_540_000],
+            number: "2",
+            name: "~",
+            electrical: "passive",
+          },
+        ],
+        pin_numbers_visible: false,
+        pin_names_visible: false,
+      },
+    };
+    const calls = mockCore({
+      ...core,
+      get_project: () => projectSnapshot(),
+      search_library: () => hits,
+      get_library_symbol: () => symbol,
+    });
+
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Component Library" }),
+    );
+    expect(screen.getByText(ATTRIBUTION)).toBeTruthy();
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search symbols and footprints" }),
+      { target: { value: " R " } },
+    );
+
+    const options = await screen.findAllByRole("option");
+    expect(options).toHaveLength(2);
+    expect(within(options[1]!).getByText("Footprint")).toBeTruthy();
+    expect(
+      calls.find((call) => call.cmd === "search_library")?.args,
+    ).toEqual({ query: "R", limit: 200 });
+
+    fireEvent.click(options[0]!);
+    expect(
+      await screen.findByRole("img", { name: "Symbol Device:R" }),
+    ).toBeTruthy();
+    expect(calls.find((call) => call.cmd === "get_library_symbol")?.args).toEqual(
+      { id: 7 },
+    );
+  });
+
+  it("says when a search has no matches", async () => {
+    mockCore({
+      ...core,
+      get_project: () => projectSnapshot(),
+      search_library: () => [],
+    });
+
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Component Library" }),
+    );
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search symbols and footprints" }),
+      { target: { value: "zzzz" } },
+    );
+    expect(
+      await screen.findByText('No matches found for "zzzz".'),
+    ).toBeTruthy();
   });
 });
