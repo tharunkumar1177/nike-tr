@@ -348,8 +348,12 @@ pub struct SymbolPlacement {
 #[ts(export)]
 pub enum SymbolTransform {
     /// Quarter turns counterclockwise on screen (the KiCad angle convention).
-    Rotate { steps: i32 },
-    Mirror { axis: MirrorAxis },
+    Rotate {
+        steps: i32,
+    },
+    Mirror {
+        axis: MirrorAxis,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -829,7 +833,12 @@ mod tests {
         assert_eq!(rotate, SymbolTransform::Rotate { steps: 3 });
         let mirror: SymbolTransform =
             serde_json::from_value(serde_json::json!({ "type": "mirror", "axis": "y" })).unwrap();
-        assert_eq!(mirror, SymbolTransform::Mirror { axis: MirrorAxis::Y });
+        assert_eq!(
+            mirror,
+            SymbolTransform::Mirror {
+                axis: MirrorAxis::Y
+            }
+        );
     }
 
     #[test]
@@ -848,7 +857,10 @@ mod tests {
         let definition = index.symbol_definition(9_999).unwrap();
         let error = named_definition(definition, 9_999).unwrap_err();
         assert_eq!(error.kind, AppErrorKind::Library);
-        assert!(error.message.contains("not in the component library"), "{error:?}");
+        assert!(
+            error.message.contains("not in the component library"),
+            "{error:?}"
+        );
     }
 
     #[test]
