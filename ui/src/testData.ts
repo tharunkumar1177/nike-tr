@@ -21,6 +21,9 @@ export function projectSnapshot(
     sheet: { widthNm: 297_000_000, heightNm: 210_000_000 },
     definitions: {},
     instances: [],
+    wires: [],
+    junctions: [],
+    labels: [],
     history: {
       dirty: false,
       canUndo: false,
@@ -90,6 +93,10 @@ export function resistorInstance(
       rotation: 0,
       visible: true,
     },
+    pins: [
+      [100_000_000, 46_190_000],
+      [100_000_000, 53_810_000],
+    ],
     ...overrides,
   };
 }

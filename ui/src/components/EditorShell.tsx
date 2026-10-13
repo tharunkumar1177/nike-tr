@@ -9,7 +9,11 @@ import {
   formatZoom,
 } from "../viewport";
 import { LibraryPanel } from "./LibraryPanel";
-import { type PlacementRequest, SchematicCanvas } from "./SchematicCanvas";
+import {
+  type CanvasTool,
+  type PlacementRequest,
+  SchematicCanvas,
+} from "./SchematicCanvas";
 import { StatusBar, type StatusHint } from "./StatusBar";
 import { Toolbar } from "./Toolbar";
 
@@ -44,6 +48,8 @@ export function EditorShell({
   const [placementRequest, setPlacementRequest] =
     useState<PlacementRequest | null>(null);
   const [symbolDrag, setSymbolDrag] = useState<LibraryHit | null>(null);
+  const [wireMode, setWireMode] = useState(false);
+  const [toolRequest, setToolRequest] = useState<CanvasTool | null>(null);
   const zoomLabel = viewport ? formatZoom(viewport.zoom) : "—";
 
   useEffect(() => {
@@ -77,6 +83,9 @@ export function EditorShell({
         onOpenProperties={onOpenProperties}
         libraryOpen={libraryOpen}
         onToggleLibrary={() => setLibraryOpen((open) => !open)}
+        wireMode={wireMode}
+        onToggleWireMode={() => setWireMode((active) => !active)}
+        onStartTool={setToolRequest}
       />
       <main className="editor__workspace">
         {libraryOpen && (
@@ -95,6 +104,16 @@ export function EditorShell({
           sheet={project.sheet}
           definitions={project.definitions}
           instances={project.instances}
+          wires={project.wires}
+          junctions={project.junctions}
+          labels={project.labels}
+          wireMode={wireMode}
+          onWireModeChange={setWireMode}
+          library={library}
+          onDownloadLibrary={onDownloadLibrary}
+          onOpenLibrary={() => setLibraryOpen(true)}
+          toolRequest={toolRequest}
+          onToolRequestConsumed={() => setToolRequest(null)}
           placementRequest={placementRequest}
           onPlacementRequestConsumed={() => setPlacementRequest(null)}
           symbolDrag={symbolDrag}

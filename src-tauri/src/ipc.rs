@@ -4,11 +4,12 @@ use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, PackageInfo, State, Window};
+use tron_core::kicad::Schematic;
 use tron_core::kicad_value::text_arg;
 use tron_core::sexpr::SExpr;
 use tron_core::{
-    Changes, Mirror, Nm, PlacedSymbol, Placement, Point, Project, Session, SymbolPreview,
-    TITLE_BLOCK_COMMENTS, TitleBlock,
+    Changes, Junction, Label, LabelKind, LabelShape, Mirror, Nm, PlacedSymbol, Placement, Point,
+    Project, Session, SymbolPreview, TITLE_BLOCK_COMMENTS, TitleBlock, Wire, Xy,
 };
 use ts_rs::TS;
 use uuid::Uuid;
@@ -131,6 +132,9 @@ pub struct ProjectSnapshot {
     pub definitions: BTreeMap<String, SymbolPreview>,
     /// Every symbol placed on the schematic.
     pub instances: Vec<SymbolInstance>,
+    pub wires: Vec<WireSegment>,
+    pub junctions: Vec<JunctionDot>,
+    pub labels: Vec<NetLabel>,
     pub history: HistoryStatus,
 }
 
@@ -150,6 +154,9 @@ impl ProjectSnapshot {
             },
             definitions: symbol_definitions(project),
             instances: symbol_instances(project),
+            wires: wire_segments(project),
+            junctions: junction_dots(project),
+            labels: net_labels(project),
             history: HistoryStatus::from(session),
         }
     }
@@ -176,12 +183,27 @@ fn symbol_definitions(project: &Project) -> BTreeMap<String, SymbolPreview> {
 
 /// Every symbol placed on the schematic, in file order.
 fn symbol_instances(project: &Project) -> Vec<SymbolInstance> {
-    project
-        .schematic()
+    let schematic = project.schematic();
+    schematic
         .symbols()
         .iter()
-        .map(SymbolInstance::from)
+        .map(|symbol| SymbolInstance::new(symbol, schematic))
         .collect()
+}
+
+fn wire_segments(project: &Project) -> Vec<WireSegment> {
+    let wires = project.schematic().wires();
+    wires.iter().map(WireSegment::from).collect()
+}
+
+fn junction_dots(project: &Project) -> Vec<JunctionDot> {
+    let junctions = project.schematic().junctions();
+    junctions.iter().map(JunctionDot::from).collect()
+}
+
+fn net_labels(project: &Project) -> Vec<NetLabel> {
+    let labels = project.schematic().labels();
+    labels.iter().map(NetLabel::from).collect()
 }
 
 /// The parts of the document that changed between two revisions.
@@ -200,6 +222,10 @@ pub struct DocumentDiff {
     pub definitions: Option<BTreeMap<String, SymbolPreview>>,
     /// Every placed symbol when the placement set changed.
     pub instances: Option<Vec<SymbolInstance>>,
+    /// Every wire, junction, and label when the wiring changed.
+    pub wires: Option<Vec<WireSegment>>,
+    pub junctions: Option<Vec<JunctionDot>>,
+    pub labels: Option<Vec<NetLabel>>,
     pub history: HistoryStatus,
 }
 
@@ -220,6 +246,9 @@ fn document_diff(
         grid_size_nm: changes.grid_size.then(|| project.grid_size().0),
         definitions: changes.definitions.then(|| symbol_definitions(project)),
         instances: changes.symbols.then(|| symbol_instances(project)),
+        wires: changes.wiring.then(|| wire_segments(project)),
+        junctions: changes.wiring.then(|| junction_dots(project)),
+        labels: changes.wiring.then(|| net_labels(project)),
         history: HistoryStatus::from(session),
     }
 }
@@ -284,10 +313,22 @@ pub struct SymbolInstance {
     /// Absent when the symbol has no such property.
     pub reference: Option<SymbolText>,
     pub value: Option<SymbolText>,
+    /// Where each pin connects, hidden pins included, in schematic nanometers.
+    pub pins: Vec<Xy>,
 }
 
-impl From<&PlacedSymbol> for SymbolInstance {
-    fn from(symbol: &PlacedSymbol) -> SymbolInstance {
+impl SymbolInstance {
+    fn new(symbol: &PlacedSymbol, schematic: &Schematic) -> SymbolInstance {
+        let pins: Vec<Xy> = match schematic.lib_symbol(&symbol.lib_id) {
+            Some(definition) => match symbol.pin_connections(definition) {
+                Ok(pins) => pins.into_iter().map(|pin| pin.position.into()).collect(),
+                Err(error) => {
+                    eprintln!("could not read the pins of {:?}: {error}", symbol.lib_id);
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
         let text = |key: &str| {
             symbol
                 .properties
@@ -310,8 +351,129 @@ impl From<&PlacedSymbol> for SymbolInstance {
             mirror: symbol.mirror.map(MirrorAxis::from),
             reference: text("Reference"),
             value: text("Value"),
+            pins,
         }
     }
+}
+
+/// One straight wire segment, as the canvas draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WireSegment {
+    pub uuid: Uuid,
+    pub start: Xy,
+    pub end: Xy,
+}
+
+impl From<&Wire> for WireSegment {
+    fn from(wire: &Wire) -> WireSegment {
+        WireSegment {
+            uuid: wire.uuid,
+            start: Xy::from(wire.start),
+            end: Xy::from(wire.end),
+        }
+    }
+}
+
+/// A junction dot where wires meet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct JunctionDot {
+    pub uuid: Uuid,
+    pub position: Xy,
+}
+
+impl From<&Junction> for JunctionDot {
+    fn from(junction: &Junction) -> JunctionDot {
+        JunctionDot {
+            uuid: junction.uuid,
+            position: Xy::from(junction.position),
+        }
+    }
+}
+
+/// The outline of a global label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum GlobalLabelShape {
+    Input,
+    Output,
+    Bidirectional,
+    TriState,
+    Passive,
+}
+
+impl From<GlobalLabelShape> for LabelShape {
+    fn from(shape: GlobalLabelShape) -> LabelShape {
+        match shape {
+            GlobalLabelShape::Input => LabelShape::Input,
+            GlobalLabelShape::Output => LabelShape::Output,
+            GlobalLabelShape::Bidirectional => LabelShape::Bidirectional,
+            GlobalLabelShape::TriState => LabelShape::TriState,
+            GlobalLabelShape::Passive => LabelShape::Passive,
+        }
+    }
+}
+
+impl From<LabelShape> for GlobalLabelShape {
+    fn from(shape: LabelShape) -> GlobalLabelShape {
+        match shape {
+            LabelShape::Input => GlobalLabelShape::Input,
+            LabelShape::Output => GlobalLabelShape::Output,
+            LabelShape::Bidirectional => GlobalLabelShape::Bidirectional,
+            LabelShape::TriState => GlobalLabelShape::TriState,
+            LabelShape::Passive => GlobalLabelShape::Passive,
+        }
+    }
+}
+
+/// A local or global net label, as the canvas draws it. It connects at `position`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct NetLabel {
+    pub uuid: Uuid,
+    pub text: String,
+    /// The outline of a global label, or `null` for a local one.
+    pub shape: Option<GlobalLabelShape>,
+    pub position: Xy,
+    /// Tenths of a degree, counterclockwise, a multiple of 900.
+    pub rotation: i32,
+}
+
+impl From<&Label> for NetLabel {
+    fn from(label: &Label) -> NetLabel {
+        let shape = match label.kind {
+            LabelKind::Local => None,
+            LabelKind::Global(shape) => Some(GlobalLabelShape::from(shape)),
+        };
+        NetLabel {
+            uuid: label.uuid,
+            text: label.text.clone(),
+            shape,
+            position: Xy::from(label.position),
+            rotation: label.rotation.decidegrees(),
+        }
+    }
+}
+
+/// The `place_label` argument: the name, the kind, and where the anchor goes.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LabelPlacement {
+    pub text: String,
+    /// The outline of a global label, or `null` for a local one.
+    pub shape: Option<GlobalLabelShape>,
+    #[ts(type = "number")]
+    pub x_nm: i64,
+    #[ts(type = "number")]
+    pub y_nm: i64,
+    /// Rotation in 90° steps counterclockwise on screen.
+    pub rotation: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
@@ -669,6 +831,108 @@ pub fn delete_symbols(
     Ok(())
 }
 
+fn to_point(Xy(x, y): Xy) -> Point {
+    Point::new(Nm(x), Nm(y))
+}
+
+/// Draws a wire along `points` as one undo step. Each segment must be horizontal or
+/// vertical.
+#[tauri::command]
+pub fn draw_wire(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    points: Vec<Xy>,
+) -> Result<(), AppError> {
+    let points: Vec<Point> = points.into_iter().map(to_point).collect();
+    let mut inner = state.lock();
+    let session = inner.session_mut()?;
+    let changes = session.draw_wire(&points, &mut Uuid::new_v4)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Places a local or global label as one undo step.
+#[tauri::command]
+pub fn place_label(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    label: LabelPlacement,
+) -> Result<(), AppError> {
+    let kind = match label.shape {
+        None => LabelKind::Local,
+        Some(shape) => LabelKind::Global(shape.into()),
+    };
+    let position = Point::new(Nm(label.x_nm), Nm(label.y_nm));
+    let mut inner = state.lock();
+    let session = inner.session_mut()?;
+    let changes = session.place_label(
+        kind,
+        &label.text,
+        position,
+        label.rotation,
+        &mut Uuid::new_v4,
+    )?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Moves the wires and labels in `uuids` by the same offset as one undo step.
+#[tauri::command]
+pub fn move_wiring(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuids: Vec<Uuid>,
+    dx_nm: i64,
+    dy_nm: i64,
+) -> Result<(), AppError> {
+    let (dx, dy) = (Nm(dx_nm), Nm(dy_nm));
+    let mut inner = state.lock();
+    let session = inner.session_mut()?;
+    let changes = session.move_wiring(&uuids, dx, dy, &mut Uuid::new_v4)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Rotates the labels in `uuids` about their anchors as one undo step.
+#[tauri::command]
+pub fn rotate_labels(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuids: Vec<Uuid>,
+    steps: i32,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let session = inner.session_mut()?;
+    let changes = session.rotate_labels(&uuids, steps, &mut Uuid::new_v4)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Deletes the wires and labels in `uuids`, with junctions no longer needed, as one undo
+/// step.
+#[tauri::command]
+pub fn delete_wiring(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuids: Vec<Uuid>,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let session = inner.session_mut()?;
+    let changes = session.delete_wiring(&uuids, &mut Uuid::new_v4)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn list_recent_projects(app: AppHandle) -> Result<Vec<RecentProject>, AppError> {
     recent_projects(&app)
@@ -894,6 +1158,50 @@ mod tests {
         let preview = &json["definitions"]["Device:R"];
         assert_eq!(preview["pins"].as_array().unwrap().len(), 2);
         assert!(preview["shapes"].is_array());
+        assert_eq!(instance["pins"].as_array().unwrap().len(), 2);
+        assert_eq!(json["wires"], serde_json::json!([]));
+        assert_eq!(json["labels"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_diff_carries_the_wiring_when_it_changed() {
+        let mut session = session();
+        let points = [Point::ORIGIN, Point::new(Nm(2_540_000), Nm::ZERO)];
+        let changes = session.draw_wire(&points, &mut Uuid::new_v4).unwrap();
+        let json = serde_json::to_value(document_diff(&session, 1, 2, changes)).unwrap();
+        assert_eq!(json["wires"][0]["start"], serde_json::json!([0, 0]));
+        assert_eq!(json["wires"][0]["end"], serde_json::json!([2_540_000, 0]));
+        assert_eq!(json["junctions"], serde_json::json!([]));
+        assert_eq!(json["instances"], serde_json::Value::Null);
+
+        let kind = LabelKind::Global(LabelShape::TriState);
+        let at = Point::new(Nm(2_540_000), Nm::ZERO);
+        let changes = session
+            .place_label(kind, "VIN", at, 1, &mut Uuid::new_v4)
+            .unwrap();
+        let json = serde_json::to_value(document_diff(&session, 2, 3, changes)).unwrap();
+        let label = &json["labels"][0];
+        assert_eq!(label["text"], "VIN");
+        assert_eq!(label["shape"], "triState");
+        assert_eq!(label["position"], serde_json::json!([2_540_000, 0]));
+        assert_eq!(label["rotation"], 900);
+    }
+
+    #[test]
+    fn label_payloads_deserialize_from_the_ui_arguments() {
+        let payload = serde_json::json!({
+            "text": "OUT",
+            "shape": null,
+            "xNm": 1_270_000,
+            "yNm": 2_540_000,
+            "rotation": 2
+        });
+        let label: LabelPlacement = serde_json::from_value(payload).unwrap();
+        assert_eq!(label.shape, None);
+        assert_eq!((label.x_nm, label.rotation), (1_270_000, 2));
+        let input = serde_json::json!("input");
+        let shape: GlobalLabelShape = serde_json::from_value(input).unwrap();
+        assert_eq!(shape, GlobalLabelShape::Input);
     }
 
     #[test]

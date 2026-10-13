@@ -386,6 +386,69 @@ body,
   overflow: hidden;
 }
 
+.schematic {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.canvas-popover {
+  position: absolute;
+  z-index: var(--z-toolbar);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 16rem;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-elevated);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.canvas-popover--menu {
+  width: 12rem;
+  padding: var(--space-1);
+}
+
+.canvas-popover__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.canvas-popover__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.canvas-popover__list:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.canvas-popover__option {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.canvas-popover__option[aria-selected="true"] {
+  background-color: var(--color-surface-hover);
+}
+
+.canvas-popover__option--more {
+  color: var(--color-text-secondary);
+}
+
+.icon-button[aria-pressed="true"] {
+  background-color: var(--color-surface-hover);
+  color: var(--color-focus);
+}
+
 .canvas {
   position: relative;
   flex: 1;

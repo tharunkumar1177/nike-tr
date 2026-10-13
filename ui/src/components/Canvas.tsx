@@ -44,6 +44,10 @@ export interface CanvasInteraction {
     world: ScreenPoint,
     event: PointerEvent<HTMLDivElement>,
   ) => void;
+  onDoubleClick?: (
+    world: ScreenPoint,
+    event: MouseEvent<HTMLDivElement>,
+  ) => void;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -341,6 +345,12 @@ export function Canvas({
       onPointerUp={endPan}
       onPointerCancel={endPan}
       onPointerLeave={() => onCursorMove(null)}
+      onDoubleClick={(event) => {
+        const world = worldAt(event, event.currentTarget);
+        if (world) {
+          interaction?.onDoubleClick?.(world, event);
+        }
+      }}
       onKeyDown={(event) => interaction?.onKeyDown?.(event)}
       onContextMenu={(event) => interaction?.onContextMenu?.(event)}
       onDragOver={(event) => {

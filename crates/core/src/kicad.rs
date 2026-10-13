@@ -5,8 +5,9 @@
 
 use crate::kicad_value::{angle, child_text, children, flag, point, text_arg};
 use crate::sexpr::{self, ParseError, SExpr};
-use crate::symbol::SymbolPreview;
+use crate::symbol::{SymbolPreview, Xy};
 use crate::units::{Angle, Nm, Point};
+use crate::wiring::{Junction, Label, Sheet, Wire, node_uuid};
 use uuid::Uuid;
 
 pub const SCHEMATIC_FORMAT_VERSION: &str = "20231120";
@@ -332,6 +333,68 @@ impl Schematic {
         self.lib_symbol(lib_id).map(crate::symbol::symbol_preview)
     }
 
+    /// Every wire with two readable points and a UUID, in file order.
+    pub fn wires(&self) -> Vec<Wire> {
+        self.root.args().iter().filter_map(Wire::read).collect()
+    }
+
+    /// Every junction with a readable position and UUID, in file order.
+    pub fn junctions(&self) -> Vec<Junction> {
+        self.root.args().iter().filter_map(Junction::read).collect()
+    }
+
+    /// Every local and global label with readable text, position, and UUID, in file order.
+    pub fn labels(&self) -> Vec<Label> {
+        self.root.args().iter().filter_map(Label::read).collect()
+    }
+
+    /// Every pin connection point of every placed symbol whose definition is embedded and
+    /// readable, hidden pins included.
+    pub fn pin_points(&self) -> Vec<Point> {
+        let mut points = Vec::new();
+        for symbol in self.symbols() {
+            let Some(definition) = self.lib_symbol(&symbol.lib_id) else {
+                continue;
+            };
+            if let Ok(pins) = symbol.pin_connections(definition) {
+                points.extend(pins.into_iter().map(|pin| pin.position));
+            }
+        }
+        points
+    }
+
+    /// The connectivity items the wiring planner works on.
+    pub(crate) fn wiring_sheet(&self) -> Sheet {
+        Sheet {
+            wires: self.wires(),
+            junctions: self.junctions(),
+            labels: self.labels(),
+            pins: self.pin_points(),
+        }
+    }
+
+    /// The top-level items after the `kicad_sch` head. Item `i` sits at child index `i + 1`.
+    pub(crate) fn items(&self) -> &[SExpr] {
+        self.root.args()
+    }
+
+    /// The node of the top-level item with `uuid`.
+    pub(crate) fn item(&self, uuid: Uuid) -> Option<&SExpr> {
+        self.items()
+            .iter()
+            .find(|item| node_uuid(item) == Some(uuid))
+    }
+
+    /// Removes the top-level item at child `index`.
+    pub(crate) fn remove_item_at(&mut self, index: usize) {
+        if let Some(items) = self.root.items_mut()
+            && index > 0
+            && index < items.len()
+        {
+            items.remove(index);
+        }
+    }
+
     /// The root sheet's own `(uuid ...)`, which placed symbols reference in `(instances ...)`.
     pub fn sheet_uuid(&self) -> Option<Uuid> {
         child_text(&self.root, "uuid").and_then(|text| Uuid::parse_str(text).ok())
@@ -649,6 +712,17 @@ impl SymbolProperty {
     }
 }
 
+/// A pin of a placed symbol and the schematic point it connects at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinConnection {
+    pub number: String,
+    pub name: String,
+    /// The KiCad electrical type, such as `passive` or `power_in`.
+    pub electrical: String,
+    pub hidden: bool,
+    pub position: Point,
+}
+
 /// A placed symbol's pin UUID entry: `(pin "<number>" (uuid ...))`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlacedPin {
@@ -710,6 +784,40 @@ impl PlacedSymbol {
             properties,
             pins,
         })
+    }
+
+    /// The value of the property named `key`, if the symbol has one.
+    pub fn property(&self, key: &str) -> Option<&str> {
+        self.properties
+            .iter()
+            .find(|property| property.key == key)
+            .map(|property| property.value.as_str())
+    }
+
+    /// Where each pin of the placed unit connects on the schematic, hidden pins included.
+    /// `definition` is the symbol's embedded `(lib_symbols)` entry. Pin positions are
+    /// mirrored, rotated, and moved the same way as the symbol's properties.
+    pub fn pin_connections(&self, definition: &SExpr) -> Result<Vec<PinConnection>, String> {
+        let quarter = self.rotation.decidegrees() / 900;
+        let pins = crate::symbol::unit_pins(definition, self.unit)?;
+        let mut connections = Vec::with_capacity(pins.len());
+        for (pin, hidden) in pins {
+            let Xy(x, y) = pin.connection;
+            let (x, y) = match self.mirror {
+                Some(Mirror::X) => (-x, y),
+                Some(Mirror::Y) => (x, -y),
+                None => (x, y),
+            };
+            let (x, y) = rotate_offset((x, y), quarter);
+            connections.push(PinConnection {
+                number: pin.number,
+                name: pin.name,
+                electrical: pin.electrical,
+                hidden,
+                position: self.position.offset(Nm(x), Nm(y)),
+            });
+        }
+        Ok(connections)
     }
 
     /// The value of the `Reference` property, or the unannotated marker when there is none.
@@ -898,7 +1006,7 @@ impl PlacedSymbol {
 
 /// Reads a node's child `(at x y [angle])`: the point in millimeters and the angle, which
 /// defaults to no rotation when missing.
-fn read_at(node: &SExpr) -> Option<(Point, Angle)> {
+pub(crate) fn read_at(node: &SExpr) -> Option<(Point, Angle)> {
     let at = node.child("at")?;
     let position = point(at).ok()?;
     let rotation = if at.args().len() > 2 {
@@ -910,7 +1018,7 @@ fn read_at(node: &SExpr) -> Option<(Point, Angle)> {
 }
 
 /// Writes `(at x y angle)` with KiCad's millimeter and degree formatting.
-fn at_node(position: Point, rotation: Angle) -> SExpr {
+pub(crate) fn at_node(position: Point, rotation: Angle) -> SExpr {
     SExpr::node(
         "at",
         vec![
@@ -989,7 +1097,7 @@ fn rotate_offset(offset: (i64, i64), steps: i32) -> (i64, i64) {
 
 /// Formats a length in millimeters the way KiCad writes it: exact decimals, no trailing
 /// zeros.
-fn mm_text(value: Nm) -> String {
+pub(crate) fn mm_text(value: Nm) -> String {
     if value.0 == 0 {
         return "0".to_owned();
     }

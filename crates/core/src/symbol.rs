@@ -204,6 +204,27 @@ pub fn definition_pin_numbers(definition: &SExpr) -> Vec<String> {
     numbers
 }
 
+/// Every pin a placed `unit` connects through, each with whether it is hidden: the pins
+/// shared by all units and those of `unit`, in the normal body style, in the Y-down space.
+pub fn unit_pins(definition: &SExpr, unit: u32) -> Result<Vec<(Pin, bool)>, String> {
+    let mut pins = Vec::new();
+    for drawing in units(definition)? {
+        if drawing.style > 1 || (drawing.number != 0 && drawing.number != unit) {
+            continue;
+        }
+        for item in children(drawing.node, "pin") {
+            pins.push(read_pin(item)?);
+        }
+    }
+    Ok(pins)
+}
+
+/// Whether a definition is a power symbol, marked `(power)` (or `(power global)` and
+/// `(power local)` in newer files). Its `Value` names the net it drives.
+pub fn is_power_symbol(definition: &SExpr) -> bool {
+    flag(definition, "power")
+}
+
 /// Splits a unit drawing name into its unit and body style numbers: `R_1_1` is unit 1,
 /// style 1. Returns `None` when the name does not end in `_<unit>_<style>`.
 pub fn unit_and_style(name: &str) -> Option<(u32, u32)> {
