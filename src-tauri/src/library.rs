@@ -16,8 +16,10 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
+use tron_library::preview::{FootprintPreview, SymbolPreview};
 use tron_library::{
-    ATTRIBUTION, Index, ItemKind, LibraryError, META_ATTRIBUTION, META_KICAD_TAG, PinnedIndex,
+    ATTRIBUTION, FootprintRecord, Index, ItemKind, LibraryError, META_ATTRIBUTION, META_KICAD_TAG,
+    Mount, PinnedIndex, SymbolRecord,
 };
 use ts_rs::TS;
 
@@ -131,6 +133,83 @@ pub struct LibraryHit {
     pub name: String,
     pub lib: String,
     pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LibrarySymbol {
+    pub lib: String,
+    pub name: String,
+    pub description: String,
+    pub keywords: String,
+    /// A URL, or empty.
+    pub datasheet: String,
+    pub reference: String,
+    /// The default footprint as `Library:Footprint`, or empty.
+    pub footprint: String,
+    pub unit_count: u32,
+    pub pin_count: u32,
+    pub power: bool,
+    pub preview: SymbolPreview,
+}
+
+impl From<SymbolRecord> for LibrarySymbol {
+    fn from(record: SymbolRecord) -> LibrarySymbol {
+        LibrarySymbol {
+            lib: record.lib,
+            name: record.name,
+            description: record.description,
+            keywords: record.keywords,
+            datasheet: record.datasheet,
+            reference: record.reference,
+            footprint: record.footprint,
+            unit_count: record.unit_count,
+            pin_count: record.pin_count,
+            power: record.power,
+            preview: record.preview,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum FootprintMount {
+    Smd,
+    ThroughHole,
+    Unspecified,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LibraryFootprint {
+    pub lib: String,
+    pub name: String,
+    pub description: String,
+    pub tags: String,
+    pub pad_count: u32,
+    pub mount: FootprintMount,
+    pub preview: FootprintPreview,
+}
+
+impl From<FootprintRecord> for LibraryFootprint {
+    fn from(record: FootprintRecord) -> LibraryFootprint {
+        LibraryFootprint {
+            lib: record.lib,
+            name: record.name,
+            description: record.description,
+            tags: record.tags,
+            pad_count: record.pad_count,
+            mount: match record.mount {
+                Mount::Smd => FootprintMount::Smd,
+                Mount::ThroughHole => FootprintMount::ThroughHole,
+                Mount::Unspecified => FootprintMount::Unspecified,
+            },
+            preview: record.preview,
+        }
+    }
 }
 
 struct Cached {
@@ -336,6 +415,38 @@ pub fn search_library(
     query: String,
     limit: u32,
 ) -> Result<Vec<LibraryHit>, AppError> {
+    let limit = limit.clamp(1, MAX_SEARCH_RESULTS) as usize;
+    let hits = read_index(&app, &state, |index| index.search(&query, limit))?;
+    Ok(hits.into_iter().map(LibraryHit::from).collect())
+}
+
+/// The symbol with `id` from a search hit, or `None` if the index has no such symbol.
+#[tauri::command]
+pub fn get_library_symbol(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    id: i64,
+) -> Result<Option<LibrarySymbol>, AppError> {
+    let record = read_index(&app, &state, |index| index.symbol(id))?;
+    Ok(record.map(LibrarySymbol::from))
+}
+
+/// The footprint with `id` from a search hit, or `None` if the index has no such footprint.
+#[tauri::command]
+pub fn get_library_footprint(
+    app: AppHandle,
+    state: State<'_, LibraryState>,
+    id: i64,
+) -> Result<Option<LibraryFootprint>, AppError> {
+    let record = read_index(&app, &state, |index| index.footprint(id))?;
+    Ok(record.map(LibraryFootprint::from))
+}
+
+fn read_index<T>(
+    app: &AppHandle,
+    state: &LibraryState,
+    read: impl FnOnce(&Index) -> Result<T, LibraryError>,
+) -> Result<T, AppError> {
     let mut inner = state.lock();
     let Some(cached) = &inner.cache else {
         return Err(AppError::new(
@@ -344,9 +455,8 @@ pub fn search_library(
             None,
         ));
     };
-    let limit = limit.clamp(1, MAX_SEARCH_RESULTS) as usize;
-    match cached.index.search(&query, limit) {
-        Ok(hits) => Ok(hits.into_iter().map(LibraryHit::from).collect()),
+    match read(&cached.index) {
+        Ok(value) => Ok(value),
         Err(error) => {
             // The index opened and passed its checks, so a failed read means the file is
             // damaged. It is discarded and, with the user's consent, downloaded again.
@@ -355,12 +465,12 @@ pub fn search_library(
                 discard_cache(dir);
             }
             let status = inner.settled_status(None);
-            inner.set_status(&app, status);
+            inner.set_status(app, status);
             if inner.consent == LibraryConsent::Accepted
-                && let Err(download_error) = inner.start_download(&app)
+                && let Err(download_error) = inner.start_download(app)
             {
                 let status = inner.settled_status(Some(download_error));
-                inner.set_status(&app, status);
+                inner.set_status(app, status);
             }
             Err(AppError::new(
                 AppErrorKind::Library,
@@ -1023,6 +1133,37 @@ mod tests {
         let reopened = open_cache(&setup.dir, &pin).unwrap();
         let hits = reopened.index.search("R", 10).unwrap();
         assert_eq!(hits[0].name, "R");
+    }
+
+    #[test]
+    fn search_hits_resolve_to_symbols_and_footprints_with_previews() {
+        let setup = setup();
+        let pin = pin_for(&setup.body, "https://example.org/library.db.gz");
+        fs::write(partial_path(&setup.dir, &pin), &*setup.body).unwrap();
+        let cached = install(&setup.dir, &pin).unwrap();
+
+        let symbol_hit = cached.index.search("R", 1).unwrap().remove(0);
+        let symbol = LibrarySymbol::from(cached.index.symbol(symbol_hit.id).unwrap().unwrap());
+        assert_eq!(symbol.name, "R");
+        assert_eq!(symbol.reference, "R");
+        assert_eq!(symbol.preview.pins.len(), 2);
+        let json = serde_json::to_value(&symbol).unwrap();
+        assert_eq!(json["pinCount"], 2);
+        assert!(json["preview"]["shapes"].is_array());
+
+        let footprint_hit = cached
+            .index
+            .search("R_0603_1608Metric", 1)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            LibraryHit::from(footprint_hit.clone()).kind,
+            LibraryItemKind::Footprint
+        );
+        let footprint =
+            LibraryFootprint::from(cached.index.footprint(footprint_hit.id).unwrap().unwrap());
+        assert_eq!(footprint.mount, FootprintMount::Smd);
+        assert_eq!(footprint.preview.pads.len(), 2);
     }
 
     #[test]

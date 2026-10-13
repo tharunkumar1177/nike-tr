@@ -2,6 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppErrorKind } from "./bindings/AppErrorKind";
 import type { AppInfo } from "./bindings/AppInfo";
+import type { LibraryFootprint } from "./bindings/LibraryFootprint";
+import type { LibraryHit } from "./bindings/LibraryHit";
+import type { LibraryStatus } from "./bindings/LibraryStatus";
+import type { LibrarySymbol } from "./bindings/LibrarySymbol";
 import type { ProjectProperties } from "./bindings/ProjectProperties";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
@@ -69,6 +73,42 @@ export function removeRecentProject(path: string): Promise<RecentProject[]> {
 
 export function closeWindow(): Promise<void> {
   return invoke<void>("close_window");
+}
+
+export const LIBRARY_STATUS_EVENT = "library-status";
+export const MAX_LIBRARY_RESULTS = 200;
+
+export function getLibraryStatus(): Promise<LibraryStatus> {
+  return invoke<LibraryStatus>("get_library_status");
+}
+
+export function downloadLibrary(): Promise<LibraryStatus> {
+  return invoke<LibraryStatus>("download_library");
+}
+
+export function declineLibraryDownload(): Promise<LibraryStatus> {
+  return invoke<LibraryStatus>("decline_library_download");
+}
+
+export function cancelLibraryDownload(): Promise<LibraryStatus> {
+  return invoke<LibraryStatus>("cancel_library_download");
+}
+
+export function searchLibrary(
+  query: string,
+  limit: number = MAX_LIBRARY_RESULTS,
+): Promise<LibraryHit[]> {
+  return invoke<LibraryHit[]>("search_library", { query, limit });
+}
+
+export function getLibrarySymbol(id: number): Promise<LibrarySymbol | null> {
+  return invoke<LibrarySymbol | null>("get_library_symbol", { id });
+}
+
+export function getLibraryFootprint(
+  id: number,
+): Promise<LibraryFootprint | null> {
+  return invoke<LibraryFootprint | null>("get_library_footprint", { id });
 }
 
 /**
