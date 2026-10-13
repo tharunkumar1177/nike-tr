@@ -167,29 +167,40 @@ function encodeWav(samples, sampleRate) {
   return buffer;
 }
 
-const clips = await synthesizeVoice();
-const sampleRate = clips[0].sampleRate;
-if (clips.some((clip) => clip.sampleRate !== sampleRate)) {
-  throw new Error("Voice clips have different sample rates.");
+async function main() {
+  const clips = await synthesizeVoice();
+  const sampleRate = clips[0].sampleRate;
+  if (clips.some((clip) => clip.sampleRate !== sampleRate)) {
+    throw new Error("Voice clips have different sample rates.");
+  }
+
+  const totalSamples = framesToSamples(script.durationInFrames, sampleRate);
+  const { track, speaking } = placeVoice(clips, sampleRate, totalSamples);
+  const pad = synthesizePad(sampleRate, totalSamples);
+  const envelope = duckEnvelope(speaking, sampleRate);
+  const mix = new Float32Array(totalSamples);
+  for (let index = 0; index < totalSamples; index += 1) {
+    mix[index] = track[index] + pad[index] * envelope[index];
+  }
+
+  const peakDb = gainToDb(peakOf(mix));
+  if (peakDb > MIX_CEILING_DBFS) {
+    const message = `Mix peaks at ${peakDb.toFixed(1)} dBFS, above ${MIX_CEILING_DBFS} dBFS.`;
+    throw new Error(message);
+  }
+
+  await mkdir(new URL(".", outputUrl), { recursive: true });
+  await writeFile(outputUrl, encodeWav(mix, sampleRate));
+  const seconds = (totalSamples / sampleRate).toFixed(2);
+  const summary = `Soundtrack: ${seconds} s at ${sampleRate} Hz, peak ${peakDb.toFixed(1)} dBFS`;
+  console.log(summary);
 }
 
-const totalSamples = framesToSamples(script.durationInFrames, sampleRate);
-const { track, speaking } = placeVoice(clips, sampleRate, totalSamples);
-const pad = synthesizePad(sampleRate, totalSamples);
-const envelope = duckEnvelope(speaking, sampleRate);
-const mix = new Float32Array(totalSamples);
-for (let index = 0; index < totalSamples; index += 1) {
-  mix[index] = track[index] + pad[index] * envelope[index];
+// The phonemizer installs an uncaughtException handler that prints its own
+// bundled source instead of the error, so failures are reported here.
+try {
+  await main();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
 }
-
-const peakDb = gainToDb(peakOf(mix));
-if (peakDb > MIX_CEILING_DBFS) {
-  const message = `Mix peaks at ${peakDb.toFixed(1)} dBFS, above ${MIX_CEILING_DBFS} dBFS.`;
-  throw new Error(message);
-}
-
-await mkdir(new URL(".", outputUrl), { recursive: true });
-await writeFile(outputUrl, encodeWav(mix, sampleRate));
-const seconds = (totalSamples / sampleRate).toFixed(2);
-const summary = `Soundtrack: ${seconds} s at ${sampleRate} Hz, peak ${peakDb.toFixed(1)} dBFS`;
-console.log(summary);

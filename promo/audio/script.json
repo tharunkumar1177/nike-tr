@@ -23,7 +23,7 @@
     },
     {
       "scene": "Simulation",
-      "text": "Validate component behavior directly within your own environment.",
+      "text": "Validate behavior directly on your machine.",
       "startFrame": 195,
       "endByFrame": 340
     },
@@ -41,7 +41,7 @@
     },
     {
       "scene": "Outro",
-      "text": "Tron. A modern foundation for hardware engineering. Explore the repository.",
+      "text": "Tron. Local-first E.D.A. Explore the repository.",
       "startFrame": 730,
       "endByFrame": 880
     }
