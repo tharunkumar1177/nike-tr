@@ -258,9 +258,7 @@ export function SchematicCanvas({
   const [noConnectMode, setNoConnectMode] = useState(false);
   const [propertiesDialog, setPropertiesDialog] =
     useState<PropertiesDialogState | null>(null);
-  const [fieldEditor, setFieldEditor] = useState<FieldEditorState | null>(
-    null,
-  );
+  const [fieldEditor, setFieldEditor] = useState<FieldEditorState | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [commandError, setCommandError] = useState<string | null>(null);
   /** A command result shown in the status bar until the next input. */
