@@ -20,7 +20,7 @@ considering the following, whil agent file,
 
 
 ```
-cd C:/nike-tracker; git tag -a v0.1.1 -m "v0.1.1 - debug-signed, sideloadable release APK"; git push origin v0.1.1
+cd C:/n-tracker; git tag -a v0.1.1 -m "v0.1.1 - debug-signed, sideloadable release APK"; git push origin v0.1.1
 ```
 
 
@@ -68,7 +68,7 @@ rmdir /s /q .git
 git init
 git log --oneline
 
-echo "# Nike-op" >> README.md
+echo "# n-op" >> README.md
 git init
 git add README.md
 git commit -m "first commit"
@@ -172,3 +172,8 @@ In the Agent Orchestration workflow, the main agent has to write code here after
 
 
 
+Tell me whether the AGENTS.md is optimized for Agent instruction?
+
+
+
+How are validating that the code written by the SubAgent are contextually and logically right? and efficient?

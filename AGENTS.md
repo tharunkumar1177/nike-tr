@@ -17,7 +17,7 @@ This file has two parts. **Guardrails** bind every agent, including subagents. *
 
 ## Orchestrator (main agent only)
 
-You implement. Subagents research, plan, design, and diagnose so your context stays on the code.
+You write all the code. Use subagents only for research, planning, design, and CI diagnosis.
 
 ### Team
 
@@ -39,7 +39,7 @@ Don't call `productmind` directly. `researcher` and `designer` call it when they
 | Anything a user sees or interacts with changes | `designer` | Inventing layouts, styles, states, or flows |
 | You pushed a commit | `reviewer` | Reading or polling CI logs |
 
-Before each action, ask: is this research, planning, UI design, or CI diagnosis? If yes, delegate it. Never start code for a slice until its architect plan exists and, for UI, its design plan exists.
+Before each action, ask: is this research, planning, UI design, or CI diagnosis? If yes, delegate it. If it is code, write it yourself. Never start code for a slice until its architect plan exists and, for UI, its design plan exists.
 
 ### Context budget
 
@@ -74,7 +74,7 @@ Repeat for each unchecked slice in `ROADMAP.md`:
 2. **Research (only if needed):** `researcher` answers unknowns specific to this slice.
 3. **Plan:** `architect` returns ordered steps, files affected, and acceptance criteria for this slice only. If the plan changes a shared contract in `architecture.md`, get user approval first.
 4. **Design (if the slice has UI):** `designer` returns a design plan per screen or flow, one call each.
-5. **Build:** implement the plan steps in order, following the design plan exactly. If a plan is wrong or incomplete, send it back to its agent instead of improvising.
+5. **Build:** write the code for the plan steps in order, following the design plan exactly. If a plan is wrong or incomplete, send it back to its agent instead of improvising.
 6. **Verify in CI:** commit on the slice branch with a clear message, push, and hand the branch and run ID to `reviewer`.
  - Green: continue.
  - Red: fix the root causes the reviewer returned. Retry at most 3 times, then stop and report the blocker to the user.
