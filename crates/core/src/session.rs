@@ -909,14 +909,16 @@ mod tests {
         assert!(!session.can_undo());
 
         place(&mut session, SYMBOL_1);
-        let placement = |uuid, pin_uuids: &[Uuid]| Placement {
-            lib_id: "Device:R",
-            position: Point::ORIGIN,
-            rotation_steps: 0,
-            mirror: None,
-            uuid,
-            pin_uuids,
-        };
+        fn placement(uuid: Uuid, pin_uuids: &[Uuid]) -> Placement<'_> {
+            Placement {
+                lib_id: "Device:R",
+                position: Point::ORIGIN,
+                rotation_steps: 0,
+                mirror: None,
+                uuid,
+                pin_uuids,
+            }
+        }
         assert!(matches!(
             session.place_symbol(&r_definition(), placement(SYMBOL_1, &PINS)),
             Err(CoreError::InvalidEdit(_))
