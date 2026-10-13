@@ -18,17 +18,8 @@ import type { LibrarySymbol } from "./bindings/LibrarySymbol";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
 import { snapToGrid } from "./symbols";
-import {
-  projectSnapshot,
-  resistorInstance,
-  resistorPreview,
-} from "./testData";
-import {
-  fitToSheet,
-  pxPerNm,
-  screenToWorld,
-  worldToScreen,
-} from "./viewport";
+import { projectSnapshot, resistorInstance, resistorPreview } from "./testData";
+import { fitToSheet, pxPerNm, screenToWorld, worldToScreen } from "./viewport";
 
 type Args = Record<string, unknown>;
 type Handlers = Record<string, (args: Args) => unknown>;
@@ -97,7 +88,7 @@ class ResizeObserverStub {
     this.callback = callback;
   }
 
-  observe(_target: Element) {
+  observe() {
     this.callback(
       [{ contentRect: CANVAS_SIZE } as unknown as ResizeObserverEntry],
       this as unknown as ResizeObserver,
@@ -672,9 +663,7 @@ describe("Symbol placement", () => {
     const canvas = canvasContainer();
     fireEvent.keyDown(canvas, { key: "Escape" });
     expect(
-      screen.queryByText(
-        "Click to place. R: Rotate, X/Y: Mirror. Esc: Cancel",
-      ),
+      screen.queryByText("Click to place. R: Rotate, X/Y: Mirror. Esc: Cancel"),
     ).toBeNull();
 
     const at = worldToScreen(fittedViewport(), 63_500_000, 50_800_000);
@@ -707,6 +696,9 @@ describe("Symbol placement", () => {
     render(<App />);
     await screen.findByRole("heading", { level: 1, name: "amp" });
     expect(await screen.findByText("R? Device:R")).toBeTruthy();
+    // The canvas mounts before the resize effect fits the viewport; pointer
+    // coordinates need the fitted viewport, so wait for the zoom readout.
+    expect(await screen.findByText("Zoom 67%")).toBeTruthy();
 
     const canvas = canvasContainer();
     const at = worldToScreen(fittedViewport(), 100_000_000, 50_000_000);
@@ -732,9 +724,9 @@ describe("Symbol placement", () => {
 
     fireEvent.keyDown(canvas, { key: "Delete" });
     await waitFor(() =>
-      expect(
-        calls.find((call) => call.cmd === "delete_symbols")?.args,
-      ).toEqual({ uuids: ["symbol-1"] }),
+      expect(calls.find((call) => call.cmd === "delete_symbols")?.args).toEqual(
+        { uuids: ["symbol-1"] },
+      ),
     );
     expect(await screen.findByText("Symbol deleted")).toBeTruthy();
   });
@@ -752,6 +744,9 @@ describe("Symbol placement", () => {
 
     render(<App />);
     await screen.findByRole("heading", { level: 1, name: "amp" });
+    // The canvas mounts before the resize effect fits the viewport; pointer
+    // coordinates need the fitted viewport, so wait for the zoom readout.
+    expect(await screen.findByText("Zoom 67%")).toBeTruthy();
 
     const canvas = canvasContainer();
     const viewport = fittedViewport();

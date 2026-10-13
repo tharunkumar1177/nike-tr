@@ -1,6 +1,6 @@
 import {
   type DragEvent,
-  type KeyboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type PointerEvent,
   type RefObject,
@@ -44,7 +44,7 @@ export interface CanvasInteraction {
     world: ScreenPoint,
     event: PointerEvent<HTMLDivElement>,
   ) => void;
-  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
 }
 
@@ -206,7 +206,7 @@ export function Canvas({
     });
     observer.observe(container);
     return () => observer.disconnect();
-  }, []);
+  }, [containerRef]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -227,7 +227,7 @@ export function Canvas({
     };
     container.addEventListener("wheel", onWheel, { passive: false });
     return () => container.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [containerRef]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

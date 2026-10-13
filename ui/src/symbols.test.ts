@@ -118,21 +118,17 @@ describe("findInstanceAt", () => {
 
   it("misses points outside the transformed bounds", () => {
     const point = { x: 105_000_000, y: 50_000_000 };
-    expect(
-      findInstanceAt([resistorInstance()], definitions, point),
-    ).toBeNull();
+    expect(findInstanceAt([resistorInstance()], definitions, point)).toBeNull();
   });
 
   it("uses the rotated bounds", () => {
     // 3 mm right of the origin: outside the upright body, inside once rotated.
     const point = { x: 103_000_000, y: 50_000_000 };
-    expect(
-      findInstanceAt([resistorInstance()], definitions, point),
-    ).toBeNull();
+    expect(findInstanceAt([resistorInstance()], definitions, point)).toBeNull();
     const rotated = resistorInstance({ rotation: 900 });
-    expect(
-      findInstanceAt([rotated], definitions, point)?.uuid,
-    ).toBe("symbol-1");
+    expect(findInstanceAt([rotated], definitions, point)?.uuid).toBe(
+      "symbol-1",
+    );
   });
 
   it("skips instances whose definition is missing", () => {
