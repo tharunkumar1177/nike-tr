@@ -9,8 +9,8 @@ use tron_core::kicad_value::text_arg;
 use tron_core::sexpr::SExpr;
 use tron_core::{
     Changes, FieldEdit, Junction, Label, LabelKind, LabelShape, Mirror, Nm, NoConnect,
-    PlacedSymbol, Placement, Point, Project, Session, Severity, SymbolPreview, TITLE_BLOCK_COMMENTS,
-    TitleBlock, Violation, Wire, Xy,
+    PlacedSymbol, Placement, Point, Project, Session, Severity, SymbolPreview,
+    TITLE_BLOCK_COMMENTS, TitleBlock, Violation, Wire, Xy,
 };
 use ts_rs::TS;
 use uuid::Uuid;
