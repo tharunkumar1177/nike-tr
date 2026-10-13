@@ -193,6 +193,9 @@ describe("App", () => {
       gridSizeNm: null,
       definitions: null,
       instances: null,
+      wires: null,
+      junctions: null,
+      labels: null,
       history: {
         dirty: true,
         canUndo: true,
@@ -796,6 +799,9 @@ describe("Symbol placement", () => {
       gridSizeNm: null,
       definitions: { "Device:R": resistorPreview() },
       instances: [resistorInstance()],
+      wires: null,
+      junctions: null,
+      labels: null,
       history: {
         ...snapshot.history,
         dirty: true,

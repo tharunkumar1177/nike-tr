@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppErrorKind } from "./bindings/AppErrorKind";
 import type { AppInfo } from "./bindings/AppInfo";
+import type { LabelPlacement } from "./bindings/LabelPlacement";
 import type { LibraryFootprint } from "./bindings/LibraryFootprint";
 import type { LibraryHit } from "./bindings/LibraryHit";
 import type { LibraryStatus } from "./bindings/LibraryStatus";
@@ -11,6 +12,7 @@ import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
 import type { SymbolPlacement } from "./bindings/SymbolPlacement";
 import type { SymbolTransform } from "./bindings/SymbolTransform";
+import type { Xy } from "./bindings/Xy";
 
 export const DOCUMENT_CHANGED_EVENT = "document-changed";
 export const MENU_EVENT = "menu-action";
@@ -86,6 +88,30 @@ export function transformSymbols(
 
 export function deleteSymbols(uuids: string[]): Promise<void> {
   return invoke<void>("delete_symbols", { uuids });
+}
+
+export function drawWire(points: Xy[]): Promise<void> {
+  return invoke<void>("draw_wire", { points });
+}
+
+export function placeLabel(label: LabelPlacement): Promise<void> {
+  return invoke<void>("place_label", { label });
+}
+
+export function moveWiring(
+  uuids: string[],
+  dxNm: number,
+  dyNm: number,
+): Promise<void> {
+  return invoke<void>("move_wiring", { uuids, dxNm, dyNm });
+}
+
+export function rotateLabels(uuids: string[], steps: number): Promise<void> {
+  return invoke<void>("rotate_labels", { uuids, steps });
+}
+
+export function deleteWiring(uuids: string[]): Promise<void> {
+  return invoke<void>("delete_wiring", { uuids });
 }
 
 export function listRecentProjects(): Promise<RecentProject[]> {

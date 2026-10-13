@@ -3,19 +3,25 @@
 //! Every edit is an invertible [`Command`]. Undo applies the inverse of the
 //! latest command and redo applies it again, so both restore exact states.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use uuid::Uuid;
 
 use crate::error::CoreError;
-use crate::kicad::{Mirror, PlacedSymbol, Placement, TitleBlock};
+use crate::kicad::{Mirror, PlacedSymbol, Placement, Schematic, TitleBlock};
 use crate::kicad_value::text_arg;
 use crate::manifest::{MAX_GRID, MIN_GRID};
 use crate::project::Project;
 use crate::sexpr::SExpr;
-use crate::units::Nm;
+use crate::units::{Angle, Nm, Point};
+use crate::wiring::{
+    self, ChangedItem, Label, LabelKind, Wire, WiringPlan, WiringRequest, node_uuid,
+};
 
 pub const MAX_FIELD_CHARS: usize = 256;
+/// The most points one drawn wire can have.
+pub const MAX_WIRE_POINTS: usize = 1024;
 pub const PROPERTIES_LABEL: &str = "Project Properties";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +63,14 @@ pub enum Command {
         /// `(uuid, before, after)` per transformed symbol.
         symbols: Vec<(Uuid, PlacedSymbol, PlacedSymbol)>,
     },
+    /// Top-level wiring nodes (wires, junctions, and labels) were replaced. `removed` holds
+    /// the nodes taken out, at their child indices before the edit; `inserted` holds the
+    /// nodes put in, at their child indices after it. Both are in ascending index order.
+    EditItems {
+        label: String,
+        removed: Vec<(usize, SExpr)>,
+        inserted: Vec<(usize, SExpr)>,
+    },
     /// Commands applied in order as one undo step.
     Group {
         label: String,
@@ -83,7 +97,7 @@ impl Command {
             Command::DeleteSymbols { .. } => "Delete Symbol",
             Command::MoveSymbols { .. } => "Move Symbol",
             Command::TransformSymbols { .. } => "Transform Symbol",
-            Command::Group { label, .. } => label,
+            Command::EditItems { label, .. } | Command::Group { label, .. } => label,
         }
     }
 
@@ -125,6 +139,15 @@ impl Command {
                     .iter()
                     .map(|(uuid, before, after)| (*uuid, after.clone(), before.clone()))
                     .collect(),
+            },
+            Command::EditItems {
+                label,
+                removed,
+                inserted,
+            } => Command::EditItems {
+                label: label.clone(),
+                removed: inserted.clone(),
+                inserted: removed.clone(),
             },
             Command::Group { label, commands } => Command::Group {
                 label: label.clone(),
@@ -199,6 +222,20 @@ impl Command {
                 }
                 changes.symbols = !symbols.is_empty();
             }
+            Command::EditItems {
+                removed,
+                inserted,
+                ..
+            } => {
+                let schematic = project.schematic_mut();
+                for (index, _) in removed.iter().rev() {
+                    schematic.remove_item_at(*index);
+                }
+                for (index, node) in inserted {
+                    schematic.insert_placed_at(*index, node.clone());
+                }
+                changes.wiring = true;
+            }
             Command::Group { commands, .. } => {
                 for command in commands {
                     command.apply(project, changes);
@@ -217,11 +254,13 @@ pub struct Changes {
     pub symbols: bool,
     /// The embedded `(lib_symbols)` definitions changed.
     pub definitions: bool,
+    /// Wires, junctions, or labels were added, moved, or removed.
+    pub wiring: bool,
 }
 
 impl Changes {
     pub fn any(self) -> bool {
-        self.title_block || self.grid_size || self.symbols || self.definitions
+        self.title_block || self.grid_size || self.symbols || self.definitions || self.wiring
     }
 }
 
@@ -446,6 +485,179 @@ impl Session {
         }))
     }
 
+    /// Draws a wire along `points` as one undo step, one segment per pair of points, each
+    /// horizontal or vertical. A wire a new segment ends inside is split there and gets a
+    /// junction; a new segment is split wherever a pin end or wire end lies inside it.
+    pub fn draw_wire(
+        &mut self,
+        points: &[Point],
+        fresh: &mut impl FnMut() -> Uuid,
+    ) -> Result<Changes, CoreError> {
+        if points.len() > MAX_WIRE_POINTS {
+            return Err(CoreError::InvalidEdit(format!(
+                "A wire can have at most {MAX_WIRE_POINTS} points."
+            )));
+        }
+        let segments = wiring::polyline_segments(points);
+        let segments = segments.map_err(CoreError::InvalidEdit)?;
+        let mut new_wires = Vec::with_capacity(segments.len());
+        for (start, end) in segments {
+            let uuid = fresh();
+            new_wires.push(Wire { uuid, start, end });
+        }
+        let request = WiringRequest {
+            new_wires,
+            ..WiringRequest::default()
+        };
+        Ok(self.edit_wiring("Draw Wire", request, fresh))
+    }
+
+    /// Places a local or global label anchored at `position` as one undo step. A wire the
+    /// anchor lands inside is split there so the label connects.
+    pub fn place_label(
+        &mut self,
+        kind: LabelKind,
+        text: &str,
+        position: Point,
+        rotation_steps: i32,
+        fresh: &mut impl FnMut() -> Uuid,
+    ) -> Result<Changes, CoreError> {
+        if let Err(message) = wiring::validate_label_text(text) {
+            return Err(CoreError::InvalidEdit(message));
+        }
+        let label = Label {
+            uuid: fresh(),
+            kind,
+            text: text.to_owned(),
+            position,
+            rotation: quarter_turns(rotation_steps),
+        };
+        let request = WiringRequest {
+            new_labels: vec![label],
+            ..WiringRequest::default()
+        };
+        Ok(self.edit_wiring("Place Label", request, fresh))
+    }
+
+    /// Moves the wires and labels in `uuids` by `(dx, dy)` as one undo step. Wires keep
+    /// their own ends; connected neighbors don't stretch.
+    pub fn move_wiring(
+        &mut self,
+        uuids: &[Uuid],
+        dx: Nm,
+        dy: Nm,
+        fresh: &mut impl FnMut() -> Uuid,
+    ) -> Result<Changes, CoreError> {
+        let uuids = dedupe(uuids);
+        if uuids.is_empty() || (dx == Nm::ZERO && dy == Nm::ZERO) {
+            return Ok(Changes::default());
+        }
+        let (wires, labels) = self.wiring_selection(&uuids)?;
+        let noun = wiring_noun(&wires, &labels);
+        let moved_wires = wires.iter().map(|wire| wire.moved_by(dx, dy)).collect();
+        let mut changed_labels = labels;
+        for label in &mut changed_labels {
+            label.position = label.position.offset(dx, dy);
+        }
+        let request = WiringRequest {
+            moved_wires,
+            changed_labels,
+            ..WiringRequest::default()
+        };
+        Ok(self.edit_wiring(&format!("Move {noun}"), request, fresh))
+    }
+
+    /// Rotates the labels in `uuids` about their anchors by `steps` quarter turns as one
+    /// undo step.
+    pub fn rotate_labels(
+        &mut self,
+        uuids: &[Uuid],
+        steps: i32,
+        fresh: &mut impl FnMut() -> Uuid,
+    ) -> Result<Changes, CoreError> {
+        let uuids = dedupe(uuids);
+        if uuids.is_empty() || steps.rem_euclid(4) == 0 {
+            return Ok(Changes::default());
+        }
+        let (wires, labels) = self.wiring_selection(&uuids)?;
+        if !wires.is_empty() {
+            return Err(CoreError::InvalidEdit(
+                "Only labels can be rotated.".to_owned(),
+            ));
+        }
+        let mut changed_labels = labels;
+        for label in &mut changed_labels {
+            label.rotation = label.rotation.rotate(quarter_turns(steps));
+        }
+        let request = WiringRequest {
+            changed_labels,
+            ..WiringRequest::default()
+        };
+        Ok(self.edit_wiring("Rotate Label", request, fresh))
+    }
+
+    /// Deletes the wires and labels in `uuids` as one undo step, with the junctions that
+    /// are no longer needed.
+    pub fn delete_wiring(
+        &mut self,
+        uuids: &[Uuid],
+        fresh: &mut impl FnMut() -> Uuid,
+    ) -> Result<Changes, CoreError> {
+        let uuids = dedupe(uuids);
+        if uuids.is_empty() {
+            return Ok(Changes::default());
+        }
+        let (wires, labels) = self.wiring_selection(&uuids)?;
+        let noun = wiring_noun(&wires, &labels);
+        let request = WiringRequest {
+            deleted: uuids.into_iter().collect(),
+            ..WiringRequest::default()
+        };
+        Ok(self.edit_wiring(&format!("Delete {noun}"), request, fresh))
+    }
+
+    /// The wires and labels named by `uuids`, or an error when any is neither.
+    fn wiring_selection(&self, uuids: &[Uuid]) -> Result<(Vec<Wire>, Vec<Label>), CoreError> {
+        let schematic = self.project.schematic();
+        let all_wires = schematic.wires();
+        let all_labels = schematic.labels();
+        let mut wires = Vec::new();
+        let mut labels = Vec::new();
+        for uuid in uuids {
+            if let Some(wire) = all_wires.iter().find(|wire| wire.uuid == *uuid) {
+                wires.push(*wire);
+            } else if let Some(label) = all_labels.iter().find(|label| label.uuid == *uuid) {
+                labels.push(label.clone());
+            } else {
+                return Err(CoreError::InvalidEdit(
+                    "A selected item is not a wire or label on the schematic.".to_owned(),
+                ));
+            }
+        }
+        Ok((wires, labels))
+    }
+
+    /// Plans a wiring edit and records it as one undo step. An edit that changes no node
+    /// records nothing.
+    fn edit_wiring(
+        &mut self,
+        label: &str,
+        request: WiringRequest,
+        fresh: &mut impl FnMut() -> Uuid,
+    ) -> Changes {
+        let schematic = self.project.schematic();
+        let plan = wiring::plan(&schematic.wiring_sheet(), request, fresh);
+        let (removed, inserted) = item_edits(schematic, &plan);
+        if removed.is_empty() && inserted.is_empty() {
+            return Changes::default();
+        }
+        self.execute(Command::EditItems {
+            label: label.to_owned(),
+            removed,
+            inserted,
+        })
+    }
+
     /// Errors when any of `uuids` is not a symbol placed on the schematic.
     fn check_symbols(&self, uuids: &[Uuid]) -> Result<(), CoreError> {
         for uuid in uuids {
@@ -517,6 +729,69 @@ fn dedupe(uuids: &[Uuid]) -> Vec<Uuid> {
     unique
 }
 
+/// Top-level nodes paired with their child indices.
+type NodeEdits = Vec<(usize, SExpr)>;
+
+/// The node edits that carry out `plan`. Deleted and changed items are removed at their
+/// current child indices; changed and new items are inserted at their indices after the
+/// edit. Changed items keep their place, and new ones go before `(sheet_instances)`.
+fn item_edits(schematic: &Schematic, plan: &WiringPlan) -> (NodeEdits, NodeEdits) {
+    let mut changed: HashMap<Uuid, SExpr> = HashMap::new();
+    for (uuid, item) in &plan.changed {
+        let previous = schematic.item(*uuid);
+        let node = match item {
+            ChangedItem::Wire(wire) => wire.node(previous),
+            ChangedItem::Label(label) => label.to_node(previous),
+        };
+        changed.insert(*uuid, node);
+    }
+    let new_index = schematic.placed_insert_index();
+    let items = schematic.items();
+    let mut removed = Vec::new();
+    let mut inserted = Vec::new();
+    let mut next = 1;
+    for (position, node) in items.iter().enumerate() {
+        let index = position + 1;
+        if index == new_index {
+            insert_new(plan, &mut inserted, &mut next);
+        }
+        let uuid = node_uuid(node);
+        if uuid.is_some_and(|uuid| plan.deleted.contains(&uuid)) {
+            removed.push((index, node.clone()));
+        } else if let Some(after) = uuid.and_then(|uuid| changed.get(&uuid)) {
+            removed.push((index, node.clone()));
+            inserted.push((next, after.clone()));
+            next += 1;
+        } else {
+            next += 1;
+        }
+    }
+    if new_index > items.len() {
+        insert_new(plan, &mut inserted, &mut next);
+    }
+    (removed, inserted)
+}
+
+fn insert_new(plan: &WiringPlan, inserted: &mut NodeEdits, next: &mut usize) {
+    for item in &plan.added {
+        inserted.push((*next, item.to_node()));
+        *next += 1;
+    }
+}
+
+/// The word undo labels use for a wiring selection.
+fn wiring_noun(wires: &[Wire], labels: &[Label]) -> &'static str {
+    match (wires.is_empty(), labels.is_empty()) {
+        (false, true) => "Wire",
+        (true, false) => "Label",
+        _ => "Wiring",
+    }
+}
+
+fn quarter_turns(steps: i32) -> Angle {
+    Angle::from_decidegrees(steps.rem_euclid(4) * 900)
+}
+
 fn missing_symbol() -> CoreError {
     CoreError::InvalidEdit("A symbol in the selection is not placed on the schematic.".to_owned())
 }
@@ -538,9 +813,7 @@ fn validate_title_block(block: &TitleBlock) -> Result<(), CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::{Angle, Point};
     use std::path::PathBuf;
-    use uuid::Uuid;
 
     fn session() -> Session {
         Session::new(Project::new(PathBuf::from("unsaved"), "demo", Uuid::nil()).unwrap())
@@ -567,6 +840,7 @@ mod tests {
                 grid_size: true,
                 symbols: false,
                 definitions: false,
+                wiring: false,
             }
         );
         let edited = session.project().clone();
@@ -727,6 +1001,7 @@ mod tests {
                 grid_size: false,
                 symbols: true,
                 definitions: true,
+                wiring: false,
             }
         );
         let schematic = session.project().schematic();

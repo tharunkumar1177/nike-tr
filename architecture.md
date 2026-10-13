@@ -69,6 +69,8 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 ### Connectivity and netlist
 
 - `core` alone derives nets from schematic connectivity: pins, wires, junctions, labels, and power symbols.
+- Items connect only where their connection points share exactly the same nanometer coordinate: pin ends, wire endpoints, junctions, and label anchors. A wire endpoint on another wire's interior connects only through a junction, which the wiring commands insert automatically. Labels with the same text, and power symbols with the same `Value`, join their nets across the sheet.
+- A net takes its name from its highest-priority driver, in KiCad's order: global label, then power symbol, then local label, then a pin. Nets driven only by pins get KiCad's automatic names, such as `Net-(R1-Pad1)`, and a lone pin gets `unconnected-(R1-Pad1)`. A KiCad-exported netlist fixture is the authority for tie-breaks and automatic names. Comparison covers net names and their pin sets, not the `.net` file's bytes.
 - The netlist is the one interface between the logical and physical views, and also the input to `sim` and `ai` verification.
 - Updating the board from the schematic is an explicit user command that applies a reviewable diff. It never runs silently.
 

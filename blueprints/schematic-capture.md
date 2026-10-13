@@ -67,6 +67,27 @@ Interaction design (designer plan):
 - A visually hidden `aria-live="polite"` region announces "Placing <name>", "Symbol placed", "Symbol selected", and "Symbol deleted".
 - Reference and Value text is drawn at the positions from the placed symbol's property `(at ...)` fields, hidden when the property is hidden.
 
+### Slice 4b plan: connectivity and netlist (approved 2026-10-13)
+
+Data model and commands, in `crates/core`:
+
+- `(wire (pts (xy) (xy)) (stroke ...) (uuid ...))`, `(junction (at x y) (diameter 0) (color 0 0 0 0) (uuid ...))`, `(label "text" (at x y angle) (effects ...) (uuid ...))`, and `(global_label "text" (shape input|output|bidirectional|tri_state|passive) (at ...) (effects ...) (uuid ...))` are typed in `wiring.rs`. Unknown children pass through edits.
+- Every wiring edit is one `EditItems` command that removes and inserts top-level schematic nodes at recorded child indices. Draw, label placement, move, rotate, and delete all use it, so undo restores the exact file.
+- `draw_wire` takes the polyline the UI drew. Each segment must be horizontal or vertical. Within the same command, a new wire end, label anchor, or pin end that lands on another wire's interior splits that wire. A new wire is also split where an existing wire end or pin end lies on it. The command then adds a junction where at least two wire ends meet and three or more connection points coincide, and removes auto junctions that are no longer needed at the points it touched. Overlapping collinear wires are not merged.
+- Pin connection points come from the embedded definition, hidden pins included, for units 0 and the placed unit. They are transformed like properties: Y flip, then mirror, then rotation, then offset.
+- `netlist.rs` derives nets by union-find over exact connection points, as the [Connectivity and netlist](../architecture.md#connectivity-and-netlist) contract says. Local labels join by text. Global labels and power symbols join by name. Symbols whose reference starts with `#` (power symbols) are drivers, not nodes. Local-label nets on the root sheet are named `/<text>`, as KiCad does. Netlists are recomputed in full on demand. A single sheet is linear in its item count, so this is not incremental yet.
+
+IPC: `SymbolInstance` gains `pins` (every connection point in schematic nm). `ProjectSnapshot` and `DocumentDiff` gain `wires`, `junctions`, and `labels`. New commands are `draw_wire`, `place_label`, `move_wiring`, `rotate_labels`, and `delete_wiring`. Power symbols use the existing `place_symbol` with a library search hit from library `power`.
+
+Interaction design (designer plans):
+
+- Wire mode starts with W or a toolbar "Draw wire (W)" button (`aria-pressed`), and it clears any placement or selection. A click starts a wire. The rubber band has one bend, horizontal first, and `/` toggles it. A click anchors a corner. A double-click, Enter, or a click on a pin end or wire finishes the wire and commits it as one command. The first Escape or right-click cancels the wire in progress, and the second exits the mode.
+- The cursor snaps to the 1.27 mm grid, or exactly to a pin end or wire end within 10 screen px. The pin and end indicator is a hollow 8 px `--color-focus` circle with a 2 px stroke. The grid indicator is a 4 px `--color-text-secondary` dot.
+- Wires are drawn with a 2 px `--color-primary` stroke, and the preview uses the same stroke at `globalAlpha` 0.5. Junctions are filled 6 px `--color-primary` dots. A selected wire is drawn in `--color-focus`. In normal mode, clicking a wire selects it, dragging moves just that segment (KiCad's Move behavior, without stretching neighbors), and Delete removes it.
+- L places a local label and Ctrl+L a global label. An inline popover at the cursor takes the name: non-empty, no whitespace, up to 256 characters, and a shape select for global labels. Enter attaches a ghost, and clicking places it. Placement repeats, and trailing digits auto-increment (D0, then D1). R rotates the label in 90° steps. A local label is `--color-text-primary` `--text-sm` text with a 3 px `--color-primary` anchor square. A global label has a `--color-text-warning` outline shaped by its type, a `--color-canvas` fill, and `--color-text-warning` text.
+- P opens a power picker at the cursor with GND, +5V, +3V3, and VCC, each resolved through the library search and listed only when the index has it, plus "Search library...". Without the library, it shows "Component library required" and a Download button.
+- Status hints: "Click to start wire. Esc: Exit", "Click to anchor. Double-click/Enter/Pin to finish. /: Toggle bend. Esc: Cancel", "Wire selected. Drag to move. Del: Remove", "Enter label name. Esc: Cancel", "Click to place. R: Rotate. Esc: Cancel", and "Label selected. Drag to move. R: Rotate. Del: Remove". The `aria-live` region announces mode and placement changes.
+
 ## Related blueprints
 
 ### Required

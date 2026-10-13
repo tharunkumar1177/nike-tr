@@ -19,6 +19,9 @@ export function applyDiff(
     gridSizeNm: diff.gridSizeNm ?? project.gridSizeNm,
     definitions: diff.definitions ?? project.definitions,
     instances: diff.instances ?? project.instances,
+    wires: diff.wires ?? project.wires,
+    junctions: diff.junctions ?? project.junctions,
+    labels: diff.labels ?? project.labels,
     history: diff.history,
   };
 }

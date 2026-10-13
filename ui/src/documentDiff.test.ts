@@ -13,6 +13,9 @@ describe("applyDiff", () => {
       gridSizeNm: null,
       definitions: null,
       instances: null,
+      wires: null,
+      junctions: null,
+      labels: null,
       history: { ...project.history, dirty: true, canUndo: true },
     };
     const next = applyDiff(project, diff);
@@ -33,11 +36,35 @@ describe("applyDiff", () => {
       gridSizeNm: null,
       definitions: { "Device:R": preview },
       instances: [instance],
+      wires: null,
+      junctions: null,
+      labels: null,
       history: project.history,
     };
     const next = applyDiff(project, diff);
     expect(next?.definitions["Device:R"]).toBe(preview);
     expect(next?.instances).toEqual([instance]);
+  });
+
+  it("replaces the wiring when the diff carries it", () => {
+    const project = projectSnapshot({ revision: 4 });
+    const wire = { uuid: "wire-1", start: [0, 0], end: [2_540_000, 0] };
+    const diff: DocumentDiff = {
+      baseRevision: 4,
+      revision: 5,
+      titleBlock: null,
+      gridSizeNm: null,
+      definitions: null,
+      instances: null,
+      wires: [{ uuid: "wire-1", start: [0, 0], end: [2_540_000, 0] }],
+      junctions: [{ uuid: "junction-1", position: [0, 0] }],
+      labels: [],
+      history: project.history,
+    };
+    const next = applyDiff(project, diff);
+    expect(next?.wires).toEqual([wire]);
+    expect(next?.junctions).toHaveLength(1);
+    expect(next?.instances).toBe(project.instances);
   });
 
   it("rejects a diff made against another revision", () => {
@@ -49,6 +76,9 @@ describe("applyDiff", () => {
       gridSizeNm: 2_540_000,
       definitions: null,
       instances: null,
+      wires: null,
+      junctions: null,
+      labels: null,
       history: project.history,
     };
     expect(applyDiff(project, diff)).toBeNull();
