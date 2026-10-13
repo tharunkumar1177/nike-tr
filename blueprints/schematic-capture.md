@@ -14,7 +14,13 @@ Slice 4a is green in [CI run 38406455082](https://github.com/tharunkumar1177/tro
 - IPC: payload serialization, definition lookup from the fixture index, an unknown symbol ID, and a diff walk through every command.
 - UI: Vitest covers placing from the library browser with the snapped position, R during placement, Escape, select and Delete, a drag that sends one `move_symbols`, and rendering instances from a diff. Unit tests cover snapping, transforms, bounds, and hit-testing.
 
-Slice 4b (wires, labels, properties, netlist, and ERC) is Planned.
+Slice 4b (connectivity and netlist) is green in [CI run 38434705527](https://github.com/tharunkumar1177/tron/actions/runs/38434705527), including the Windows installer. Covered by tests:
+
+- Core: the `divider` golden schematic round-trips. Its pin points and derived nets match the expected KiCad names (`+5V`, `/OUT`, `GND`, `VIN`, `unconnected-(R3-Pad2)`). Deleting and redrawing its wiring through commands rebuilds the same wires, junction, and nets, and undo returns the original bytes. Unit tests cover wire splitting, automatic junctions, crossings without junctions, label text rules, and automatic net names.
+- IPC: wiring fields in diffs and the label payload.
+- UI: Vitest covers drawing a bent wire, toggling the bend and finishing on a pin, Escape cancelling and then exiting, selecting and deleting a wire, repeated local labels with counting names and rotation, a global label with a shape (Alt+L), the power picker from the toolbar, and the picker without the library. `wiring.test.ts` covers routes, snapping, hit-testing, and label names.
+
+Slice 4c (properties and ERC) is Planned.
 
 ## Architecture dependencies
 
@@ -84,7 +90,7 @@ Interaction design (designer plans):
 - Wire mode starts with W or a toolbar "Draw wire (W)" button (`aria-pressed`), and it clears any placement or selection. A click starts a wire. The rubber band has one bend, horizontal first, and `/` toggles it. A click anchors a corner. A double-click, Enter, or a click on a pin end or wire finishes the wire and commits it as one command. The first Escape or right-click cancels the wire in progress, and the second exits the mode.
 - The cursor snaps to the 1.27 mm grid, or exactly to a pin end or wire end within 10 screen px. The pin and end indicator is a hollow 8 px `--color-focus` circle with a 2 px stroke. The grid indicator is a 4 px `--color-text-secondary` dot.
 - Wires are drawn with a 2 px `--color-primary` stroke, and the preview uses the same stroke at `globalAlpha` 0.5. Junctions are filled 6 px `--color-primary` dots. A selected wire is drawn in `--color-focus`. In normal mode, clicking a wire selects it, dragging moves just that segment (KiCad's Move behavior, without stretching neighbors), and Delete removes it.
-- L places a local label and Ctrl+L a global label. An inline popover at the cursor takes the name: non-empty, no whitespace, up to 256 characters, and a shape select for global labels. Enter attaches a ghost, and clicking places it. Placement repeats, and trailing digits auto-increment (D0, then D1). R rotates the label in 90° steps. A local label is `--color-text-primary` `--text-sm` text with a 3 px `--color-primary` anchor square. A global label has a `--color-text-warning` outline shaped by its type, a `--color-canvas` fill, and `--color-text-warning` text.
+- L places a local label and Alt+L (Option+L) a global label, because Ctrl+L toggles the Component Library. The toolbar also has "Add net label (L)", "Add global label (Alt+L)", and "Add power symbol (P)". An inline popover at the cursor takes the name: non-empty, no whitespace, up to 256 characters, and a shape select for global labels. Enter attaches a ghost, and clicking places it. Placement repeats, and trailing digits auto-increment (D0, then D1). R rotates the label in 90° steps. A local label is `--color-text-primary` `--text-sm` text with a 3 px `--color-primary` anchor square. A global label has a `--color-text-warning` outline shaped by its type, a `--color-canvas` fill, and `--color-text-warning` text.
 - P opens a power picker at the cursor with GND, +5V, +3V3, and VCC, each resolved through the library search and listed only when the index has it, plus "Search library...". Without the library, it shows "Component library required" and a Download button.
 - Status hints: "Click to start wire. Esc: Exit", "Click to anchor. Double-click/Enter/Pin to finish. /: Toggle bend. Esc: Cancel", "Wire selected. Drag to move. Del: Remove", "Enter label name. Esc: Cancel", "Click to place. R: Rotate. Esc: Cancel", and "Label selected. Drag to move. R: Rotate. Del: Remove". The `aria-live` region announces mode and placement changes.
 
@@ -106,11 +112,14 @@ Interaction design (designer plans):
 - `crates/core/src/kicad.rs` — placed symbols, `(lib_symbols)`, and placement transforms. `session.rs` holds the symbol commands. Tests: `crates/core/tests/symbol_placement.rs` and `tests/golden/symbols/amp.kicad_sch`
 - `src-tauri/src/ipc.rs` — `place_symbol`, `move_symbols`, `transform_symbols`, `delete_symbols`, and the `definitions` and `instances` fields on `ProjectSnapshot` and `DocumentDiff`
 - `ui/src/components/SchematicCanvas.tsx`, `symbols.ts`, `schematicDraw.ts`, `drawShapes.ts` — the placement and selection interactions and drawing. Tests: `App.test.tsx` ("Symbol placement"), `symbols.test.ts`
+- `crates/core/src/wiring.rs` — wires, junctions, labels, and the split and junction planner. `netlist.rs` derives nets. `session.rs` holds the `EditItems` wiring commands. Tests: `crates/core/tests/netlist.rs` and `tests/golden/wiring/divider.kicad_sch`
+- `src-tauri/src/ipc.rs` — `draw_wire`, `place_label`, `move_wiring`, `rotate_labels`, `delete_wiring`, symbol `pins`, and the `wires`, `junctions`, and `labels` fields
+- `ui/src/wiring.ts`, `powerSymbols.ts`, `components/InlineLabelEditor.tsx`, `components/PowerPicker.tsx` — wiring geometry, the label popover, and the power picker. Tests: `App.test.tsx` ("Wiring"), `wiring.test.ts`
 
 ## Acceptance or verification criteria
 
 - [x] Symbols can be placed from the library, rotated, mirrored, moved, and deleted.
-- [ ] Wires snap to the grid and to pins. Junctions appear automatically at T-intersections.
+- [x] Wires snap to the grid and to pins. Junctions appear automatically at T-intersections.
 - [ ] The netlist of a reference KiCad schematic matches KiCad's own netlist export.
 - [ ] ERC reports each rule violation with a jump-to-location action.
 - [ ] Editing a 300-symbol schematic holds 60 frames per second for pan and drag.
@@ -121,3 +130,8 @@ Interaction design (designer plans):
 - Placement in the installed app has not been checked by hand. CI covers it only in jsdom. Opening a saved 4a schematic in KiCad itself has not been verified either.
 - Rotated property text keeps a plain angle. KiCad's normalization of text angle into justification is not applied, so text may sit at 180° or 270°.
 - Placed symbols don't copy `in_bom`, `on_board`, `exclude_from_sim`, or `dnp`. Those flags are read from the embedded definition.
+- The KiCad netlist comparison is pending. `the_netlist_matches_the_kicad_export` stays ignored until the user exports `tests/golden/wiring/divider.net` from KiCad: copy `divider.kicad_sch` into a KiCad project named `divider`, export a KiCad netlist, commit it, and remove the `#[ignore]`.
+- Collinear wire pieces are not merged after edits. Moving or placing a symbol does not split wires or update junctions at its pins. Connectivity is recomputed in full on each wiring edit, not incrementally.
+- Label hit-testing approximates the text extent from its character count.
+- The power picker's "Search library..." only opens the library sidebar. Its final behavior is waiting on a designer decision.
+- Wiring in the installed app has not been checked by hand.
