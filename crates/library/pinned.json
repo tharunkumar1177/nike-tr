@@ -1,7 +1,7 @@
 {
   "kicad_tag": "10.0.7",
-  "release": "library-kicad-10.0.7-r1",
-  "url": "https://github.com/tharunkumar1177/tron/releases/download/library-kicad-10.0.7-r1/library.db.gz",
-  "sha256": "6e7b9469fb74975e8893ff117068f81d587485490b78451225f24468d57743ee",
-  "size": 16517663
+  "release": "library-kicad-10.0.7-r2",
+  "url": "https://github.com/tharunkumar1177/tron/releases/download/library-kicad-10.0.7-r2/library.db.gz",
+  "sha256": "387470f8ee2106babf85d905863d5378253434716d735caaaf8c96f47b946b4e",
+  "size": 30236000
 }
