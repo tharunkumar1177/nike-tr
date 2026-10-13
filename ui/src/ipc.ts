@@ -114,6 +114,15 @@ export function deleteWiring(uuids: string[]): Promise<void> {
   return invoke<void>("delete_wiring", { uuids });
 }
 
+export function placeNoConnect(position: Xy): Promise<void> {
+  return invoke<void>("place_no_connect", { position });
+}
+
+/** Numbers every unannotated symbol; resolves to how many were numbered. */
+export function annotateSchematic(): Promise<number> {
+  return invoke<number>("annotate_schematic");
+}
+
 export function listRecentProjects(): Promise<RecentProject[]> {
   return invoke<RecentProject[]>("list_recent_projects");
 }

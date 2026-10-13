@@ -79,6 +79,7 @@ export function App() {
   const [canvasSize, setCanvasSize] = useState<Size>({ width: 0, height: 0 });
   const [library, adoptLibraryStatus] = useLibraryStatus();
   const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
+  const [annotateTicket, setAnnotateTicket] = useState(0);
   const libraryOffered = useRef(false);
   const closeLibraryDialog = useCallback(() => setLibraryDialogOpen(false), []);
 
@@ -383,6 +384,9 @@ export function App() {
       case "zoom-actual":
         updateViewport((current) => zoomToLevel(current, 1, canvasSize));
         return;
+      case "annotate-schematic":
+        setAnnotateTicket((ticket) => ticket + 1);
+        return;
     }
   }
 
@@ -513,6 +517,7 @@ export function App() {
         viewport={viewport}
         controlsDisabled={modal !== null || busy !== null || libraryDialogOpen}
         library={library}
+        annotateTicket={annotateTicket}
         onViewportChange={updateViewport}
         onCanvasResize={setCanvasSize}
         onUndo={() => void runHistory(undo, "Couldn't undo")}

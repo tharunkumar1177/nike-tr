@@ -1,7 +1,7 @@
 /**
- * Draws the schematic scene onto the sheet canvas: wires, junctions, net
- * labels, placed symbols with their Reference and Value text, the selection,
- * and the placement and wiring previews.
+ * Draws the schematic scene onto the sheet canvas: wires, junctions,
+ * no-connect flags, net labels, placed symbols with their Reference and Value
+ * text, the selection, and the placement and wiring previews.
  * The context arrives in screen space (CSS pixels); world geometry is in
  * nanometers with Y down.
  */
@@ -9,6 +9,7 @@ import type { GlobalLabelShape } from "./bindings/GlobalLabelShape";
 import type { JunctionDot } from "./bindings/JunctionDot";
 import type { MirrorAxis } from "./bindings/MirrorAxis";
 import type { NetLabel } from "./bindings/NetLabel";
+import type { NoConnectFlag } from "./bindings/NoConnectFlag";
 import type { SymbolInstance } from "./bindings/SymbolInstance";
 import type { SymbolPreview } from "./bindings/SymbolPreview";
 import type { SymbolText } from "./bindings/SymbolText";
@@ -30,7 +31,7 @@ import {
   pxPerNm,
   worldToScreen,
 } from "./viewport";
-import { LABEL_TEXT_NM, type SnappedPoint } from "./wiring";
+import { LABEL_TEXT_NM, NO_CONNECT_NM, type SnappedPoint } from "./wiring";
 
 /** A symbol being placed: the ghost at the cursor, or a loading placeholder. */
 export interface GhostState {
@@ -58,7 +59,8 @@ export interface SceneState {
   wires: WireSegment[];
   junctions: JunctionDot[];
   labels: NetLabel[];
-  /** The selected symbol, wire, or label. */
+  noConnects: NoConnectFlag[];
+  /** The selected symbol, wire, label, or no-connect flag. */
   selectedUuid: string | null;
   /** In-progress drag: the local preview offset of one item. */
   drag: { uuid: string; dx: number; dy: number } | null;
@@ -67,6 +69,8 @@ export interface SceneState {
   wirePreview: ScreenPoint[] | null;
   snap: SnappedPoint | null;
   labelGhost: LabelAppearance | null;
+  /** Where a no-connect flag would be placed, while placing one. */
+  noConnectGhost: ScreenPoint | null;
   gridSizeNm: number;
 }
 
@@ -357,6 +361,25 @@ function drawSnap(
   }
 }
 
+/** Draws a no-connect flag: an X centered on the point it marks. */
+function drawNoConnect(
+  context: CanvasRenderingContext2D,
+  viewport: Viewport,
+  point: ScreenPoint,
+  color: string,
+) {
+  const at = worldToScreen(viewport, point.x, point.y);
+  const half = (NO_CONNECT_NM / 2) * pxPerNm(viewport.zoom);
+  context.beginPath();
+  context.moveTo(at.x - half, at.y - half);
+  context.lineTo(at.x + half, at.y + half);
+  context.moveTo(at.x - half, at.y + half);
+  context.lineTo(at.x + half, at.y - half);
+  context.strokeStyle = color;
+  context.lineWidth = WIRE_PX;
+  context.stroke();
+}
+
 function moved(xy: Xy, offset: { dx: number; dy: number } | null): ScreenPoint {
   return offset
     ? { x: xy[0] + offset.dx, y: xy[1] + offset.dy }
@@ -466,6 +489,12 @@ export function drawSchematicScene(
     fillDot(context, at, JUNCTION_PX, stroke);
   }
 
+  for (const flag of scene.noConnects) {
+    const position = moved(flag.position, offsetOf(flag.uuid));
+    const selected = flag.uuid === scene.selectedUuid;
+    drawNoConnect(context, viewport, position, selected ? focus : stroke);
+  }
+
   if (scene.wirePreview) {
     context.save();
     context.globalAlpha = GHOST_ALPHA;
@@ -483,6 +512,13 @@ export function drawSchematicScene(
       { text, anchor: stroke, outline: warning, fill: canvasFill },
       fontFamily,
     );
+    context.restore();
+  }
+
+  if (scene.noConnectGhost) {
+    context.save();
+    context.globalAlpha = GHOST_ALPHA;
+    drawNoConnect(context, viewport, scene.noConnectGhost, stroke);
     context.restore();
   }
 

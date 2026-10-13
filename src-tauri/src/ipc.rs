@@ -8,8 +8,8 @@ use tron_core::kicad::Schematic;
 use tron_core::kicad_value::text_arg;
 use tron_core::sexpr::SExpr;
 use tron_core::{
-    Changes, Junction, Label, LabelKind, LabelShape, Mirror, Nm, PlacedSymbol, Placement, Point,
-    Project, Session, SymbolPreview, TITLE_BLOCK_COMMENTS, TitleBlock, Wire, Xy,
+    Changes, Junction, Label, LabelKind, LabelShape, Mirror, Nm, NoConnect, PlacedSymbol,
+    Placement, Point, Project, Session, SymbolPreview, TITLE_BLOCK_COMMENTS, TitleBlock, Wire, Xy,
 };
 use ts_rs::TS;
 use uuid::Uuid;
@@ -135,6 +135,7 @@ pub struct ProjectSnapshot {
     pub wires: Vec<WireSegment>,
     pub junctions: Vec<JunctionDot>,
     pub labels: Vec<NetLabel>,
+    pub no_connects: Vec<NoConnectFlag>,
     pub history: HistoryStatus,
 }
 
@@ -157,6 +158,7 @@ impl ProjectSnapshot {
             wires: wire_segments(project),
             junctions: junction_dots(project),
             labels: net_labels(project),
+            no_connects: no_connect_flags(project),
             history: HistoryStatus::from(session),
         }
     }
@@ -206,6 +208,11 @@ fn net_labels(project: &Project) -> Vec<NetLabel> {
     labels.iter().map(NetLabel::from).collect()
 }
 
+fn no_connect_flags(project: &Project) -> Vec<NoConnectFlag> {
+    let flags = project.schematic().no_connects();
+    flags.iter().map(NoConnectFlag::from).collect()
+}
+
 /// The parts of the document that changed between two revisions.
 /// Fields that didn't change are `null`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -222,10 +229,11 @@ pub struct DocumentDiff {
     pub definitions: Option<BTreeMap<String, SymbolPreview>>,
     /// Every placed symbol when the placement set changed.
     pub instances: Option<Vec<SymbolInstance>>,
-    /// Every wire, junction, and label when the wiring changed.
+    /// Every wire, junction, label, and no-connect flag when the wiring changed.
     pub wires: Option<Vec<WireSegment>>,
     pub junctions: Option<Vec<JunctionDot>>,
     pub labels: Option<Vec<NetLabel>>,
+    pub no_connects: Option<Vec<NoConnectFlag>>,
     pub history: HistoryStatus,
 }
 
@@ -249,6 +257,7 @@ fn document_diff(
         wires: changes.wiring.then(|| wire_segments(project)),
         junctions: changes.wiring.then(|| junction_dots(project)),
         labels: changes.wiring.then(|| net_labels(project)),
+        no_connects: changes.wiring.then(|| no_connect_flags(project)),
         history: HistoryStatus::from(session),
     }
 }
@@ -390,6 +399,24 @@ impl From<&Junction> for JunctionDot {
         JunctionDot {
             uuid: junction.uuid,
             position: Xy::from(junction.position),
+        }
+    }
+}
+
+/// A no-connect flag, drawn as an X over the point it marks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct NoConnectFlag {
+    pub uuid: Uuid,
+    pub position: Xy,
+}
+
+impl From<&NoConnect> for NoConnectFlag {
+    fn from(flag: &NoConnect) -> NoConnectFlag {
+        NoConnectFlag {
+            uuid: flag.uuid,
+            position: Xy::from(flag.position),
         }
     }
 }
@@ -880,7 +907,36 @@ pub fn place_label(
     Ok(())
 }
 
-/// Moves the wires and labels in `uuids` by the same offset as one undo step.
+/// Places a no-connect flag at a point as one undo step.
+#[tauri::command]
+pub fn place_no_connect(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    position: Xy,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let session = inner.session_mut()?;
+    let changes = session.place_no_connect(to_point(position), &mut Uuid::new_v4)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Numbers every unannotated symbol as one undo step and returns how many changed.
+#[tauri::command]
+pub fn annotate_schematic(app: AppHandle, state: State<'_, AppState>) -> Result<u32, AppError> {
+    let mut inner = state.lock();
+    let session = inner.session_mut()?;
+    let (changes, count) = session.annotate();
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
+/// Moves the wires, labels, and no-connect flags in `uuids` by the same offset as one
+/// undo step.
 #[tauri::command]
 pub fn move_wiring(
     app: AppHandle,
@@ -916,8 +972,8 @@ pub fn rotate_labels(
     Ok(())
 }
 
-/// Deletes the wires and labels in `uuids`, with junctions no longer needed, as one undo
-/// step.
+/// Deletes the wires, labels, and no-connect flags in `uuids`, with junctions no longer
+/// needed, as one undo step.
 #[tauri::command]
 pub fn delete_wiring(
     app: AppHandle,
@@ -1161,6 +1217,19 @@ mod tests {
         assert_eq!(instance["pins"].as_array().unwrap().len(), 2);
         assert_eq!(json["wires"], serde_json::json!([]));
         assert_eq!(json["labels"], serde_json::json!([]));
+        assert_eq!(json["noConnects"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_diff_carries_no_connect_flags() {
+        let mut session = session();
+        let at = Point::new(Nm(2_540_000), Nm(1_270_000));
+        let changes = session.place_no_connect(at, &mut Uuid::new_v4).unwrap();
+        let json = serde_json::to_value(document_diff(&session, 1, 2, changes)).unwrap();
+        let flag = &json["noConnects"][0];
+        assert_eq!(flag["position"], serde_json::json!([2_540_000, 1_270_000]));
+        assert_eq!(flag["uuid"].as_str().unwrap().len(), 36);
+        assert_eq!(json["history"]["undoLabel"], "Place No-Connect Flag");
     }
 
     #[test]

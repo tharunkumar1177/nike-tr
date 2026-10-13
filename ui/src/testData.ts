@@ -24,6 +24,7 @@ export function projectSnapshot(
     wires: [],
     junctions: [],
     labels: [],
+    noConnects: [],
     history: {
       dirty: false,
       canUndo: false,

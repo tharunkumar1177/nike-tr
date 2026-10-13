@@ -22,6 +22,8 @@ interface EditorShellProps {
   viewport: Viewport | null;
   controlsDisabled: boolean;
   library: LibraryStatusState;
+  /** Counts annotation requests from the menu; each increase runs one. */
+  annotateTicket: number;
   onViewportChange: (update: (viewport: Viewport) => Viewport) => void;
   onCanvasResize: (size: Size) => void;
   onUndo: () => void;
@@ -35,6 +37,7 @@ export function EditorShell({
   viewport,
   controlsDisabled,
   library,
+  annotateTicket,
   onViewportChange,
   onCanvasResize,
   onUndo,
@@ -49,6 +52,7 @@ export function EditorShell({
     useState<PlacementRequest | null>(null);
   const [symbolDrag, setSymbolDrag] = useState<LibraryHit | null>(null);
   const [wireMode, setWireMode] = useState(false);
+  const [noConnectMode, setNoConnectMode] = useState(false);
   const [toolRequest, setToolRequest] = useState<CanvasTool | null>(null);
   const zoomLabel = viewport ? formatZoom(viewport.zoom) : "—";
 
@@ -85,6 +89,7 @@ export function EditorShell({
         onToggleLibrary={() => setLibraryOpen((open) => !open)}
         wireMode={wireMode}
         onToggleWireMode={() => setWireMode((active) => !active)}
+        noConnectMode={noConnectMode}
         onStartTool={setToolRequest}
       />
       <main className="editor__workspace">
@@ -107,8 +112,11 @@ export function EditorShell({
           wires={project.wires}
           junctions={project.junctions}
           labels={project.labels}
+          noConnects={project.noConnects}
           wireMode={wireMode}
           onWireModeChange={setWireMode}
+          onNoConnectModeChange={setNoConnectMode}
+          annotateTicket={annotateTicket}
           library={library}
           onDownloadLibrary={onDownloadLibrary}
           onOpenLibrary={() => setLibraryOpen(true)}

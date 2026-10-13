@@ -87,6 +87,13 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         Some("CmdOrCtrl+1"),
         false,
     )?;
+    let annotate_schematic = item(
+        app,
+        "annotate-schematic",
+        "&Annotate Schematic",
+        None,
+        false,
+    )?;
 
     let file = SubmenuBuilder::new(app, "&File")
         .item(&new_project)
@@ -112,10 +119,14 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         .item(&zoom_fit)
         .item(&zoom_actual)
         .build()?;
+    let tools = SubmenuBuilder::new(app, "&Tools")
+        .item(&annotate_schematic)
+        .build()?;
     let menu = MenuBuilder::new(app)
         .item(&file)
         .item(&edit)
         .item(&view)
+        .item(&tools)
         .build()?;
 
     let handles = MenuHandles {
@@ -128,6 +139,7 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
             zoom_out,
             zoom_fit,
             zoom_actual,
+            annotate_schematic,
         ],
         undo,
         redo,

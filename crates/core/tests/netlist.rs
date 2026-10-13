@@ -4,7 +4,7 @@ use std::path::Path;
 
 use tron_core::kicad::Schematic;
 use tron_core::kicad_value::{child_text, children};
-use tron_core::{LabelKind, LabelShape, Nm, Point, Project, Session, netlist, sexpr};
+use tron_core::{LabelKind, LabelShape, Nm, Placement, Point, Project, Session, netlist, sexpr};
 use uuid::Uuid;
 
 const GOLDEN: &str = include_str!("golden/wiring/divider.kicad_sch");
@@ -185,6 +185,104 @@ fn invalid_wiring_edits_are_rejected() {
     let wire = session.project().schematic().wires()[0].uuid;
     assert!(session.rotate_labels(&[wire], 1, &mut fresh).is_err());
     assert!(!session.can_undo());
+}
+
+#[test]
+fn no_connect_flags_place_move_and_delete_as_undo_steps() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut session = Session::new(golden_project(temp.path()));
+    let original = session.project().clone();
+    let mut fresh = counter();
+    let pin = mm(127.0, 64.77);
+
+    session.place_no_connect(pin, &mut fresh).unwrap();
+    assert_eq!(session.undo_label(), Some("Place No-Connect Flag"));
+    let schematic = session.project().schematic();
+    let flags = schematic.no_connects();
+    assert_eq!(flags.len(), 1);
+    assert_eq!(flags[0].position, pin);
+    assert!(schematic.junctions().len() == 1 && schematic.wires().len() == 6);
+    assert_eq!(net_map(schematic), expected_nets());
+    let text = schematic.to_file_string();
+    assert!(text.contains("(no_connect"), "{text}");
+    let reparsed = Schematic::parse(&text).unwrap();
+    assert_eq!(&reparsed, schematic);
+    assert!(session.place_no_connect(pin, &mut fresh).is_err());
+
+    let flag = flags[0].uuid;
+    let step = Nm(2_540_000);
+    session
+        .move_wiring(&[flag], step, Nm::ZERO, &mut fresh)
+        .unwrap();
+    assert_eq!(session.undo_label(), Some("Move No-Connect Flag"));
+    let moved = session.project().schematic().no_connects()[0];
+    assert_eq!(moved.position, mm(129.54, 64.77));
+    assert!(session.rotate_labels(&[flag], 1, &mut fresh).is_err());
+
+    session.delete_wiring(&[flag], &mut fresh).unwrap();
+    assert_eq!(session.undo_label(), Some("Delete No-Connect Flag"));
+    assert!(session.project().schematic().no_connects().is_empty());
+
+    for _ in 0..3 {
+        session.undo().unwrap();
+    }
+    assert_eq!(session.project(), &original);
+}
+
+#[test]
+fn annotation_numbers_new_symbols_top_to_bottom_in_one_step() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut session = Session::new(golden_project(temp.path()));
+    let mut fresh = counter();
+    let schematic = session.project().schematic();
+    let definition = schematic.lib_symbol("Device:R").unwrap().clone();
+    let r2 = schematic
+        .symbols()
+        .into_iter()
+        .find(|symbol| symbol.reference() == "R2")
+        .unwrap();
+    session.delete_symbols(&[r2.uuid]).unwrap();
+
+    let spots = [mm(152.4, 40.64), mm(139.7, 40.64), mm(139.7, 30.48)];
+    let mut placed = Vec::new();
+    for position in spots {
+        let uuid = fresh();
+        let pins = [fresh(), fresh()];
+        let placement = Placement {
+            lib_id: "Device:R",
+            position,
+            rotation_steps: 0,
+            mirror: None,
+            uuid,
+            pin_uuids: &pins,
+        };
+        session.place_symbol(&definition, placement).unwrap();
+        placed.push(uuid);
+    }
+    let before = session.project().clone();
+
+    let (changes, count) = session.annotate();
+    assert!(changes.symbols);
+    assert_eq!(count, 3);
+    assert_eq!(session.undo_label(), Some("Annotate Schematic"));
+    let symbols = session.project().schematic().symbols();
+    let reference = |uuid: Uuid| {
+        let symbol = symbols.iter().find(|symbol| symbol.uuid == uuid).unwrap();
+        symbol.reference().to_owned()
+    };
+    assert_eq!(reference(placed[2]), "R2");
+    assert_eq!(reference(placed[1]), "R4");
+    assert_eq!(reference(placed[0]), "R5");
+    let text = session.project().schematic().to_file_string();
+    assert!(text.contains("(reference \"R5\")"), "{text}");
+    assert!(!text.contains("R?"), "{text}");
+    assert!(text.contains("\"#PWR01\""), "{text}");
+
+    let (again, none) = session.annotate();
+    assert!(!again.any() && none == 0);
+    assert_eq!(session.undo_label(), Some("Annotate Schematic"));
+    session.undo().unwrap();
+    assert_eq!(session.project(), &before);
 }
 
 /// The nets of a netlist file exported by KiCad, which lists nets that have at least one

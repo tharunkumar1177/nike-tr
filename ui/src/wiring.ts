@@ -1,9 +1,10 @@
 /**
  * Geometry for schematic wiring: orthogonal routes, snapping to pins and
- * wire ends, hit-testing wires and labels, and label names. All coordinates
- * are nanometers with Y down.
+ * wire ends, hit-testing wires, labels, and no-connect flags, and label
+ * names. All coordinates are nanometers with Y down.
  */
 import type { NetLabel } from "./bindings/NetLabel";
+import type { NoConnectFlag } from "./bindings/NoConnectFlag";
 import type { SymbolInstance } from "./bindings/SymbolInstance";
 import type { WireSegment } from "./bindings/WireSegment";
 import type { Xy } from "./bindings/Xy";
@@ -18,6 +19,8 @@ export const WIRE_HIT_PX = 6;
 export const MAX_LABEL_CHARS = 256;
 /** KiCad's default label text height: 1.27 mm. */
 export const LABEL_TEXT_NM = 1_270_000;
+/** The width of a no-connect flag's X, as KiCad draws it: 1.27 mm. */
+export const NO_CONNECT_NM = 1_270_000;
 
 export interface SnappedPoint {
   point: ScreenPoint;
@@ -208,6 +211,26 @@ export function findLabelAt(
       point.y <= bounds.maxY
     ) {
       return label;
+    }
+  }
+  return null;
+}
+
+/** The topmost no-connect flag whose X, padded by `toleranceNm`, holds `point`. */
+export function findNoConnectAt(
+  flags: NoConnectFlag[],
+  point: ScreenPoint,
+  toleranceNm: number,
+): NoConnectFlag | null {
+  const reach = NO_CONNECT_NM / 2 + toleranceNm;
+  for (let index = flags.length - 1; index >= 0; index--) {
+    const flag = flags[index];
+    if (
+      flag &&
+      Math.abs(point.x - flag.position[0]) <= reach &&
+      Math.abs(point.y - flag.position[1]) <= reach
+    ) {
+      return flag;
     }
   }
   return null;

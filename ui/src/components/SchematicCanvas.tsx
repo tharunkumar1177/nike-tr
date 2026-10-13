@@ -1,9 +1,9 @@
 /**
- * The schematic canvas: draws symbols, wires, junctions, and net labels, and
- * drives symbol placement, wiring, label and power symbol placement,
- * selection, dragging, transforms, and deletion on top of the generic canvas
- * shell. Every edit is a single core command; the document diff event is the
- * source of truth for what is drawn.
+ * The schematic canvas: draws symbols, wires, junctions, net labels, and
+ * no-connect flags, and drives symbol placement, wiring, label, power symbol,
+ * and no-connect flag placement, annotation, selection, dragging, transforms,
+ * and deletion on top of the generic canvas shell. Every edit is a single core
+ * command; the document diff event is the source of truth for what is drawn.
  */
 import {
   type KeyboardEvent,
@@ -20,10 +20,12 @@ import type { JunctionDot } from "../bindings/JunctionDot";
 import type { LibraryHit } from "../bindings/LibraryHit";
 import type { MirrorAxis } from "../bindings/MirrorAxis";
 import type { NetLabel } from "../bindings/NetLabel";
+import type { NoConnectFlag } from "../bindings/NoConnectFlag";
 import type { SymbolInstance } from "../bindings/SymbolInstance";
 import type { SymbolPreview } from "../bindings/SymbolPreview";
 import type { WireSegment } from "../bindings/WireSegment";
 import {
+  annotateSchematic,
   deleteSymbols,
   deleteWiring,
   describeIpcError,
@@ -32,6 +34,7 @@ import {
   moveSymbols,
   moveWiring,
   placeLabel,
+  placeNoConnect,
   placeSymbol,
   rotateLabels,
   transformSymbols,
@@ -64,6 +67,7 @@ import {
   connectionPoints,
   dedupePath,
   findLabelAt,
+  findNoConnectAt,
   findWireAt,
   isOnPin,
   isOnWire,
@@ -76,8 +80,8 @@ import { InlineLabelEditor } from "./InlineLabelEditor";
 import { PowerPicker } from "./PowerPicker";
 import type { StatusHint } from "./StatusBar";
 
-/** A canvas tool the toolbar can start. */
-export type CanvasTool = "localLabel" | "globalLabel" | "power";
+/** A canvas tool the toolbar can start. `noConnect` toggles its mode. */
+export type CanvasTool = "localLabel" | "globalLabel" | "power" | "noConnect";
 
 /** A request from the library browser to start placing a symbol. */
 export interface PlacementRequest {
@@ -97,7 +101,7 @@ interface PlacingState {
   cursor: ScreenPoint | null;
 }
 
-type ItemKind = "symbol" | "wire" | "label";
+type ItemKind = "symbol" | "wire" | "label" | "noConnect";
 
 interface Selection {
   kind: ItemKind;
@@ -137,12 +141,14 @@ const SELECTION_HINTS: Record<ItemKind, string> = {
   symbol: "Symbol selected. Drag to move. R/X/Y: Transform. Del: Remove",
   wire: "Wire selected. Drag to move. Del: Remove",
   label: "Label selected. Drag to move. R: Rotate. Del: Remove",
+  noConnect: "Flag selected. Drag to move. Del: Remove",
 };
 
 const SELECTION_NOUNS: Record<ItemKind, string> = {
   symbol: "Symbol",
   wire: "Wire",
   label: "Label",
+  noConnect: "Flag",
 };
 
 function countOf(count: number, noun: string): string {
@@ -159,8 +165,12 @@ interface SchematicCanvasProps {
   wires: WireSegment[];
   junctions: JunctionDot[];
   labels: NetLabel[];
+  noConnects: NoConnectFlag[];
   wireMode: boolean;
   onWireModeChange: (active: boolean) => void;
+  onNoConnectModeChange: (active: boolean) => void;
+  /** Each increase runs Annotate Schematic once. */
+  annotateTicket: number;
   library: LibraryStatusState;
   onDownloadLibrary: () => void;
   onOpenLibrary: () => void;
@@ -187,8 +197,11 @@ export function SchematicCanvas({
   wires,
   junctions,
   labels,
+  noConnects,
   wireMode,
   onWireModeChange,
+  onNoConnectModeChange,
+  annotateTicket,
   library,
   onDownloadLibrary,
   onOpenLibrary,
@@ -207,6 +220,7 @@ export function SchematicCanvas({
   const loadTicketRef = useRef(0);
   const sizeRef = useRef<Size>({ width: 0, height: 0 });
   const wireModeRef = useRef(wireMode);
+  const annotateTicketRef = useRef(annotateTicket);
   const lastLabelRef = useRef<{ text: string; shape: GlobalLabelShape }>({
     text: "",
     shape: "input",
@@ -222,8 +236,11 @@ export function SchematicCanvas({
     null,
   );
   const [powerPickerAt, setPowerPickerAt] = useState<ScreenPoint | null>(null);
+  const [noConnectMode, setNoConnectMode] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const [commandError, setCommandError] = useState<string | null>(null);
+  /** A command result shown in the status bar until the next input. */
+  const [notice, setNotice] = useState<string | null>(null);
 
   const targets = useMemo(
     () => connectionPoints(instances, wires),
@@ -247,8 +264,32 @@ export function SchematicCanvas({
     setLabelPrompt(null);
     setLabelPlacing(null);
     setPowerPickerAt(null);
+    setNoConnectMode(false);
     setDrag(null);
   }, [exitPlacement]);
+
+  useEffect(() => {
+    onNoConnectModeChange(noConnectMode);
+  }, [noConnectMode, onNoConnectModeChange]);
+
+  useEffect(() => {
+    if (annotateTicket === annotateTicketRef.current) {
+      return;
+    }
+    annotateTicketRef.current = annotateTicket;
+    setCommandError(null);
+    void annotateSchematic().then(
+      (count) => {
+        const message =
+          count === 0
+            ? "Schematic is already fully annotated"
+            : `Annotated ${countOf(count, "symbol")}`;
+        setNotice(message);
+        setAnnouncement(message);
+      },
+      (error: unknown) => setCommandError(describeIpcError(error)),
+    );
+  }, [annotateTicket]);
 
   /** Leaves wire mode for another tool without the mode change clearing it. */
   const leaveWireMode = useCallback(() => {
@@ -332,20 +373,24 @@ export function SchematicCanvas({
     if (selection === null) {
       return;
     }
-    const present =
-      selection.kind === "symbol"
-        ? instances.some((instance) => instance.uuid === selection.uuid)
-        : selection.kind === "wire"
-          ? wires.some((segment) => segment.uuid === selection.uuid)
-          : labels.some((item) => item.uuid === selection.uuid);
-    if (!present) {
+    const items: { uuid: string }[] = {
+      symbol: instances,
+      wire: wires,
+      label: labels,
+      noConnect: noConnects,
+    }[selection.kind];
+    if (!items.some((item) => item.uuid === selection.uuid)) {
       setSelection(null);
     }
-  }, [instances, wires, labels, selection]);
+  }, [instances, wires, labels, noConnects, selection]);
 
   useEffect(() => {
     if (commandError !== null) {
       onHintChange({ text: commandError, error: true });
+    } else if (notice !== null) {
+      onHintChange({ text: notice, error: false });
+    } else if (noConnectMode) {
+      onHintChange({ text: "Click to place flag. Esc: Cancel", error: false });
     } else if (labelPrompt) {
       onHintChange({ text: "Enter label name. Esc: Cancel", error: false });
     } else if (labelPlacing) {
@@ -372,6 +417,8 @@ export function SchematicCanvas({
     }
   }, [
     commandError,
+    notice,
+    noConnectMode,
     labelPrompt,
     labelPlacing,
     placing,
@@ -434,6 +481,21 @@ export function SchematicCanvas({
     setPowerPickerAt(at);
   }, [cursorOrCenter, clearTools, leaveWireMode]);
 
+  const toggleNoConnect = useCallback(() => {
+    if (noConnectMode) {
+      setNoConnectMode(false);
+      setAnnouncement("No-connect mode ended");
+      return;
+    }
+    clearTools();
+    leaveWireMode();
+    setSelection(null);
+    setCommandError(null);
+    setNoConnectMode(true);
+    setAnnouncement("Placing no-connect flag");
+    containerRef.current?.focus();
+  }, [noConnectMode, clearTools, leaveWireMode]);
+
   useEffect(() => {
     if (toolRequest === null) {
       return;
@@ -441,10 +503,18 @@ export function SchematicCanvas({
     onToolRequestConsumed();
     if (toolRequest === "power") {
       openPowerPicker();
+    } else if (toolRequest === "noConnect") {
+      toggleNoConnect();
     } else {
       openLabelPrompt(toolRequest === "globalLabel");
     }
-  }, [toolRequest, onToolRequestConsumed, openPowerPicker, openLabelPrompt]);
+  }, [
+    toolRequest,
+    onToolRequestConsumed,
+    openPowerPicker,
+    toggleNoConnect,
+    openLabelPrompt,
+  ]);
 
   const placeAt = (world: ScreenPoint) => {
     if (!placing || !placing.preview) {
@@ -479,6 +549,11 @@ export function SchematicCanvas({
     const next = nextLabelText(labelPlacing.text);
     lastLabelRef.current = { ...lastLabelRef.current, text: next };
     setLabelPlacing({ ...labelPlacing, text: next });
+  };
+
+  const placeFlagAt = (world: ScreenPoint) => {
+    const point = snapWire(world).point;
+    runCommand(placeNoConnect([point.x, point.y]), "Flag placed");
   };
 
   const finishWire = (points: ScreenPoint[]) => {
@@ -518,6 +593,11 @@ export function SchematicCanvas({
   };
 
   const hitTest = (world: ScreenPoint): Selection | null => {
+    const tolerance = viewport ? WIRE_HIT_PX / pxPerNm(viewport.zoom) : 0;
+    const flagHit = findNoConnectAt(noConnects, world, tolerance);
+    if (flagHit) {
+      return { kind: "noConnect", uuid: flagHit.uuid };
+    }
     const labelHit = findLabelAt(labels, world);
     if (labelHit) {
       return { kind: "label", uuid: labelHit.uuid };
@@ -527,7 +607,6 @@ export function SchematicCanvas({
       return { kind: "symbol", uuid: symbolHit.uuid };
     }
     if (viewport) {
-      const tolerance = WIRE_HIT_PX / pxPerNm(viewport.zoom);
       const wireHit = findWireAt(wires, world, tolerance);
       if (wireHit) {
         return { kind: "wire", uuid: wireHit.uuid };
@@ -544,6 +623,7 @@ export function SchematicCanvas({
       return;
     }
     setCommandError(null);
+    setNotice(null);
     if (labelPrompt || powerPickerAt) {
       setLabelPrompt(null);
       setPowerPickerAt(null);
@@ -555,6 +635,10 @@ export function SchematicCanvas({
     }
     if (placing) {
       placeAt(world);
+      return;
+    }
+    if (noConnectMode) {
+      placeFlagAt(world);
       return;
     }
     if (wireMode) {
@@ -630,7 +714,7 @@ export function SchematicCanvas({
         setDrag({ ...drag, dx: delta.x, dy: delta.y });
       }
     }
-    if (!placing && !drag && !wireMode && !labelPlacing) {
+    if (!placing && !drag && !wireMode && !labelPlacing && !noConnectMode) {
       const over = position !== null && hitTest(position) !== null;
       if (over !== hover) {
         setHover(over);
@@ -660,6 +744,11 @@ export function SchematicCanvas({
       openPowerPicker();
       return true;
     }
+    if (key === "q") {
+      event.preventDefault();
+      toggleNoConnect();
+      return true;
+    }
     return false;
   };
 
@@ -676,6 +765,22 @@ export function SchematicCanvas({
       return;
     }
     const key = event.key.toLowerCase();
+    setNotice(null);
+    if (noConnectMode) {
+      if (key === "escape") {
+        event.preventDefault();
+        toggleNoConnect();
+      } else if (key === "enter") {
+        event.preventDefault();
+        const at = cursorOrCenter();
+        if (at) {
+          placeFlagAt(at);
+        }
+      } else {
+        handleToolKey(key, event);
+      }
+      return;
+    }
     if (labelPlacing) {
       if (key === "escape") {
         event.preventDefault();
@@ -774,7 +879,10 @@ export function SchematicCanvas({
   };
 
   const handleContextMenu = (event: MouseEvent<HTMLDivElement>) => {
-    if (labelPlacing) {
+    if (noConnectMode) {
+      event.preventDefault();
+      toggleNoConnect();
+    } else if (labelPlacing) {
       event.preventDefault();
       setLabelPlacing(null);
     } else if (placing) {
@@ -801,6 +909,13 @@ export function SchematicCanvas({
         ? snapWirePoint(cursor, gridSizeNm, targets, snapRadiusNm)
         : null,
     [wireMode, cursor, gridSizeNm, targets, snapRadiusNm],
+  );
+  const flagCursor = useMemo(
+    () =>
+      noConnectMode && cursor
+        ? snapWirePoint(cursor, gridSizeNm, targets, snapRadiusNm)
+        : null,
+    [noConnectMode, cursor, gridSizeNm, targets, snapRadiusNm],
   );
   const wirePreview = useMemo(
     () =>
@@ -841,12 +956,14 @@ export function SchematicCanvas({
         wires,
         junctions,
         labels,
+        noConnects,
         selectedUuid: selection?.uuid ?? null,
         drag,
         ghost,
         wirePreview,
-        snap: wireCursor,
+        snap: wireCursor ?? flagCursor,
         labelGhost,
+        noConnectGhost: flagCursor?.point ?? null,
         gridSizeNm,
       });
     },
@@ -856,11 +973,13 @@ export function SchematicCanvas({
       wires,
       junctions,
       labels,
+      noConnects,
       selection,
       drag,
       placing,
       wirePreview,
       wireCursor,
+      flagCursor,
       labelGhost,
       gridSizeNm,
     ],
@@ -876,6 +995,7 @@ export function SchematicCanvas({
   const wiringSummary = [
     countOf(wires.length, "wire"),
     countOf(junctions.length, "junction"),
+    countOf(noConnects.length, "no-connect flag"),
   ].join(", ");
 
   return (
