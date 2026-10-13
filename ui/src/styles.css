@@ -404,6 +404,18 @@ body,
   cursor: grabbing;
 }
 
+.canvas--pointer {
+  cursor: pointer;
+}
+
+.canvas--grabbing {
+  cursor: grabbing;
+}
+
+.canvas:focus {
+  outline: none;
+}
+
 .canvas__surface {
   position: absolute;
   inset: 0;
@@ -581,6 +593,14 @@ body,
 
 .status-bar__item {
   min-width: 7em;
+}
+
+.status-bar__hint {
+  color: var(--color-text-secondary);
+}
+
+.status-bar__hint--error {
+  color: var(--color-text-error);
 }
 
 /* Dialogs */

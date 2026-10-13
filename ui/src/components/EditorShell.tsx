@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { LibraryHit } from "../bindings/LibraryHit";
 import type { ProjectSnapshot } from "../bindings/ProjectSnapshot";
 import type { LibraryStatusState } from "../useLibraryStatus";
 import {
@@ -7,9 +8,9 @@ import {
   type Viewport,
   formatZoom,
 } from "../viewport";
-import { Canvas } from "./Canvas";
 import { LibraryPanel } from "./LibraryPanel";
-import { StatusBar } from "./StatusBar";
+import { type PlacementRequest, SchematicCanvas } from "./SchematicCanvas";
+import { StatusBar, type StatusHint } from "./StatusBar";
 import { Toolbar } from "./Toolbar";
 
 interface EditorShellProps {
@@ -38,8 +39,12 @@ export function EditorShell({
   onDownloadLibrary,
 }: EditorShellProps) {
   const [cursor, setCursor] = useState<ScreenPoint | null>(null);
+  const [hint, setHint] = useState<StatusHint | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const zoomLabel = viewport ? formatZoom(viewport.zoom) : "\u2014";
+  const [placementRequest, setPlacementRequest] =
+    useState<PlacementRequest | null>(null);
+  const [symbolDrag, setSymbolDrag] = useState<LibraryHit | null>(null);
+  const zoomLabel = viewport ? formatZoom(viewport.zoom) : "—";
 
   useEffect(() => {
     if (controlsDisabled) {
@@ -75,13 +80,29 @@ export function EditorShell({
       />
       <main className="editor__workspace">
         {libraryOpen && (
-          <LibraryPanel library={library} onDownload={onDownloadLibrary} />
+          <LibraryPanel
+            library={library}
+            onDownload={onDownloadLibrary}
+            onPlaceSymbol={(hit) => setPlacementRequest({ hit, at: null })}
+            onSymbolDragStart={setSymbolDrag}
+            onSymbolDragEnd={() => setSymbolDrag(null)}
+          />
         )}
-        <Canvas
+        <SchematicCanvas
           label={`Schematic sheet of ${project.name}`}
           viewport={viewport}
           gridSizeNm={project.gridSizeNm}
           sheet={project.sheet}
+          definitions={project.definitions}
+          instances={project.instances}
+          placementRequest={placementRequest}
+          onPlacementRequestConsumed={() => setPlacementRequest(null)}
+          symbolDrag={symbolDrag}
+          onSymbolDrop={(hit, at) => {
+            setSymbolDrag(null);
+            setPlacementRequest({ hit, at });
+          }}
+          onHintChange={setHint}
           onViewportChange={onViewportChange}
           onResize={onCanvasResize}
           onCursorMove={setCursor}
@@ -91,6 +112,7 @@ export function EditorShell({
         cursor={cursor}
         gridSizeNm={project.gridSizeNm}
         zoomLabel={zoomLabel}
+        hint={hint}
       />
     </div>
   );

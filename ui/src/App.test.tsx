@@ -9,7 +9,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { DocumentDiff } from "./bindings/DocumentDiff";
 import type { LibraryHit } from "./bindings/LibraryHit";
@@ -17,7 +17,18 @@ import type { LibraryStatus } from "./bindings/LibraryStatus";
 import type { LibrarySymbol } from "./bindings/LibrarySymbol";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
-import { projectSnapshot } from "./testData";
+import { snapToGrid } from "./symbols";
+import {
+  projectSnapshot,
+  resistorInstance,
+  resistorPreview,
+} from "./testData";
+import {
+  fitToSheet,
+  pxPerNm,
+  screenToWorld,
+  worldToScreen,
+} from "./viewport";
 
 type Args = Record<string, unknown>;
 type Handlers = Record<string, (args: Args) => unknown>;
@@ -49,6 +60,57 @@ function missingLibrary(
     consent,
     error: null,
   };
+}
+
+const resistorHit: LibraryHit = {
+  kind: "symbol",
+  id: 7,
+  name: "R",
+  lib: "Device",
+  description: "Resistor",
+};
+
+/** The library's Device:R entry. */
+function deviceRSymbol(): LibrarySymbol {
+  return {
+    lib: "Device",
+    name: "R",
+    description: "Resistor",
+    keywords: "R res resistor",
+    datasheet: "",
+    reference: "R",
+    footprint: "",
+    unitCount: 1,
+    pinCount: 2,
+    power: false,
+    preview: resistorPreview(),
+  };
+}
+
+/** The canvas size every observed element reports in these tests. */
+const CANVAS_SIZE = { width: 800, height: 600 };
+
+class ResizeObserverStub {
+  private readonly callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+
+  observe(_target: Element) {
+    this.callback(
+      [{ contentRect: CANVAS_SIZE } as unknown as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    );
+  }
+
+  unobserve() {
+    // Nothing to release in the stub.
+  }
+
+  disconnect() {
+    // Nothing to release in the stub.
+  }
 }
 
 const core: Handlers = {
@@ -84,6 +146,7 @@ async function emitFromCore(event: string, payload: unknown) {
 afterEach(() => {
   cleanup();
   clearMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("App", () => {
@@ -137,6 +200,8 @@ describe("App", () => {
       revision: 4,
       titleBlock: { ...opened.titleBlock, title: "Amp" },
       gridSizeNm: null,
+      definitions: null,
+      instances: null,
       history: {
         dirty: true,
         canUndo: true,
@@ -400,13 +465,7 @@ describe("Component library", () => {
 
   it("searches the library and previews the selected symbol", async () => {
     const hits: LibraryHit[] = [
-      {
-        kind: "symbol",
-        id: 7,
-        name: "R",
-        lib: "Device",
-        description: "Resistor",
-      },
+      resistorHit,
       {
         kind: "footprint",
         id: 3,
@@ -415,52 +474,11 @@ describe("Component library", () => {
         description: "Resistor SMD 0603 (1608 Metric)",
       },
     ];
-    const symbol: LibrarySymbol = {
-      lib: "Device",
-      name: "R",
-      description: "Resistor",
-      keywords: "R res resistor",
-      datasheet: "",
-      reference: "R",
-      footprint: "",
-      unitCount: 1,
-      pinCount: 2,
-      power: false,
-      preview: {
-        shapes: [
-          {
-            type: "rect",
-            start: [-1_016_000, -2_540_000],
-            end: [1_016_000, 2_540_000],
-            width: 254_000,
-            fill: "none",
-          },
-        ],
-        pins: [
-          {
-            connection: [0, -3_810_000],
-            body: [0, -2_540_000],
-            number: "1",
-            name: "~",
-            electrical: "passive",
-          },
-          {
-            connection: [0, 3_810_000],
-            body: [0, 2_540_000],
-            number: "2",
-            name: "~",
-            electrical: "passive",
-          },
-        ],
-        pin_numbers_visible: false,
-        pin_names_visible: false,
-      },
-    };
     const calls = mockCore({
       ...core,
       get_project: () => projectSnapshot(),
       search_library: () => hits,
-      get_library_symbol: () => symbol,
+      get_library_symbol: () => deviceRSymbol(),
     });
 
     render(<App />);
@@ -508,5 +526,290 @@ describe("Component library", () => {
     expect(
       await screen.findByText('No matches found for "zzzz".'),
     ).toBeTruthy();
+  });
+});
+
+describe("Symbol placement", () => {
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+  });
+
+  function canvasContainer(): HTMLElement {
+    const surface = screen.getByRole("img", {
+      name: "Schematic sheet of amp",
+    });
+    const container = surface.parentElement;
+    if (!container) {
+      throw new Error("canvas container not found");
+    }
+    return container;
+  }
+
+  function fittedViewport() {
+    return fitToSheet(CANVAS_SIZE, projectSnapshot().sheet);
+  }
+
+  /** Lets the definition load triggered by starting placement settle. */
+  async function flushCore() {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  async function searchForResistor(): Promise<HTMLElement> {
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Component Library" }),
+    );
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search symbols and footprints" }),
+      { target: { value: "R" } },
+    );
+    const options = await screen.findAllByRole("option");
+    const first = options[0];
+    if (!first) {
+      throw new Error("no search results");
+    }
+    return first;
+  }
+
+  function placementCore(): { cmd: string; args: Args }[] {
+    return mockCore({
+      ...core,
+      get_project: () => projectSnapshot(),
+      search_library: () => [resistorHit],
+      get_library_symbol: () => deviceRSymbol(),
+      place_symbol: () => null,
+    });
+  }
+
+  it("places a symbol from the browser at the snapped cursor position", async () => {
+    const calls = placementCore();
+
+    render(<App />);
+    const option = await searchForResistor();
+    fireEvent.doubleClick(option);
+
+    expect(await screen.findByText("Placing R")).toBeTruthy();
+    expect(
+      screen.getByText("Click to place. R: Rotate, X/Y: Mirror. Esc: Cancel"),
+    ).toBeTruthy();
+    await flushCore();
+
+    const canvas = canvasContainer();
+    expect(document.activeElement).toBe(canvas);
+    expect(
+      calls.find((call) => call.cmd === "get_library_symbol")?.args,
+    ).toEqual({ id: 7 });
+
+    const at = worldToScreen(fittedViewport(), 63_510_000, 50_810_000);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: at.x,
+      clientY: at.y,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: at.x,
+      clientY: at.y,
+    });
+
+    await waitFor(() =>
+      expect(calls.find((call) => call.cmd === "place_symbol")?.args).toEqual({
+        placement: {
+          libraryId: 7,
+          xNm: 63_500_000,
+          yNm: 50_800_000,
+          rotation: 0,
+          mirror: null,
+        },
+      }),
+    );
+    expect(await screen.findByText("Symbol placed")).toBeTruthy();
+  });
+
+  it("starts placement with Enter and sends the R rotation", async () => {
+    const calls = placementCore();
+
+    render(<App />);
+    const option = await searchForResistor();
+    fireEvent.click(option);
+    fireEvent.keyDown(option, { key: "Enter" });
+
+    expect(await screen.findByText("Placing R")).toBeTruthy();
+    await flushCore();
+
+    const canvas = canvasContainer();
+    fireEvent.keyDown(canvas, { key: "r" });
+    fireEvent.keyDown(canvas, { key: "Enter" });
+
+    const center = screenToWorld(fittedViewport(), 400, 300);
+    await waitFor(() => {
+      const place = calls.find((call) => call.cmd === "place_symbol");
+      expect(place?.args).toEqual({
+        placement: {
+          libraryId: 7,
+          xNm: snapToGrid(center.x, 1_270_000),
+          yNm: snapToGrid(center.y, 1_270_000),
+          rotation: 3,
+          mirror: null,
+        },
+      });
+    });
+  });
+
+  it("exits placement on Escape without placing", async () => {
+    const calls = placementCore();
+
+    render(<App />);
+    const option = await searchForResistor();
+    fireEvent.doubleClick(option);
+    expect(await screen.findByText("Placing R")).toBeTruthy();
+    await flushCore();
+
+    const canvas = canvasContainer();
+    fireEvent.keyDown(canvas, { key: "Escape" });
+    expect(
+      screen.queryByText(
+        "Click to place. R: Rotate, X/Y: Mirror. Esc: Cancel",
+      ),
+    ).toBeNull();
+
+    const at = worldToScreen(fittedViewport(), 63_500_000, 50_800_000);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: at.x,
+      clientY: at.y,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: at.x,
+      clientY: at.y,
+    });
+    expect(calls.some((call) => call.cmd === "place_symbol")).toBe(false);
+  });
+
+  it("selects a placed symbol and deletes it", async () => {
+    const calls = mockCore({
+      ...core,
+      get_project: () =>
+        projectSnapshot({
+          definitions: { "Device:R": resistorPreview() },
+          instances: [resistorInstance()],
+        }),
+      delete_symbols: () => null,
+    });
+
+    render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "amp" });
+    expect(await screen.findByText("R? Device:R")).toBeTruthy();
+
+    const canvas = canvasContainer();
+    const at = worldToScreen(fittedViewport(), 100_000_000, 50_000_000);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: at.x,
+      clientY: at.y,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: at.x,
+      clientY: at.y,
+    });
+
+    expect(await screen.findByText("Symbol selected")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Symbol selected. Drag to move. R/X/Y: Transform. Del: Remove",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.keyDown(canvas, { key: "Delete" });
+    await waitFor(() =>
+      expect(
+        calls.find((call) => call.cmd === "delete_symbols")?.args,
+      ).toEqual({ uuids: ["symbol-1"] }),
+    );
+    expect(await screen.findByText("Symbol deleted")).toBeTruthy();
+  });
+
+  it("moves a dragged symbol with one command on release", async () => {
+    const calls = mockCore({
+      ...core,
+      get_project: () =>
+        projectSnapshot({
+          definitions: { "Device:R": resistorPreview() },
+          instances: [resistorInstance()],
+        }),
+      move_symbols: () => null,
+    });
+
+    render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "amp" });
+
+    const canvas = canvasContainer();
+    const viewport = fittedViewport();
+    const at = worldToScreen(viewport, 100_000_000, 50_000_000);
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 1,
+      clientX: at.x,
+      clientY: at.y,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 1,
+      clientX: at.x + 32,
+      clientY: at.y,
+      buttons: 1,
+    });
+    fireEvent.pointerUp(canvas, {
+      pointerId: 1,
+      clientX: at.x + 32,
+      clientY: at.y,
+    });
+
+    await waitFor(() =>
+      expect(calls.filter((call) => call.cmd === "move_symbols")).toHaveLength(
+        1,
+      ),
+    );
+    const scale = pxPerNm(viewport.zoom);
+    expect(calls.find((call) => call.cmd === "move_symbols")?.args).toEqual({
+      uuids: ["symbol-1"],
+      dxNm: snapToGrid(32 / scale, 1_270_000),
+      dyNm: 0,
+    });
+  });
+
+  it("renders symbols that arrive in a document diff", async () => {
+    const snapshot = projectSnapshot();
+    mockCore({ ...core, get_project: () => snapshot });
+
+    render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "amp" });
+
+    const diff: DocumentDiff = {
+      baseRevision: snapshot.revision,
+      revision: snapshot.revision + 1,
+      titleBlock: null,
+      gridSizeNm: null,
+      definitions: { "Device:R": resistorPreview() },
+      instances: [resistorInstance()],
+      history: {
+        ...snapshot.history,
+        dirty: true,
+        canUndo: true,
+        undoLabel: "Place Symbol",
+      },
+    };
+    await emitFromCore("document-changed", diff);
+
+    expect(await screen.findByText("R? Device:R")).toBeTruthy();
   });
 });

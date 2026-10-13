@@ -119,7 +119,19 @@ function PreviewArea({ hit }: { hit: LibraryHit }) {
   );
 }
 
-function LibraryBrowser({ library }: { library: ReadyLibrary }) {
+interface LibraryBrowserProps {
+  library: ReadyLibrary;
+  onPlaceSymbol: (hit: LibraryHit) => void;
+  onSymbolDragStart: (hit: LibraryHit) => void;
+  onSymbolDragEnd: () => void;
+}
+
+function LibraryBrowser({
+  library,
+  onPlaceSymbol,
+  onSymbolDragStart,
+  onSymbolDragEnd,
+}: LibraryBrowserProps) {
   const listId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const optionRefs = useRef<(HTMLLIElement | null)[]>([]);
@@ -182,6 +194,13 @@ function LibraryBrowser({ library }: { library: ReadyLibrary }) {
   }
 
   function onListKeyDown(event: KeyboardEvent<HTMLUListElement>) {
+    if (event.key === "Enter") {
+      if (selectedHit?.kind === "symbol") {
+        event.preventDefault();
+        onPlaceSymbol(selectedHit);
+      }
+      return;
+    }
     const current = selected ?? -1;
     const moves: Record<string, number> = {
       ArrowDown: current + 1,
@@ -255,6 +274,28 @@ function LibraryBrowser({ library }: { library: ReadyLibrary }) {
                     : -1
                 }
                 onClick={() => select(index)}
+                onDoubleClick={() => {
+                  if (hit.kind === "symbol") {
+                    onPlaceSymbol(hit);
+                  }
+                }}
+                draggable={hit.kind === "symbol"}
+                onDragStart={(event) => {
+                  if (hit.kind !== "symbol") {
+                    return;
+                  }
+                  event.dataTransfer.setData(
+                    "text/plain",
+                    `${hit.lib}:${hit.name}`,
+                  );
+                  event.dataTransfer.effectAllowed = "copy";
+                  onSymbolDragStart(hit);
+                }}
+                onDragEnd={() => {
+                  if (hit.kind === "symbol") {
+                    onSymbolDragEnd();
+                  }
+                }}
               >
                 <span className="recent-list__name">
                   {hit.name}
@@ -282,9 +323,18 @@ function LibraryBrowser({ library }: { library: ReadyLibrary }) {
 interface LibraryPanelProps {
   library: LibraryStatusState;
   onDownload: () => void;
+  onPlaceSymbol: (hit: LibraryHit) => void;
+  onSymbolDragStart: (hit: LibraryHit) => void;
+  onSymbolDragEnd: () => void;
 }
 
-export function LibraryPanel({ library, onDownload }: LibraryPanelProps) {
+export function LibraryPanel({
+  library,
+  onDownload,
+  onPlaceSymbol,
+  onSymbolDragStart,
+  onSymbolDragEnd,
+}: LibraryPanelProps) {
   let content: ReactNode;
   if (library.status === "loading") {
     content = <p className="welcome__empty library-panel__note">Loading...</p>;
@@ -295,7 +345,14 @@ export function LibraryPanel({ library, onDownload }: LibraryPanelProps) {
       </p>
     );
   } else if (library.library.state === "ready") {
-    content = <LibraryBrowser library={library.library} />;
+    content = (
+      <LibraryBrowser
+        library={library.library}
+        onPlaceSymbol={onPlaceSymbol}
+        onSymbolDragStart={onSymbolDragStart}
+        onSymbolDragEnd={onSymbolDragEnd}
+      />
+    );
   } else {
     content = (
       <div className="app-status__content library-panel__empty">

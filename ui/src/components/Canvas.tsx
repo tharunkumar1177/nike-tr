@@ -1,5 +1,9 @@
 import {
+  type DragEvent,
+  type KeyboardEvent,
+  type MouseEvent,
   type PointerEvent,
+  type RefObject,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -30,11 +34,39 @@ interface Drag {
   y: number;
 }
 
+/** Pointer and key hooks a scene layer (like the schematic) attaches to the canvas. */
+export interface CanvasInteraction {
+  onPointerDown?: (
+    world: ScreenPoint,
+    event: PointerEvent<HTMLDivElement>,
+  ) => void;
+  onPointerUp?: (
+    world: ScreenPoint,
+    event: PointerEvent<HTMLDivElement>,
+  ) => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
+}
+
 interface CanvasProps {
   label: string;
   viewport: Viewport | null;
   gridSizeNm: number;
   sheet: SheetDimensions;
+  /** When given, used instead of the internal ref so callers can focus the canvas. */
+  containerRef?: RefObject<HTMLDivElement | null>;
+  /** Draws scene content above the grid, in screen space. */
+  drawScene?: (
+    context: CanvasRenderingContext2D,
+    size: Size,
+    viewport: Viewport,
+  ) => void;
+  /** Cursor while not panning: over a symbol or dragging one. */
+  sceneCursor?: "pointer" | "grabbing" | null;
+  interaction?: CanvasInteraction | null;
+  /** Accept drops from the library browser while a symbol drag is active. */
+  dropActive?: boolean;
+  onSceneDrop?: (world: ScreenPoint, event: DragEvent<HTMLDivElement>) => void;
   onViewportChange: ViewportUpdate;
   onResize: (size: Size) => void;
   onCursorMove: (position: ScreenPoint | null) => void;
@@ -56,10 +88,10 @@ function drawSheet(
   viewport: Viewport,
   gridSizeNm: number,
   sheet: SheetDimensions,
-) {
+): CanvasRenderingContext2D | null {
   const context = canvas.getContext("2d");
   if (!context) {
-    return;
+    return null;
   }
   const ratio = window.devicePixelRatio || 1;
   const pixelWidth = Math.round(size.width * ratio);
@@ -125,6 +157,7 @@ function drawSheet(
     Math.round(bottomRight.x - topLeft.x),
     Math.round(bottomRight.y - topLeft.y),
   );
+  return context;
 }
 
 export function Canvas({
@@ -132,11 +165,18 @@ export function Canvas({
   viewport,
   gridSizeNm,
   sheet,
+  containerRef: outerContainerRef,
+  drawScene,
+  sceneCursor = null,
+  interaction = null,
+  dropActive = false,
+  onSceneDrop,
   onViewportChange,
   onResize,
   onCursorMove,
 }: CanvasProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const localContainerRef = useRef<HTMLDivElement>(null);
+  const containerRef = outerContainerRef ?? localContainerRef;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<Drag | null>(null);
   const callbacksRef = useRef({ onViewportChange, onResize });
@@ -217,8 +257,26 @@ export function Canvas({
     if (!canvas || !viewport || size.width === 0 || size.height === 0) {
       return;
     }
-    drawSheet(canvas, size, viewport, gridSizeNm, sheet);
-  }, [viewport, size, gridSizeNm, sheet]);
+    const context = drawSheet(canvas, size, viewport, gridSizeNm, sheet);
+    if (context) {
+      drawScene?.(context, size, viewport);
+    }
+  }, [viewport, size, gridSizeNm, sheet, drawScene]);
+
+  const worldAt = (
+    event: { clientX: number; clientY: number },
+    element: HTMLDivElement,
+  ): ScreenPoint | null => {
+    if (!viewport) {
+      return null;
+    }
+    const rect = element.getBoundingClientRect();
+    return screenToWorld(
+      viewport,
+      event.clientX - rect.left,
+      event.clientY - rect.top,
+    );
+  };
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button === 1 || (event.button === 0 && spaceHeld)) {
@@ -230,6 +288,11 @@ export function Canvas({
         y: event.clientY,
       };
       setPanning(true);
+      return;
+    }
+    const world = worldAt(event, event.currentTarget);
+    if (world) {
+      interaction?.onPointerDown?.(world, event);
     }
   };
 
@@ -254,23 +317,47 @@ export function Canvas({
       dragRef.current = null;
       setPanning(false);
     }
+    const world = worldAt(event, event.currentTarget);
+    if (world) {
+      interaction?.onPointerUp?.(world, event);
+    }
   };
 
   const cursorClass = panning
     ? "canvas--panning"
     : spaceHeld
       ? "canvas--pan-ready"
-      : "";
+      : sceneCursor
+        ? `canvas--${sceneCursor}`
+        : "";
 
   return (
     <div
       ref={containerRef}
       className={`canvas ${cursorClass}`}
+      tabIndex={0}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endPan}
       onPointerCancel={endPan}
       onPointerLeave={() => onCursorMove(null)}
+      onKeyDown={(event) => interaction?.onKeyDown?.(event)}
+      onContextMenu={(event) => interaction?.onContextMenu?.(event)}
+      onDragOver={(event) => {
+        if (dropActive) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={(event) => {
+        if (!dropActive || !onSceneDrop) {
+          return;
+        }
+        const world = worldAt(event, event.currentTarget);
+        if (world) {
+          event.preventDefault();
+          onSceneDrop(world, event);
+        }
+      }}
       onMouseDown={(event) => {
         if (event.button === 1) {
           event.preventDefault();
