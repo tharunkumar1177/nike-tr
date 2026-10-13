@@ -28,8 +28,8 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tron-core = { workspace = true }
 tron-library = { workspace = true }
-ts-rs = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
+ts-rs = { workspace = true, features = ["uuid-impl"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

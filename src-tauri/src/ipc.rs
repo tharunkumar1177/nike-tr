@@ -1,13 +1,20 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, PackageInfo, State, Window};
-use tron_core::{Changes, Nm, Project, Session, TITLE_BLOCK_COMMENTS, TitleBlock};
+use tron_core::kicad_value::text_arg;
+use tron_core::sexpr::SExpr;
+use tron_core::{
+    Changes, Mirror, Nm, PlacedSymbol, Placement, Point, Project, Session, SymbolPreview,
+    TITLE_BLOCK_COMMENTS, TitleBlock,
+};
 use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppErrorKind};
+use crate::library::{LibraryState, read_index};
 use crate::settings::{self, Settings};
 use crate::shell;
 
@@ -120,6 +127,10 @@ pub struct ProjectSnapshot {
     #[ts(type = "number")]
     pub grid_size_nm: i64,
     pub sheet: SheetSize,
+    /// The embedded symbol definitions as previews, keyed by library ID.
+    pub definitions: BTreeMap<String, SymbolPreview>,
+    /// Every symbol placed on the schematic.
+    pub instances: Vec<SymbolInstance>,
     pub history: HistoryStatus,
 }
 
@@ -137,9 +148,40 @@ impl ProjectSnapshot {
                 width_nm: page.width.0,
                 height_nm: page.height.0,
             },
+            definitions: symbol_definitions(project),
+            instances: symbol_instances(project),
             history: HistoryStatus::from(session),
         }
     }
+}
+
+/// The embedded symbol definitions as previews, keyed by library ID. A definition that
+/// fails to read is left out (and logged); the file itself is untouched.
+fn symbol_definitions(project: &Project) -> BTreeMap<String, SymbolPreview> {
+    let schematic = project.schematic();
+    let mut definitions = BTreeMap::new();
+    for lib_id in schematic.lib_symbol_ids() {
+        match schematic.symbol_preview(lib_id) {
+            Some(Ok(preview)) => {
+                definitions.insert(lib_id.to_owned(), preview);
+            }
+            Some(Err(error)) => {
+                eprintln!("could not read the embedded symbol {lib_id:?}: {error}");
+            }
+            None => {}
+        }
+    }
+    definitions
+}
+
+/// Every symbol placed on the schematic, in file order.
+fn symbol_instances(project: &Project) -> Vec<SymbolInstance> {
+    project
+        .schematic()
+        .symbols()
+        .iter()
+        .map(SymbolInstance::from)
+        .collect()
 }
 
 /// The parts of the document that changed between two revisions.
@@ -153,7 +195,123 @@ pub struct DocumentDiff {
     pub title_block: Option<TitleBlockFields>,
     #[ts(type = "number | null")]
     pub grid_size_nm: Option<i64>,
+    /// The full definitions map when it changed: new definitions appear, unused ones
+    /// disappear.
+    pub definitions: Option<BTreeMap<String, SymbolPreview>>,
+    /// Every placed symbol when the placement set changed.
+    pub instances: Option<Vec<SymbolInstance>>,
     pub history: HistoryStatus,
+}
+
+/// Builds the diff that takes the UI from `base_revision` to `revision`.
+fn document_diff(
+    session: &Session,
+    base_revision: u32,
+    revision: u32,
+    changes: Changes,
+) -> DocumentDiff {
+    let project = session.project();
+    DocumentDiff {
+        base_revision,
+        revision,
+        title_block: changes
+            .title_block
+            .then(|| TitleBlockFields::from(&project.title_block())),
+        grid_size_nm: changes.grid_size.then(|| project.grid_size().0),
+        definitions: changes.definitions.then(|| symbol_definitions(project)),
+        instances: changes.symbols.then(|| symbol_instances(project)),
+        history: HistoryStatus::from(session),
+    }
+}
+
+/// The Reference or Value text of a placed symbol, positioned in schematic coordinates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SymbolText {
+    pub text: String,
+    #[ts(type = "number")]
+    pub x_nm: i64,
+    #[ts(type = "number")]
+    pub y_nm: i64,
+    /// Tenths of a degree, counterclockwise, in `[0, 3600)`.
+    pub rotation: i32,
+    pub visible: bool,
+}
+
+/// The axis a symbol is mirrored across: `x` flips it horizontally, `y` vertically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum MirrorAxis {
+    #[serde(rename = "x")]
+    X,
+    #[serde(rename = "y")]
+    Y,
+}
+
+impl From<MirrorAxis> for Mirror {
+    fn from(axis: MirrorAxis) -> Mirror {
+        match axis {
+            MirrorAxis::X => Mirror::X,
+            MirrorAxis::Y => Mirror::Y,
+        }
+    }
+}
+
+impl From<Mirror> for MirrorAxis {
+    fn from(mirror: Mirror) -> MirrorAxis {
+        match mirror {
+            Mirror::X => MirrorAxis::X,
+            Mirror::Y => MirrorAxis::Y,
+        }
+    }
+}
+
+/// A symbol placed on the schematic, as the canvas draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SymbolInstance {
+    pub uuid: Uuid,
+    pub lib_id: String,
+    #[ts(type = "number")]
+    pub x_nm: i64,
+    #[ts(type = "number")]
+    pub y_nm: i64,
+    /// Tenths of a degree, counterclockwise, in `[0, 3600)`.
+    pub rotation: i32,
+    pub mirror: Option<MirrorAxis>,
+    /// Absent when the symbol has no such property.
+    pub reference: Option<SymbolText>,
+    pub value: Option<SymbolText>,
+}
+
+impl From<&PlacedSymbol> for SymbolInstance {
+    fn from(symbol: &PlacedSymbol) -> SymbolInstance {
+        let text = |key: &str| {
+            symbol
+                .properties
+                .iter()
+                .find(|property| property.key == key)
+                .map(|property| SymbolText {
+                    text: property.value.clone(),
+                    x_nm: property.position.x.0,
+                    y_nm: property.position.y.0,
+                    rotation: property.rotation.decidegrees(),
+                    visible: !property.hidden,
+                })
+        };
+        SymbolInstance {
+            uuid: symbol.uuid,
+            lib_id: symbol.lib_id.clone(),
+            x_nm: symbol.position.x.0,
+            y_nm: symbol.position.y.0,
+            rotation: symbol.rotation.decidegrees(),
+            mirror: symbol.mirror.map(MirrorAxis::from),
+            reference: text("Reference"),
+            value: text("Value"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, TS)]
@@ -163,6 +321,35 @@ pub struct ProjectProperties {
     pub title_block: TitleBlockFields,
     #[ts(type = "number")]
     pub grid_size_nm: i64,
+}
+
+/// The `place_symbol` arguments: which library symbol to place, where, and how oriented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SymbolPlacement {
+    /// The symbol's ID in the library index, from a search hit.
+    #[ts(type = "number")]
+    pub library_id: i64,
+    /// The symbol origin in schematic coordinates.
+    #[ts(type = "number")]
+    pub x_nm: i64,
+    #[ts(type = "number")]
+    pub y_nm: i64,
+    /// Rotation in 90° steps counterclockwise on screen (the KiCad angle convention).
+    pub rotation: i32,
+    /// A flip applied before the rotation.
+    pub mirror: Option<MirrorAxis>,
+}
+
+/// The `transform_symbols` argument, applied to each symbol about its own origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export)]
+pub enum SymbolTransform {
+    /// Quarter turns counterclockwise on screen (the KiCad angle convention).
+    Rotate { steps: i32 },
+    Mirror { axis: MirrorAxis },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -209,16 +396,7 @@ impl Inner {
         let base_revision = self.revision;
         self.revision = self.revision.wrapping_add(1);
         let session = self.session.as_ref().ok_or_else(AppError::no_project)?;
-        let project = session.project();
-        let diff = DocumentDiff {
-            base_revision,
-            revision: self.revision,
-            title_block: changes
-                .title_block
-                .then(|| TitleBlockFields::from(&project.title_block())),
-            grid_size_nm: changes.grid_size.then(|| project.grid_size().0),
-            history: HistoryStatus::from(session),
-        };
+        let diff = document_diff(session, base_revision, self.revision, changes);
         app.emit(DOCUMENT_CHANGED_EVENT, &diff)
             .map_err(AppError::window)?;
         shell::sync_session(app, Some(session)).map_err(AppError::window)
@@ -379,6 +557,114 @@ pub fn redo(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> 
     inner.publish(&app, changes)
 }
 
+/// Places a library symbol on the schematic as one undo step. The definition comes from
+/// the cached library index, so raw KiCad text never crosses IPC.
+#[tauri::command]
+pub fn place_symbol(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    library: State<'_, LibraryState>,
+    placement: SymbolPlacement,
+) -> Result<(), AppError> {
+    let definition = read_index(&app, &library, |index| {
+        index.symbol_definition(placement.library_id)
+    })?;
+    let (lib_id, definition) = named_definition(definition, placement.library_id)?;
+    let pin_count = tron_core::symbol::definition_pin_numbers(&definition).len();
+    let pin_uuids: Vec<Uuid> = (0..pin_count).map(|_| Uuid::new_v4()).collect();
+    let placement = Placement {
+        lib_id: &lib_id,
+        position: Point::new(Nm(placement.x_nm), Nm(placement.y_nm)),
+        rotation_steps: placement.rotation,
+        mirror: placement.mirror.map(Mirror::from),
+        uuid: Uuid::new_v4(),
+        pin_uuids: &pin_uuids,
+    };
+    let mut inner = state.lock();
+    let changes = inner.session_mut()?.place_symbol(&definition, placement)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// The `<lib>:<name>` and node of the definition a library symbol ID resolves to.
+fn named_definition(
+    definition: Option<SExpr>,
+    library_id: i64,
+) -> Result<(String, SExpr), AppError> {
+    let Some(definition) = definition else {
+        return Err(AppError::new(
+            AppErrorKind::Library,
+            "The symbol is not in the component library.",
+            Some(format!("The index has no symbol with ID {library_id}.")),
+        ));
+    };
+    let Some(lib_id) = text_arg(&definition, 0).map(str::to_owned) else {
+        return Err(AppError::new(
+            AppErrorKind::Library,
+            "The component library returned a malformed symbol definition.",
+            Some(format!("The symbol with ID {library_id} has no name.")),
+        ));
+    };
+    Ok((lib_id, definition))
+}
+
+/// Moves every symbol in `uuids` by the same offset as one undo step.
+#[tauri::command]
+pub fn move_symbols(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuids: Vec<Uuid>,
+    dx_nm: i64,
+    dy_nm: i64,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let changes = inner
+        .session_mut()?
+        .move_symbols(&uuids, Nm(dx_nm), Nm(dy_nm))?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Rotates or mirrors every symbol in `uuids` about its own origin as one undo step.
+#[tauri::command]
+pub fn transform_symbols(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuids: Vec<Uuid>,
+    transform: SymbolTransform,
+) -> Result<(), AppError> {
+    let transform = match transform {
+        SymbolTransform::Rotate { steps } => tron_core::SymbolTransform::Rotate(steps),
+        SymbolTransform::Mirror { axis } => tron_core::SymbolTransform::Mirror(axis.into()),
+    };
+    let mut inner = state.lock();
+    let changes = inner.session_mut()?.transform_symbols(&uuids, transform)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Deletes every symbol in `uuids` as one undo step. Definitions no longer used by any
+/// remaining symbol leave the schematic within the same step.
+#[tauri::command]
+pub fn delete_symbols(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuids: Vec<Uuid>,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let changes = inner.session_mut()?.delete_symbols(&uuids)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn list_recent_projects(app: AppHandle) -> Result<Vec<RecentProject>, AppError> {
     recent_projects(&app)
@@ -399,10 +685,52 @@ pub fn close_window(window: Window) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use tron_library::Index;
 
     fn session() -> Session {
         Session::new(Project::new(PathBuf::from("amp"), "amp", Uuid::nil()).unwrap())
+    }
+
+    /// A real index built from the KiCad fixtures, the same one the library tests use.
+    fn fixture_index(dir: &Path) -> Index {
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/library/tests/fixtures/kicad");
+        let built = dir.join("index.db");
+        tron_library::build_index(
+            &fixtures.join("symbols"),
+            &fixtures.join("footprints"),
+            "10.0.7",
+            &built,
+        )
+        .unwrap();
+        Index::open(&built).unwrap()
+    }
+
+    fn resistor_definition(index: &Index) -> (String, SExpr) {
+        let hit = index.search("R", 1).unwrap().remove(0);
+        let definition = index.symbol_definition(hit.id).unwrap();
+        named_definition(definition, hit.id).unwrap()
+    }
+
+    /// Places the fixture resistor through the same path the command uses.
+    fn place_resistor(session: &mut Session, index: &Index) -> Changes {
+        let (lib_id, definition) = resistor_definition(index);
+        let pin_count = tron_core::symbol::definition_pin_numbers(&definition).len();
+        let pin_uuids: Vec<Uuid> = (0..pin_count).map(|_| Uuid::new_v4()).collect();
+        session
+            .place_symbol(
+                &definition,
+                Placement {
+                    lib_id: &lib_id,
+                    position: Point::new(Nm(100_000_000), Nm(50_000_000)),
+                    rotation_steps: 0,
+                    mirror: None,
+                    uuid: Uuid::new_v4(),
+                    pin_uuids: &pin_uuids,
+                },
+            )
+            .unwrap()
     }
 
     #[test]
@@ -427,6 +755,8 @@ mod tests {
         assert_eq!(json["sheet"]["widthNm"], 297_000_000);
         assert_eq!(json["sheet"]["heightNm"], 210_000_000);
         assert_eq!(json["titleBlock"]["comments"].as_array().unwrap().len(), 9);
+        assert_eq!(json["definitions"], serde_json::json!({}));
+        assert_eq!(json["instances"], serde_json::json!([]));
         assert_eq!(
             json["history"],
             serde_json::json!({
@@ -478,5 +808,118 @@ mod tests {
         let properties: ProjectProperties = serde_json::from_value(payload).unwrap();
         assert_eq!(properties.grid_size_nm, 2_540_000);
         assert_eq!(properties.title_block.revision, "A");
+    }
+
+    #[test]
+    fn symbol_payloads_deserialize_from_the_ui_arguments() {
+        let payload = serde_json::json!({
+            "libraryId": 42,
+            "xNm": 100_000_000,
+            "yNm": 50_000_000,
+            "rotation": 1,
+            "mirror": "x"
+        });
+        let placement: SymbolPlacement = serde_json::from_value(payload).unwrap();
+        assert_eq!(placement.library_id, 42);
+        assert_eq!(placement.rotation, 1);
+        assert_eq!(placement.mirror, Some(MirrorAxis::X));
+
+        let rotate: SymbolTransform =
+            serde_json::from_value(serde_json::json!({ "type": "rotate", "steps": 3 })).unwrap();
+        assert_eq!(rotate, SymbolTransform::Rotate { steps: 3 });
+        let mirror: SymbolTransform =
+            serde_json::from_value(serde_json::json!({ "type": "mirror", "axis": "y" })).unwrap();
+        assert_eq!(mirror, SymbolTransform::Mirror { axis: MirrorAxis::Y });
+    }
+
+    #[test]
+    fn a_library_symbol_resolves_to_its_named_definition() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = fixture_index(temp.path());
+        let (lib_id, definition) = resistor_definition(&index);
+        assert_eq!(lib_id, "Device:R");
+        assert_eq!(definition.head(), Some("symbol"));
+    }
+
+    #[test]
+    fn an_unknown_library_symbol_is_a_clear_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = fixture_index(temp.path());
+        let definition = index.symbol_definition(9_999).unwrap();
+        let error = named_definition(definition, 9_999).unwrap_err();
+        assert_eq!(error.kind, AppErrorKind::Library);
+        assert!(error.message.contains("not in the component library"), "{error:?}");
+    }
+
+    #[test]
+    fn a_snapshot_carries_instances_and_definitions() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = fixture_index(temp.path());
+        let mut session = session();
+        place_resistor(&mut session, &index);
+        let json = serde_json::to_value(ProjectSnapshot::new(&session, 3)).unwrap();
+
+        let instance = &json["instances"][0];
+        assert_eq!(instance["libId"], "Device:R");
+        assert_eq!(instance["xNm"], 100_000_000);
+        assert_eq!(instance["yNm"], 50_000_000);
+        assert_eq!(instance["rotation"], 0);
+        assert_eq!(instance["mirror"], serde_json::Value::Null);
+        assert_eq!(instance["uuid"].as_str().unwrap().len(), 36);
+        assert_eq!(
+            instance["reference"],
+            serde_json::json!({
+                "text": "R?",
+                "xNm": 102_032_000,
+                "yNm": 50_000_000,
+                "rotation": 900,
+                "visible": true
+            })
+        );
+        assert_eq!(instance["value"]["text"], "R");
+        assert_eq!(instance["value"]["visible"], true);
+
+        let preview = &json["definitions"]["Device:R"];
+        assert_eq!(preview["pins"].as_array().unwrap().len(), 2);
+        assert!(preview["shapes"].is_array());
+    }
+
+    #[test]
+    fn a_diff_carries_only_the_parts_that_changed() {
+        let temp = tempfile::tempdir().unwrap();
+        let index = fixture_index(temp.path());
+        let mut session = session();
+        let changes = place_resistor(&mut session, &index);
+        let json = serde_json::to_value(document_diff(&session, 1, 2, changes)).unwrap();
+        assert_eq!(json["baseRevision"], 1);
+        assert_eq!(json["revision"], 2);
+        assert!(json["instances"].is_array());
+        assert!(json["definitions"]["Device:R"].is_object());
+        assert_eq!(json["titleBlock"], serde_json::Value::Null);
+
+        let uuid = session.project().schematic().symbols()[0].uuid;
+        let changes = session
+            .move_symbols(&[uuid], Nm(1_270_000), Nm::ZERO)
+            .unwrap();
+        let json = serde_json::to_value(document_diff(&session, 2, 3, changes)).unwrap();
+        assert_eq!(json["instances"][0]["xNm"], 101_270_000);
+        assert_eq!(json["definitions"], serde_json::Value::Null);
+
+        let changes = session
+            .transform_symbols(&[uuid], tron_core::SymbolTransform::Rotate(1))
+            .unwrap();
+        let json = serde_json::to_value(document_diff(&session, 3, 4, changes)).unwrap();
+        assert_eq!(json["instances"][0]["rotation"], 900);
+
+        let changes = session
+            .transform_symbols(&[uuid], tron_core::SymbolTransform::Mirror(Mirror::Y))
+            .unwrap();
+        let json = serde_json::to_value(document_diff(&session, 4, 5, changes)).unwrap();
+        assert_eq!(json["instances"][0]["mirror"], "y");
+
+        let changes = session.delete_symbols(&[uuid]).unwrap();
+        let json = serde_json::to_value(document_diff(&session, 5, 6, changes)).unwrap();
+        assert_eq!(json["instances"], serde_json::json!([]));
+        assert_eq!(json["definitions"], serde_json::json!({}));
     }
 }

@@ -442,7 +442,7 @@ pub fn get_library_footprint(
     Ok(record.map(LibraryFootprint::from))
 }
 
-fn read_index<T>(
+pub(crate) fn read_index<T>(
     app: &AppHandle,
     state: &LibraryState,
     read: impl FnOnce(&Index) -> Result<T, LibraryError>,

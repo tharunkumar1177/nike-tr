@@ -87,3 +87,5 @@ Interaction design (designer plan):
 ## Remaining gaps and unknowns
 
 - Support for hierarchical sheets is deferred until after slice 4.
+- Rotated property text keeps a plain angle. KiCad's normalization of text angle into justification is not applied, so text may sit at 180° or 270°.
+- Placed symbols don't copy `in_bom`, `on_board`, `exclude_from_sim`, or `dnp`. Those flags are read from the embedded definition.
