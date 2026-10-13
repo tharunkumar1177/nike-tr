@@ -350,7 +350,11 @@ impl Schematic {
 
     /// Every no-connect flag with a readable position and UUID, in file order.
     pub fn no_connects(&self) -> Vec<NoConnect> {
-        self.root.args().iter().filter_map(NoConnect::read).collect()
+        self.root
+            .args()
+            .iter()
+            .filter_map(NoConnect::read)
+            .collect()
     }
 
     /// Every pin connection point of every placed symbol whose definition is embedded and
