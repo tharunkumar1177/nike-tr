@@ -20,7 +20,13 @@ Slice 4b (connectivity and netlist) is green in [CI run 38434705527](https://git
 - IPC: wiring fields in diffs and the label payload.
 - UI: Vitest covers drawing a bent wire, toggling the bend and finishing on a pin, Escape cancelling and then exiting, selecting and deleting a wire, repeated local labels with counting names and rotation, a global label with a shape (Alt+L), the power picker from the toolbar, and the picker without the library. `wiring.test.ts` covers routes, snapping, hit-testing, and label names.
 
-Slice 4c (properties and ERC) is Planned.
+Slice 4c (properties and ERC) is Partial. 4c-1 (no-connect flags and annotation) is green in [CI run 38451138951](https://github.com/tharunkumar1177/tron/actions/runs/38451138951), including the Windows installer. Covered by tests:
+
+- Core: placing a no-connect flag on the `divider` golden's free R3 pin round-trips, leaves the nets unchanged, and rejects a second flag at the same point. Moving, deleting, and rotating (rejected) flags undo back to the original bytes. Annotation numbers new resistors top to bottom and reuses a freed number (`R2`, then `R4`, `R5`), updates `(instances)`, leaves `#PWR01` alone, records nothing when nothing needs numbering, and undoes in one step. Unit tests cover reference prefix parsing.
+- IPC: `noConnects` in snapshots and diffs, and the "Place No-Connect Flag" undo label.
+- UI: Vitest covers Q mode with pin snapping and repeated placement, Escape, the core's duplicate-flag message, selecting and deleting a flag (R does nothing), and Tools > Annotate Schematic with both result messages. `wiring.test.ts` covers flag hit-testing.
+
+4c-2 to 4c-4 are Planned.
 
 ## Architecture dependencies
 
@@ -102,6 +108,8 @@ Four PRs, each green in CI on its own, built in this order.
 
 - A no-connect flag is `(no_connect (at x y) (uuid "…"))`, kept with wires and junctions in `wiring.rs`. Q places one at the snapped point. Flags are moved and deleted through `EditItems`, like wires.
 - Annotation is one `EditItems` command over the whole schematic. It skips references that start with `#` and references that don't end in `?`. Candidates are sorted by Y (top to bottom), then X, then UUID. Each gets the lowest unused number at or above 1 for its prefix. For a multi-unit `lib_id`, consecutive unannotated instances share one reference and take units 1 to N. The Reference property and the `(instances (project (path (reference) (unit))))` entry change together.
+- As built: annotation is a `Group` ("Annotate Schematic") of one `TransformSymbols`, which replaces whole symbol nodes. Instances keep their own unit instead of being packed into units 1 to N, because the canvas only draws unit 1 and every placed symbol is unit 1. An instance of a multi-unit `lib_id` joins a reference numbered earlier in the same pass when it has the same `Value` and its unit is still free there. Placed power symbols keep `#PWR?`, as planned.
+- As built (UI): the toolbar's "Add no-connect flag" button (Q, `aria-pressed`) toggles placing mode. A ghost X follows the cursor, snapping to pins and wire ends like the wire tool, and each click places a flag until Escape, Q, or right-click. Flags draw as a 1.27 mm X in `--color-primary` (`--color-focus` when selected), select and drag like labels, and can't be rotated. Hints: "Click to place flag. Esc: Cancel" and "Flag selected. Drag to move. Del: Remove". The native **Tools > Annotate Schematic** item has no shortcut and no confirmation. It shows "Annotated N symbols" or "Schematic is already fully annotated" in the status bar until the next input, and announces the same text.
 
 **4c-2. Property editing.** `edit_symbol_properties(uuid, properties)` replaces the symbol node in one `EditItems` step. Each property has a key, a value, a position, a rotation, and visibility, and Reference edits also update `(instances)`. E or a double-click opens the dialog; U and V edit Reference and Value inline. References must not be empty. Duplicates are left to ERC.
 
