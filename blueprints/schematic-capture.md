@@ -94,6 +94,57 @@ Interaction design (designer plans):
 - P opens a power picker at the cursor with GND, +5V, +3V3, and VCC, each resolved through the library search and listed only when the index has it, plus "Search library...". Without the library, it shows "Component library required" and a Download button.
 - Status hints: "Click to start wire. Esc: Exit", "Click to anchor. Double-click/Enter/Pin to finish. /: Toggle bend. Esc: Cancel", "Wire selected. Drag to move. Del: Remove", "Enter label name. Esc: Cancel", "Click to place. R: Rotate. Esc: Cancel", and "Label selected. Drag to move. R: Rotate. Del: Remove". The `aria-live` region announces mode and placement changes.
 
+### Slice 4c plan: properties and ERC (approved 2026-10-13)
+
+Four PRs, each green in CI on its own, built in this order.
+
+**4c-1. No-connect flags and annotation.**
+
+- A no-connect flag is `(no_connect (at x y) (uuid "…"))`, kept with wires and junctions in `wiring.rs`. Q places one at the snapped point. Flags are moved and deleted through `EditItems`, like wires.
+- Annotation is one `EditItems` command over the whole schematic. It skips references that start with `#` and references that don't end in `?`. Candidates are sorted by Y (top to bottom), then X, then UUID. Each gets the lowest unused number at or above 1 for its prefix. For a multi-unit `lib_id`, consecutive unannotated instances share one reference and take units 1 to N. The Reference property and the `(instances (project (path (reference) (unit))))` entry change together.
+
+**4c-2. Property editing.** `edit_symbol_properties(uuid, properties)` replaces the symbol node in one `EditItems` step. Each property has a key, a value, a position, a rotation, and visibility, and Reference edits also update `(instances)`. E or a double-click opens the dialog; U and V edit Reference and Value inline. References must not be empty. Duplicates are left to ERC.
+
+**4c-3. ERC.** `erc.rs` checks the schematic and its derived netlist and returns transient violations: kind, severity, position, the item UUIDs, and KiCad's message. Violations are never saved in `.kicad_sch`.
+
+| Rule | Message | Default | Position |
+| --- | --- | --- | --- |
+| `unannotated` | Symbol is not annotated | Error | Symbol anchor |
+| `duplicate_reference` | Duplicate reference designators | Error | Symbol anchor |
+| `pin_not_connected` | Pin not connected | Error | Pin |
+| `pin_not_driven` | Input pin not driven by any Output pins | Error | Input pin |
+| `power_pin_not_driven` | Input Power pin not driven by any Output Power pins | Error | Power input pin |
+| `pin_to_pin` | Conflict problem between pins | Matrix | Pin |
+| `label_dangling` | Label not connected | Error | Label anchor |
+| `isolated_pin_label` | Label connected to only one pin | Warning | Label anchor |
+| `unconnected_wire_endpoint` | Unconnected wire endpoint | Warning | Wire end |
+| `no_connect_connected` | (KiCad text, verify in 4c-3) | Warning | Flag |
+| `no_connect_dangling` | (KiCad text, verify in 4c-3) | Warning | Flag |
+
+- Inputs are driven by output, bidirectional, tri-state, passive, and power output pins. Open collector and open emitter pins don't drive. Power inputs need a power output, which a `PWR_FLAG` provides.
+- A no-connect flag on a pin satisfies `pin_not_connected` and `isolated_pin_label`. Duplicate references exclude `#` references and units of one multi-unit symbol.
+- The default pin matrix, from KiCad's `erc_settings.cpp` (O is OK, W is warning, E is error), with rows and columns in this order: input, output, bidirectional, tri-state, passive, not internally connected, unspecified, power input, power output, open collector, open emitter, no connect.
+
+```text
+      I  O  Bi 3S Pa NI Un PI PO OC OE NC
+I     O  O  O  O  O  O  W  O  O  O  O  E
+O     O  E  O  W  O  O  W  O  E  E  E  E
+Bi    O  O  O  O  O  O  W  O  W  O  W  E
+3S    O  W  O  O  O  O  W  W  E  W  W  E
+Pa    O  O  O  O  O  O  W  O  O  O  O  E
+NI    O  O  O  O  O  O  O  O  O  O  O  E
+Un    W  W  W  W  W  O  W  W  W  W  W  E
+PI    O  O  O  W  O  O  W  O  O  O  O  E
+PO    O  E  W  E  O  O  W  O  E  E  E  E
+OC    O  E  O  W  O  O  W  O  E  O  O  E
+OE    O  E  W  W  O  O  W  O  E  O  O  E
+NC    E  E  E  E  E  E  E  E  E  E  E  E
+```
+
+- The ERC panel runs the check, lists violations by severity, and pans the canvas to a violation when it's clicked.
+
+**4c-4. Exclusions and severities.** `.kicad_pro` is read as JSON with every key kept. Only the ERC section changes: `rule_severities` and the exclusion list. An `EditErcSettings` command makes changes undoable and marks the project unsaved. The exact KiCad 10 exclusion string identity must be verified against a KiCad-written `.kicad_pro` before 4c-4 is built.
+
 ## Related blueprints
 
 ### Required
