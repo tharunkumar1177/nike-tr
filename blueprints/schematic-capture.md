@@ -32,7 +32,13 @@ Slice 4c (properties and ERC) is Partial. 4c-1 (no-connect flags and annotation)
 - IPC: fields round-trip through the UI payload.
 - UI: Vitest covers E opening the dialog with focus on Reference, the empty-Reference error, Show toggles, Add Field with focus on the new name, Apply's payload, removing a custom field from a double-click, a core error shown in the dialog, and U editing Reference inline with validation.
 
-4c-3 and 4c-4 are Planned.
+4c-3 (ERC) is green in CI (see `ROADMAP.md`). Covered by tests:
+
+- Core: the `divider` golden reports exactly `power_pin_not_driven` on `#PWR01` and `#PWR02`, `pin_not_connected` on R3 pin 2, and `isolated_pin_label` on VIN, with stable, repeatable results. Edits raise and clear `pin_not_connected`, `no_connect_dangling`, `unconnected_wire_endpoint`, `label_dangling`, `unannotated`, and `duplicate_reference`, with unique IDs. Unit tests cover the matrix's symmetry, sample cells, and unique rule keys.
+- IPC: the violation payload's shape.
+- UI: Vitest covers opening from the menu, grouping and row text, marker selection, keyboard and click selection, "Out of date" after an edit, the clean result, a core error, closing, and the toolbar toggle.
+
+4c-4 is Planned.
 
 ## Architecture dependencies
 
@@ -135,8 +141,8 @@ Four PRs, each green in CI on its own, built in this order.
 | `label_dangling` | Label not connected | Error | Label anchor |
 | `isolated_pin_label` | Label connected to only one pin | Warning | Label anchor |
 | `unconnected_wire_endpoint` | Unconnected wire endpoint | Warning | Wire end |
-| `no_connect_connected` | (KiCad text, verify in 4c-3) | Warning | Flag |
-| `no_connect_dangling` | (KiCad text, verify in 4c-3) | Warning | Flag |
+| `no_connect_connected` | A pin with a "no connection" flag is connected | Warning | Flag |
+| `no_connect_dangling` | Unconnected "no connection" flag | Warning | Flag |
 
 - Inputs are driven by output, bidirectional, tri-state, passive, and power output pins. Open collector and open emitter pins don't drive. Power inputs need a power output, which a `PWR_FLAG` provides.
 - A no-connect flag on a pin satisfies `pin_not_connected` and `isolated_pin_label`. Duplicate references exclude `#` references and units of one multi-unit symbol.
@@ -159,6 +165,9 @@ NC    E  E  E  E  E  E  E  E  E  E  E  E
 ```
 
 - The ERC panel runs the check, lists violations by severity, and pans the canvas to a violation when it's clicked.
+- As built: `erc::check` (and `Session::erc`) builds its own connectivity with the netlist's rules, because `Net` has no positions or UUIDs. Every pin counts as being at its point, hidden ones included, but hidden pins never raise `pin_not_connected`. A violation's `id` is `rule:` plus its item keys (symbol UUID and pin number for pins, `start` or `end` for wire ends). `pin_to_pin` takes its severity from the matrix and is reported once per pair, each pin picking its worst and then nearest conflict. `pin_not_driven` and `power_pin_not_driven` are reported once per net, at the first undriven pin. `isolated_pin_label` applies to local and global labels on a net with one pin and no flag on it. Messages and default severities were verified against `erc_item.cpp` and `erc_settings.cpp`.
+- As built (netlist): a power symbol joins a net by its Value only when its pin is a power input, as in KiCad, so `PWR_FLAG` (a power output) no longer merges the nets it sits on.
+- As built (UI): **Tools > Electrical Rules Checker** and a toolbar button (clipboard check, left of Project Properties, `aria-pressed`, no shortcut) toggle a 240 px panel docked below the canvas. ERC runs only when the user clicks Run ERC. States: never run, "Running checks...", "No violations found.", a core error, and an `Errors (N)` / `Warnings (N)` listbox. Each row shows the message over the item descriptions. Up, Down, Home, and End select, and Enter or a click centers the canvas on the violation. Markers are 12 px hollow diamonds in the error or warning color (`--color-focus` when selected), drawn only while the panel is open. Clicking a marker selects its row. Results are "Out of date" once the document revision passes the run's, which also fades the markers and makes Run ERC primary. Each run announces "ERC complete: N errors, M warnings" or "ERC complete: No violations found".
 
 **4c-4. Exclusions and severities.** `.kicad_pro` is read as JSON with every key kept. Only the ERC section changes: `rule_severities` and the exclusion list. An `EditErcSettings` command makes changes undoable and marks the project unsaved. The exact KiCad 10 exclusion string identity must be verified against a KiCad-written `.kicad_pro` before 4c-4 is built.
 
