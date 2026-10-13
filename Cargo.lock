@@ -4114,6 +4114,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "ts-rs",
  "uuid",
 ]
 

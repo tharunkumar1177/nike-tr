@@ -332,7 +332,9 @@ impl Session {
         pin_uuids: &[Uuid],
     ) -> Result<Changes, CoreError> {
         if lib_id.is_empty() {
-            return Err(CoreError::InvalidEdit("The library ID is empty.".to_owned()));
+            return Err(CoreError::InvalidEdit(
+                "The library ID is empty.".to_owned(),
+            ));
         }
         if self.project.schematic().symbol(uuid).is_some() {
             return Err(CoreError::InvalidEdit(
@@ -366,30 +368,22 @@ impl Session {
             let index = self.project.schematic().definition_insert_index(lib_id);
             vec![(index, renamed)]
         };
+        let created_lib_symbols = created_lib_symbols && !definitions.is_empty();
         Ok(self.execute(Command::PlaceSymbols {
             symbols: vec![(index, node)],
             definitions,
-            created_lib_symbols: created_lib_symbols && !definitions.is_empty(),
+            created_lib_symbols,
         }))
     }
 
     /// Moves every symbol in `uuids` by `(dx, dy)` as one undo step.
-    pub fn move_symbols(
-        &mut self,
-        uuids: &[Uuid],
-        dx: Nm,
-        dy: Nm,
-    ) -> Result<Changes, CoreError> {
+    pub fn move_symbols(&mut self, uuids: &[Uuid], dx: Nm, dy: Nm) -> Result<Changes, CoreError> {
         let uuids = dedupe(uuids);
         if uuids.is_empty() || (dx == Nm::ZERO && dy == Nm::ZERO) {
             return Ok(Changes::default());
         }
         self.check_symbols(&uuids)?;
-        Ok(self.execute(Command::MoveSymbols {
-            uuids,
-            dx,
-            dy,
-        }))
+        Ok(self.execute(Command::MoveSymbols { uuids, dx, dy }))
     }
 
     /// Rotates or mirrors every symbol in `uuids` about its own origin as one undo step.
@@ -539,9 +533,7 @@ fn dedupe(uuids: &[Uuid]) -> Vec<Uuid> {
 }
 
 fn missing_symbol() -> CoreError {
-    CoreError::InvalidEdit(
-        "A symbol in the selection is not placed on the schematic.".to_owned(),
-    )
+    CoreError::InvalidEdit("A symbol in the selection is not placed on the schematic.".to_owned())
 }
 
 fn validate_title_block(block: &TitleBlock) -> Result<(), CoreError> {
@@ -831,10 +823,7 @@ mod tests {
             .unwrap();
         assert!(changes.symbols && !changes.definitions);
         let symbol = session.project().schematic().symbols()[0].clone();
-        assert_eq!(
-            symbol.position,
-            Point::new(Nm(110_000_000), Nm(45_000_000))
-        );
+        assert_eq!(symbol.position, Point::new(Nm(110_000_000), Nm(45_000_000)));
         assert_eq!(
             symbol.properties[0].position,
             Point::new(Nm(112_032_000), Nm(45_000_000))

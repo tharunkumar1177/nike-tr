@@ -1,11 +1,10 @@
 use std::fs;
 use std::path::Path;
 
-use tron_core::{Angle, Mirror, Nm, Point, Project, Session};
 use tron_core::kicad::Schematic;
 use tron_core::symbol::{Fill, Pin, Shape, Xy};
+use tron_core::{Angle, Mirror, Nm, Point, Project, Session};
 use uuid::Uuid;
-
 
 const GOLDEN: &str = include_str!("golden/symbols/amp.kicad_sch");
 
@@ -58,14 +57,23 @@ fn placed_symbols_read_as_typed_instances() {
     assert_eq!(first.pins.len(), 2);
     assert_eq!(first.properties.len(), 4);
     let reference = &first.properties[0];
-    assert_eq!(reference.position, Point::new(Nm(116_332_000), Nm(85_090_000)));
+    assert_eq!(
+        reference.position,
+        Point::new(Nm(116_332_000), Nm(85_090_000))
+    );
     assert_eq!(reference.rotation, Angle::from_decidegrees(900));
     assert!(!reference.hidden);
-    assert!(first.properties[2].hidden, "the Footprint property is hidden");
+    assert!(
+        first.properties[2].hidden,
+        "the Footprint property is hidden"
+    );
 
     let rotated = &symbols[1];
     assert_eq!(rotated.rotation, Angle::from_decidegrees(900));
-    assert_eq!(rotated.properties[0].rotation, Angle::from_decidegrees(1800));
+    assert_eq!(
+        rotated.properties[0].rotation,
+        Angle::from_decidegrees(1800)
+    );
     assert_eq!(rotated.reference(), "R2");
 
     let mirrored = &symbols[2];
@@ -163,7 +171,10 @@ fn placing_moving_and_deleting_through_a_session_survives_a_reload() {
 
     session.save().unwrap();
     assert!(!session.is_dirty());
-    assert_eq!(Project::load(session.project().dir()).unwrap(), *session.project());
+    assert_eq!(
+        Project::load(session.project().dir()).unwrap(),
+        *session.project()
+    );
 }
 
 #[test]

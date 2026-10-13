@@ -334,8 +334,7 @@ impl Schematic {
 
     /// The root sheet's own `(uuid ...)`, which placed symbols reference in `(instances ...)`.
     pub fn sheet_uuid(&self) -> Option<Uuid> {
-        child_text(&self.root, "uuid")
-            .and_then(|text| Uuid::parse_str(text).ok())
+        child_text(&self.root, "uuid").and_then(|text| Uuid::parse_str(text).ok())
     }
 
     /// Builds the placed symbol and its file node for a place command. `definition` is the
@@ -373,17 +372,18 @@ impl Schematic {
         let mut properties = Vec::with_capacity(PLACED_PROPERTY_KEYS.len());
         let mut definition_properties = Vec::with_capacity(PLACED_PROPERTY_KEYS.len());
         for key in PLACED_PROPERTY_KEYS {
-            let definition_node = children(definition, "property")
-                .find(|item| text_arg(item, 0) == Some(key));
+            let definition_node =
+                children(definition, "property").find(|item| text_arg(item, 0) == Some(key));
             match definition_node {
                 Some(node) => {
-                    let mut property = SymbolProperty::read(node).ok_or_else(|| {
-                        format!("the definition's {key} property is malformed")
-                    })?;
+                    let mut property = SymbolProperty::read(node)
+                        .ok_or_else(|| format!("the definition's {key} property is malformed"))?;
                     if key == "Reference" {
                         property.value.push('?');
                     }
-                    properties.push(place_property(property, position, mirror, quarter, rotation));
+                    properties.push(place_property(
+                        property, position, mirror, quarter, rotation,
+                    ));
                     definition_properties.push(Some(node));
                 }
                 None => {
@@ -678,8 +678,7 @@ impl PlacedSymbol {
         let pins = children(node, "pin")
             .filter_map(|pin| {
                 let number = pin.args().first().and_then(SExpr::text)?.to_owned();
-                let uuid = child_text(pin, "uuid")
-                    .and_then(|text| Uuid::parse_str(text).ok())?;
+                let uuid = child_text(pin, "uuid").and_then(|text| Uuid::parse_str(text).ok())?;
                 Some(PlacedPin { number, uuid })
             })
             .collect();
@@ -784,8 +783,14 @@ impl PlacedSymbol {
         if let Some(mirror) = self.mirror {
             items.push(SExpr::node("mirror", vec![SExpr::atom(mirror.as_str())]));
         }
-        items.push(SExpr::node("unit", vec![SExpr::atom(self.unit.to_string())]));
-        items.push(SExpr::node("uuid", vec![SExpr::string(self.uuid.to_string())]));
+        items.push(SExpr::node(
+            "unit",
+            vec![SExpr::atom(self.unit.to_string())],
+        ));
+        items.push(SExpr::node(
+            "uuid",
+            vec![SExpr::string(self.uuid.to_string())],
+        ));
         for (property, previous) in self.properties.iter().zip(definition_properties) {
             items.push(property.to_node(previous));
         }
@@ -923,8 +928,7 @@ fn placed_uuid(node: &SExpr) -> Option<Uuid> {
     if node.head() != Some("symbol") {
         return None;
     }
-    child_text(node, "uuid")
-        .and_then(|text| Uuid::parse_str(text).ok())
+    child_text(node, "uuid").and_then(|text| Uuid::parse_str(text).ok())
 }
 
 /// A definition property copied into a placement: its `(at ...)` flipped to the schematic's
@@ -1178,10 +1182,7 @@ mod tests {
         assert_eq!(symbols.len(), 1);
         let symbol = &symbols[0];
         assert_eq!(symbol.lib_id, "Device:R");
-        assert_eq!(
-            symbol.position,
-            Point::new(Nm(114_300_000), Nm(85_090_000))
-        );
+        assert_eq!(symbol.position, Point::new(Nm(114_300_000), Nm(85_090_000)));
         assert_eq!(symbol.rotation, Angle::from_decidegrees(900));
         assert_eq!(symbol.mirror, Some(Mirror::Y));
         assert_eq!((symbol.unit, symbol.reference()), (1, "R1"));
@@ -1278,7 +1279,10 @@ mod tests {
             rotated.properties[0].position,
             Point::new(Nm(98_730_000), Nm(47_460_000))
         );
-        assert_eq!(rotated.properties[0].rotation, Angle::from_decidegrees(1800));
+        assert_eq!(
+            rotated.properties[0].rotation,
+            Angle::from_decidegrees(1800)
+        );
         assert_eq!(symbol.rotated(4), symbol);
         assert_eq!(symbol.rotated(-3), symbol.rotated(1));
 
@@ -1288,7 +1292,10 @@ mod tests {
             mirrored.properties[0].position,
             Point::new(Nm(97_460_000), Nm(48_730_000))
         );
-        assert_eq!(mirrored.properties[0].rotation, Angle::from_decidegrees(900));
+        assert_eq!(
+            mirrored.properties[0].rotation,
+            Angle::from_decidegrees(900)
+        );
         assert_eq!(mirrored.mirrored(Mirror::X), symbol);
 
         let cross = symbol.mirrored(Mirror::Y).mirrored(Mirror::X);
@@ -1390,7 +1397,10 @@ mod tests {
             rotated.properties[0].position,
             Point::new(Nm(100_000_000), Nm(47_968_000))
         );
-        assert_eq!(rotated.properties[0].rotation, Angle::from_decidegrees(1800));
+        assert_eq!(
+            rotated.properties[0].rotation,
+            Angle::from_decidegrees(1800)
+        );
 
         let (mirrored, node) = schematic
             .build_placement(
@@ -1409,7 +1419,10 @@ mod tests {
             mirrored.properties[0].position,
             Point::new(Nm(97_968_000), Nm(50_000_000))
         );
-        assert_eq!(mirrored.properties[0].rotation, Angle::from_decidegrees(900));
+        assert_eq!(
+            mirrored.properties[0].rotation,
+            Angle::from_decidegrees(900)
+        );
         assert!(node.to_pretty_string().contains("(mirror x)"));
     }
 
