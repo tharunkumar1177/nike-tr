@@ -8,7 +8,9 @@ The soundtrack is a Kokoro text-to-speech voiceover over a procedurally generate
 
 ## Current verified status
 
-**Status:** Partial. The video is verified. The soundtrack is planned and not yet verified in CI.
+**Status:** Implemented. The loudness target is still open (see gaps).
+
+The soundtrack was verified on 2026-10-13 by [run 38367970439](https://github.com/tharunkumar1177/tron/actions/runs/38367970439). Every line ended inside its scene: Schematic at frame 115, Simulation at 291, Layout at 495, AI at 681, and Outro at 860. The mix peaked at -2.7 dBFS. ffprobe found an AAC audio track, and ebur128 measured -21.6 LUFS integrated with a 9.6 LU loudness range. [Run 38366231020](https://github.com/tharunkumar1177/tron/actions/runs/38366231020) had failed the line-length check as intended, on a longer Outro line that ended at frame 900.
 
 The video was verified on 2026-10-12 by these CI runs:
 
@@ -72,9 +74,9 @@ None
 - [x] The MP4 is uploaded as the `promo-video` artifact.
 - [x] A run without a committed lockfile uploads `promo-lockfile`.
 - [x] The app's `CI` workflow stays green and doesn't lint or install `promo/`. Verified by [run 38293438881](https://github.com/tharunkumar1177/tron/actions/runs/38293438881).
-- [ ] CI generates the soundtrack from the pinned model, and every line ends before its `endByFrame`.
-- [ ] The rendered MP4 has an AAC audio track, and the loudness is logged.
-- [ ] The `promo-video` artifact includes `soundtrack.wav`.
+- [x] CI generates the soundtrack from the pinned model, and every line ends before its `endByFrame`.
+- [x] The rendered MP4 has an AAC audio track, and the loudness is logged.
+- [x] The `promo-video` artifact includes `soundtrack.wav`.
 
 ## Remaining gaps and unknowns
 
@@ -82,3 +84,4 @@ None
 - CI checks the video's format but not how it looks. Frame-by-frame visual review is manual.
 - Rendering depends on Google Fonts being reachable from the CI runner. Generating the soundtrack depends on Hugging Face being reachable whenever the model cache misses.
 - CI checks that the audio exists, how long it is, its peak level, and its loudness. Pronunciation and the overall mix have to be checked by listening.
+- Integrated loudness is -21.6 LUFS, below the designed -14 LUFS web target. Peak normalization (-3 dBFS voice) leaves the sparse voiceover quiet. Reaching -14 LUFS needs loudness normalization with a true-peak limiter in `audio/generate.js` or an ffmpeg `loudnorm` pass.
