@@ -16,7 +16,6 @@ import {
   MAX_FIELD_VALUE_CHARS,
   fieldsError,
   isMandatoryField,
-  newFieldName,
   sameFields,
 } from "../symbolFields";
 import { RemoveIcon } from "./icons";
@@ -63,12 +62,18 @@ export function SymbolPropertiesDialog({
   const problem = fieldsError(edited);
   const error = problem ?? coreError;
 
-  // Focus the name of a field the user just added.
+  // Focus and select the name of a field the user just added.
   useEffect(() => {
     if (focusIdRef.current === null) {
       return;
     }
-    document.getElementById(`${idPrefix}-name-${focusIdRef.current}`)?.focus();
+    const input = document.getElementById(
+      `${idPrefix}-name-${focusIdRef.current}`,
+    );
+    if (input instanceof HTMLInputElement) {
+      input.focus();
+      input.select();
+    }
     focusIdRef.current = null;
   });
 
@@ -86,9 +91,9 @@ export function SymbolPropertiesDialog({
       ...current,
       {
         id,
-        name: newFieldName(current),
+        name: "Field",
         value: "",
-        visible: false,
+        visible: true,
         mandatory: false,
       },
     ]);
