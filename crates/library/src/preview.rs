@@ -5,13 +5,16 @@
 //! schematic and board geometry. Points serialize as `[x, y]` to keep the index small.
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 use tron_core::units::Point;
+use ts_rs::TS;
 
 /// A point in nanometers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct Xy(#[ts(type = "number")] pub i64, #[ts(type = "number")] pub i64);
+pub struct Xy(
+    #[ts(type = "number")] pub i64,
+    #[ts(type = "number")] pub i64,
+);
 
 impl From<Point> for Xy {
     fn from(point: Point) -> Xy {

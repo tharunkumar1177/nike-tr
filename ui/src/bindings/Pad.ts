@@ -3,4 +3,20 @@ import type { PadKind } from "./PadKind";
 import type { PadShape } from "./PadShape";
 import type { Xy } from "./Xy";
 
-export type Pad = { number: string, kind: PadKind, shape: PadShape, center: Xy, size: Xy, rotation: number, corner_radius: number, drill?: Xy, };
+export type Pad = { number: string, kind: PadKind, shape: PadShape, center: Xy, 
+/**
+ * Width and height before rotation.
+ */
+size: Xy, 
+/**
+ * Tenths of a degree, counterclockwise, in `[0, 3600)`.
+ */
+rotation: number, 
+/**
+ * Zero unless the shape is a rounded rectangle.
+ */
+corner_radius: number, 
+/**
+ * Drill width and height for through-hole pads.
+ */
+drill?: Xy | null, };

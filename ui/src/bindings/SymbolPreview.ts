@@ -2,4 +2,12 @@
 import type { Pin } from "./Pin";
 import type { Shape } from "./Shape";
 
-export type SymbolPreview = { shapes: Array<Shape>, pins: Array<Pin>, pin_numbers_visible: boolean, pin_names_visible: boolean, };
+/**
+ * The unit 1 drawing of a symbol in its normal body style, with unit 0 graphics shared by all
+ * units.
+ */
+export type SymbolPreview = { shapes: Array<Shape>, 
+/**
+ * Visible pins only.
+ */
+pins: Array<Pin>, pin_numbers_visible: boolean, pin_names_visible: boolean, };
