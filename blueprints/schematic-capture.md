@@ -6,7 +6,15 @@ The user draws a circuit by placing library symbols, connecting them with wires,
 
 ## Current verified status
 
-**Status:** Planned
+**Status:** Partial
+
+Slice 4a is green in [CI run 38406455082](https://github.com/tharunkumar1177/tron/actions/runs/38406455082), including the Windows installer. Covered by tests:
+
+- Core: placed symbols and `(lib_symbols)` round-trip a hand-written KiCad 10 golden file byte for byte. Place, move, rotate or mirror, and delete each undo and redo exactly. Definitions are added on first use and removed with the last instance.
+- IPC: payload serialization, definition lookup from the fixture index, an unknown symbol ID, and a diff walk through every command.
+- UI: Vitest covers placing from the library browser with the snapped position, R during placement, Escape, select and Delete, a drag that sends one `move_symbols`, and rendering instances from a diff. Unit tests cover snapping, transforms, bounds, and hit-testing.
+
+Slice 4b (wires, labels, properties, netlist, and ERC) is Planned.
 
 ## Architecture dependencies
 
@@ -73,12 +81,14 @@ Interaction design (designer plan):
 
 ## Relevant implementation and tests
 
-- `crates/core` — Planned
-- `ui/src` — Planned
+- `crates/core/src/symbol.rs`, `kicad_value.rs` — symbol geometry extraction, shared with `crates/library`
+- `crates/core/src/kicad.rs` — placed symbols, `(lib_symbols)`, and placement transforms. `session.rs` holds the symbol commands. Tests: `crates/core/tests/symbol_placement.rs` and `tests/golden/symbols/amp.kicad_sch`
+- `src-tauri/src/ipc.rs` — `place_symbol`, `move_symbols`, `transform_symbols`, `delete_symbols`, and the `definitions` and `instances` fields on `ProjectSnapshot` and `DocumentDiff`
+- `ui/src/components/SchematicCanvas.tsx`, `symbols.ts`, `schematicDraw.ts`, `drawShapes.ts` — the placement and selection interactions and drawing. Tests: `App.test.tsx` ("Symbol placement"), `symbols.test.ts`
 
 ## Acceptance or verification criteria
 
-- [ ] Symbols can be placed from the library, rotated, mirrored, moved, and deleted.
+- [x] Symbols can be placed from the library, rotated, mirrored, moved, and deleted.
 - [ ] Wires snap to the grid and to pins. Junctions appear automatically at T-intersections.
 - [ ] The netlist of a reference KiCad schematic matches KiCad's own netlist export.
 - [ ] ERC reports each rule violation with a jump-to-location action.
@@ -87,5 +97,6 @@ Interaction design (designer plan):
 ## Remaining gaps and unknowns
 
 - Support for hierarchical sheets is deferred until after slice 4.
+- Placement in the installed app has not been checked by hand. CI covers it only in jsdom. Opening a saved 4a schematic in KiCad itself has not been verified either.
 - Rotated property text keeps a plain angle. KiCad's normalization of text angle into justification is not applied, so text may sit at 180° or 270°.
 - Placed symbols don't copy `in_bom`, `on_board`, `exclude_from_sim`, or `dnp`. Those flags are read from the embedded definition.
