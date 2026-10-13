@@ -17,6 +17,8 @@ export function applyDiff(
     revision: diff.revision,
     titleBlock: diff.titleBlock ?? project.titleBlock,
     gridSizeNm: diff.gridSizeNm ?? project.gridSizeNm,
+    definitions: diff.definitions ?? project.definitions,
+    instances: diff.instances ?? project.instances,
     history: diff.history,
   };
 }

@@ -4114,6 +4114,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "ts-rs",
  "uuid",
 ]
 
@@ -4164,6 +4165,7 @@ checksum = "756050066659291d47a554a9f558125db17428b073c5ffce1daf5dcb0f7231d8"
 dependencies = [
  "thiserror 2.0.21",
  "ts-rs-macros",
+ "uuid",
 ]
 
 [[package]]

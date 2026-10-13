@@ -9,6 +9,8 @@ import type { LibrarySymbol } from "./bindings/LibrarySymbol";
 import type { ProjectProperties } from "./bindings/ProjectProperties";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
+import type { SymbolPlacement } from "./bindings/SymbolPlacement";
+import type { SymbolTransform } from "./bindings/SymbolTransform";
 
 export const DOCUMENT_CHANGED_EVENT = "document-changed";
 export const MENU_EVENT = "menu-action";
@@ -61,6 +63,29 @@ export function undo(): Promise<void> {
 
 export function redo(): Promise<void> {
   return invoke<void>("redo");
+}
+
+export function placeSymbol(placement: SymbolPlacement): Promise<void> {
+  return invoke<void>("place_symbol", { placement });
+}
+
+export function moveSymbols(
+  uuids: string[],
+  dxNm: number,
+  dyNm: number,
+): Promise<void> {
+  return invoke<void>("move_symbols", { uuids, dxNm, dyNm });
+}
+
+export function transformSymbols(
+  uuids: string[],
+  transform: SymbolTransform,
+): Promise<void> {
+  return invoke<void>("transform_symbols", { uuids, transform });
+}
+
+export function deleteSymbols(uuids: string[]): Promise<void> {
+  return invoke<void>("delete_symbols", { uuids });
 }
 
 export function listRecentProjects(): Promise<RecentProject[]> {
