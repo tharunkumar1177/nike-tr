@@ -116,8 +116,10 @@ jobs:
 
       - name: Report loudness
         run: |
-          npx remotion ffmpeg -hide_banner -nostats -i out/promo.mp4 \
-            -af ebur128=framelog=quiet -f null - 2>&1 | tail -n 12
+          set -o pipefail
+          npx remotion ffmpeg -hide_banner -nostats -i out/promo.mp4 -vn \
+            -af ebur128=framelog=quiet -c:a pcm_s16le -f null - 2>&1 \
+            | tail -n 12
 
       - name: Upload video
         uses: actions/upload-artifact@v7
