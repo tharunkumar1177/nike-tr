@@ -98,8 +98,8 @@ pub enum Shape {
     },
 }
 
-/// The unit 1 drawing of a symbol in its normal body style, with unit 0 graphics shared by
-/// all units.
+/// The unit 1 drawing of a symbol in its normal body style, with unit 0 graphics shared by all
+/// units.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SymbolPreview {

@@ -338,19 +338,14 @@ impl Schematic {
     }
 
     /// Builds the placed symbol and its file node for a place command. `definition` is the
-    /// flattened `(symbol ...)` the library index returns for `lib_id`: its `Reference`,
-    /// `Value`, `Footprint`, and `Datasheet` properties are copied with their `(at ...)`
-    /// offsets mirrored, rotated, and moved by the placement, and its pins get one
-    /// `(pin ...)` entry each. The reference is left unannotated (`R?`).
+    /// flattened `(symbol ...)` the library index returns for `placement.lib_id`: its
+    /// `Reference`, `Value`, `Footprint`, and `Datasheet` properties are copied with their
+    /// `(at ...)` offsets mirrored, rotated, and moved by the placement, and its pins get
+    /// one `(pin ...)` entry each. The reference is left unannotated (`R?`).
     pub(crate) fn build_placement(
         &self,
         definition: &SExpr,
-        lib_id: &str,
-        position: Point,
-        rotation_steps: i32,
-        mirror: Option<Mirror>,
-        uuid: Uuid,
-        pin_uuids: &[Uuid],
+        placement: Placement<'_>,
         project_name: &str,
     ) -> Result<(PlacedSymbol, SExpr), String> {
         if definition.head() != Some("symbol") || text_arg(definition, 0).is_none() {
@@ -360,14 +355,14 @@ impl Schematic {
             .sheet_uuid()
             .ok_or_else(|| "the schematic has no sheet (uuid) node".to_owned())?;
         let numbers = crate::symbol::definition_pin_numbers(definition);
-        if pin_uuids.len() != numbers.len() {
+        if placement.pin_uuids.len() != numbers.len() {
             return Err(format!(
                 "the definition has {} pins but {} pin uuids were given",
                 numbers.len(),
-                pin_uuids.len()
+                placement.pin_uuids.len()
             ));
         }
-        let quarter = rotation_steps.rem_euclid(4);
+        let quarter = placement.rotation_steps.rem_euclid(4);
         let rotation = Angle::from_decidegrees(quarter * 900);
         let mut properties = Vec::with_capacity(PLACED_PROPERTY_KEYS.len());
         let mut definition_properties = Vec::with_capacity(PLACED_PROPERTY_KEYS.len());
@@ -382,7 +377,11 @@ impl Schematic {
                         property.value.push('?');
                     }
                     properties.push(place_property(
-                        property, position, mirror, quarter, rotation,
+                        property,
+                        placement.position,
+                        placement.mirror,
+                        quarter,
+                        rotation,
                     ));
                     definition_properties.push(Some(node));
                 }
@@ -390,7 +389,7 @@ impl Schematic {
                     properties.push(SymbolProperty {
                         key: key.to_owned(),
                         value: if key == "Reference" { "?" } else { "" }.to_owned(),
-                        position,
+                        position: placement.position,
                         rotation: Angle::ZERO,
                         hidden: matches!(key, "Footprint" | "Datasheet"),
                     });
@@ -400,16 +399,16 @@ impl Schematic {
         }
         let pins = numbers
             .into_iter()
-            .zip(pin_uuids.iter().copied())
+            .zip(placement.pin_uuids.iter().copied())
             .map(|(number, uuid)| PlacedPin { number, uuid })
             .collect();
         let placed = PlacedSymbol {
-            lib_id: lib_id.to_owned(),
-            position,
+            lib_id: placement.lib_id.to_owned(),
+            position: placement.position,
             rotation,
-            mirror,
+            mirror: placement.mirror,
             unit: 1,
-            uuid,
+            uuid: placement.uuid,
             properties,
             pins,
         };
@@ -559,6 +558,25 @@ impl Schematic {
 
 /// The property keys copied from a definition into a placed symbol, in KiCad's order.
 const PLACED_PROPERTY_KEYS: [&str; 4] = ["Reference", "Value", "Footprint", "Datasheet"];
+
+/// How a new symbol is placed on the schematic: where it sits, how it is oriented, and the
+/// fresh UUIDs it and its pins get.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Placement<'a> {
+    /// The `<lib>:<name>` of the symbol's embedded definition.
+    pub lib_id: &'a str,
+    /// The symbol origin in schematic coordinates.
+    pub position: Point,
+    /// Rotation in 90° steps counterclockwise on screen (the KiCad angle convention).
+    pub rotation_steps: i32,
+    /// A horizontal (`Mirror::X`) or vertical (`Mirror::Y`) flip, applied before rotation.
+    pub mirror: Option<Mirror>,
+    /// The placed symbol's UUID.
+    pub uuid: Uuid,
+    /// One fresh UUID per definition pin, in the order
+    /// [`crate::symbol::definition_pin_numbers`] returns them.
+    pub pin_uuids: &'a [Uuid],
+}
 
 /// The axis a placed symbol is mirrored across, from its `(mirror x|y)` node: `X` flips it
 /// horizontally on screen, `Y` vertically.
@@ -1167,7 +1185,7 @@ mod tests {
             (effects (font (size 1.27 1.27)))) \
             (pin \"1\" (uuid \"11111111-2222-4333-8444-555555555501\") (custom keep)) \
             (instances (project \"amp\" (path \"/{SHEET_UUID}\" (reference \"R1\") (unit 1)))) \
-            (sheet_instances (path \"/\" (page \"1\"))))"
+            (sheet_instances (path \"/\" (page \"1\")))))"
         )
     }
 
@@ -1322,11 +1340,17 @@ mod tests {
         .unwrap()
     }
 
-    fn pin_uuids() -> [Uuid; 2] {
-        [
-            Uuid::parse_str("11111111-2222-4333-8444-555555555501").unwrap(),
-            Uuid::parse_str("11111111-2222-4333-8444-555555555502").unwrap(),
-        ]
+    const PINS: [Uuid; 2] = [Uuid::from_u128(3), Uuid::from_u128(4)];
+
+    fn placement(position: Point, steps: i32, mirror: Option<Mirror>) -> Placement<'static> {
+        Placement {
+            lib_id: "Device:R",
+            position,
+            rotation_steps: steps,
+            mirror,
+            uuid: Uuid::parse_str(SYMBOL_UUID).unwrap(),
+            pin_uuids: &PINS,
+        }
     }
 
     #[test]
@@ -1334,16 +1358,7 @@ mod tests {
         let schematic = Schematic::new_empty(Uuid::parse_str(SHEET_UUID).unwrap());
         let position = Point::new(Nm(114_300_000), Nm(85_090_000));
         let (placed, node) = schematic
-            .build_placement(
-                &r_definition(),
-                "Device:R",
-                position,
-                0,
-                None,
-                Uuid::parse_str(SYMBOL_UUID).unwrap(),
-                &pin_uuids(),
-                "amp",
-            )
+            .build_placement(&r_definition(), placement(position, 0, None), "amp")
             .unwrap();
 
         assert_eq!(placed.reference(), "R?");
@@ -1381,16 +1396,7 @@ mod tests {
         let schematic = Schematic::new_empty(Uuid::parse_str(SHEET_UUID).unwrap());
         let position = Point::new(Nm(100_000_000), Nm(50_000_000));
         let (rotated, _) = schematic
-            .build_placement(
-                &r_definition(),
-                "Device:R",
-                position,
-                1,
-                None,
-                Uuid::parse_str(SYMBOL_UUID).unwrap(),
-                &pin_uuids(),
-                "amp",
-            )
+            .build_placement(&r_definition(), placement(position, 1, None), "amp")
             .unwrap();
         assert_eq!(rotated.rotation, Angle::from_decidegrees(900));
         assert_eq!(
@@ -1405,12 +1411,7 @@ mod tests {
         let (mirrored, node) = schematic
             .build_placement(
                 &r_definition(),
-                "Device:R",
-                position,
-                0,
-                Some(Mirror::X),
-                Uuid::parse_str(SYMBOL_UUID).unwrap(),
-                &pin_uuids(),
+                placement(position, 0, Some(Mirror::X)),
                 "amp",
             )
             .unwrap();
@@ -1430,48 +1431,28 @@ mod tests {
     fn build_placement_rejects_bad_input() {
         let schematic = Schematic::new_empty(Uuid::parse_str(SHEET_UUID).unwrap());
         let position = Point::ORIGIN;
-        let uuid = Uuid::parse_str(SYMBOL_UUID).unwrap();
         assert!(
             schematic
                 .build_placement(
                     &sexpr::parse("(wire (pts (xy 0 0) (xy 1 1)))").unwrap(),
-                    "Device:R",
-                    position,
-                    0,
-                    None,
-                    uuid,
-                    &pin_uuids(),
+                    placement(position, 0, None),
                     "amp",
                 )
                 .is_err()
         );
+        let short_pins = Placement {
+            pin_uuids: &PINS[..1],
+            ..placement(position, 0, None)
+        };
         assert!(
             schematic
-                .build_placement(
-                    &r_definition(),
-                    "Device:R",
-                    position,
-                    0,
-                    None,
-                    uuid,
-                    &pin_uuids()[..1],
-                    "amp",
-                )
+                .build_placement(&r_definition(), short_pins, "amp")
                 .is_err()
         );
         let no_sheet_uuid = Schematic::parse("(kicad_sch (version 20231120))").unwrap();
         assert!(
             no_sheet_uuid
-                .build_placement(
-                    &r_definition(),
-                    "Device:R",
-                    position,
-                    0,
-                    None,
-                    uuid,
-                    &pin_uuids(),
-                    "amp",
-                )
+                .build_placement(&r_definition(), placement(position, 0, None), "amp")
                 .is_err()
         );
     }
@@ -1505,7 +1486,7 @@ mod tests {
         assert_eq!(mm_text(Nm(152_400)), "0.1524");
         assert_eq!(deg_text(Angle::ZERO), "0");
         assert_eq!(deg_text(Angle::from_decidegrees(900)), "90");
-        assert_eq!(deg_text(Angle::from_decidegrees(450)), "45.5");
+        assert_eq!(deg_text(Angle::from_decidegrees(455)), "45.5");
         assert_eq!(deg_text(Angle::from_decidegrees(3599)), "359.9");
     }
 }

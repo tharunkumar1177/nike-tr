@@ -3,7 +3,7 @@ use std::path::Path;
 
 use tron_core::kicad::Schematic;
 use tron_core::symbol::{Fill, Pin, Shape, Xy};
-use tron_core::{Angle, Mirror, Nm, Point, Project, Session};
+use tron_core::{Angle, Mirror, Nm, Placement, Point, Project, Session};
 use uuid::Uuid;
 
 const GOLDEN: &str = include_str!("golden/symbols/amp.kicad_sch");
@@ -137,12 +137,14 @@ fn placing_moving_and_deleting_through_a_session_survives_a_reload() {
     let changes = session
         .place_symbol(
             &definition,
-            "Device:R",
-            Point::new(Nm(150_000_000), Nm(40_000_000)),
-            1,
-            Some(Mirror::Y),
-            SYMBOL_4,
-            &[PIN_A, PIN_B],
+            Placement {
+                lib_id: "Device:R",
+                position: Point::new(Nm(150_000_000), Nm(40_000_000)),
+                rotation_steps: 1,
+                mirror: Some(Mirror::Y),
+                uuid: SYMBOL_4,
+                pin_uuids: &[PIN_A, PIN_B],
+            },
         )
         .unwrap();
     assert!(changes.symbols && !changes.definitions);
@@ -194,12 +196,14 @@ fn placing_into_a_file_without_lib_symbols_undoes_exactly() {
     let changes = session
         .place_symbol(
             &definition,
-            "Device:R",
-            Point::new(Nm(100_000_000), Nm(50_000_000)),
-            0,
-            None,
-            SYMBOL_4,
-            &[PIN_A, PIN_B],
+            Placement {
+                lib_id: "Device:R",
+                position: Point::new(Nm(100_000_000), Nm(50_000_000)),
+                rotation_steps: 0,
+                mirror: None,
+                uuid: SYMBOL_4,
+                pin_uuids: &[PIN_A, PIN_B],
+            },
         )
         .unwrap();
     assert!(changes.symbols && changes.definitions);

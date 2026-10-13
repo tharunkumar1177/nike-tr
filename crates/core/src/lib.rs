@@ -12,7 +12,8 @@ pub mod units;
 
 pub use error::CoreError;
 pub use kicad::{
-    Mirror, PageSize, PlacedPin, PlacedSymbol, SymbolProperty, TITLE_BLOCK_COMMENTS, TitleBlock,
+    Mirror, PageSize, PlacedPin, PlacedSymbol, Placement, SymbolProperty, TITLE_BLOCK_COMMENTS,
+    TitleBlock,
 };
 pub use project::{Project, validate_name, write_atomic};
 pub use session::{Changes, Command, Session, SymbolTransform};

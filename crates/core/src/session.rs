@@ -8,12 +8,12 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::error::CoreError;
-use crate::kicad::{Mirror, PlacedSymbol, TitleBlock};
+use crate::kicad::{Mirror, PlacedSymbol, Placement, TitleBlock};
 use crate::kicad_value::text_arg;
 use crate::manifest::{MAX_GRID, MIN_GRID};
 use crate::project::Project;
 use crate::sexpr::SExpr;
-use crate::units::{Nm, Point};
+use crate::units::Nm;
 
 pub const MAX_FIELD_CHARS: usize = 256;
 pub const PROPERTIES_LABEL: &str = "Project Properties";
@@ -316,21 +316,15 @@ impl Session {
     }
 
     /// Places a library symbol on the schematic as one undo step. `definition` is the
-    /// flattened `(symbol ...)` the library index returns for `lib_id`; it is embedded in
-    /// `(lib_symbols)` on first use and removed again when the last instance using it is
-    /// deleted. `rotation_steps` counts 90° steps counterclockwise on screen. The symbol
-    /// gets `uuid` and one pin UUID per definition pin, and its reference is left
-    /// unannotated (`R?`).
+    /// flattened `(symbol ...)` the library index returns for `placement.lib_id`; it is
+    /// embedded in `(lib_symbols)` on first use and removed again when the last instance
+    /// using it is deleted. The reference is left unannotated (`R?`).
     pub fn place_symbol(
         &mut self,
         definition: &SExpr,
-        lib_id: &str,
-        position: Point,
-        rotation_steps: i32,
-        mirror: Option<Mirror>,
-        uuid: Uuid,
-        pin_uuids: &[Uuid],
+        placement: Placement<'_>,
     ) -> Result<Changes, CoreError> {
+        let Placement { lib_id, uuid, .. } = placement;
         if lib_id.is_empty() {
             return Err(CoreError::InvalidEdit(
                 "The library ID is empty.".to_owned(),
@@ -345,16 +339,7 @@ impl Session {
         let (_, node) = self
             .project
             .schematic()
-            .build_placement(
-                definition,
-                lib_id,
-                position,
-                rotation_steps,
-                mirror,
-                uuid,
-                pin_uuids,
-                &project_name,
-            )
+            .build_placement(definition, placement, &project_name)
             .map_err(CoreError::InvalidEdit)?;
         let index = self.project.schematic().placed_insert_index();
         let created_lib_symbols = !self.project.schematic().has_lib_symbols();
@@ -553,7 +538,7 @@ fn validate_title_block(block: &TitleBlock) -> Result<(), CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::Angle;
+    use crate::units::{Angle, Point};
     use std::path::PathBuf;
     use uuid::Uuid;
 
@@ -720,17 +705,15 @@ mod tests {
     }
 
     fn place(session: &mut Session, uuid: Uuid) -> Changes {
-        session
-            .place_symbol(
-                &r_definition(),
-                "Device:R",
-                Point::new(Nm(100_000_000), Nm(50_000_000)),
-                0,
-                None,
-                uuid,
-                &PINS,
-            )
-            .unwrap()
+        let placement = Placement {
+            lib_id: "Device:R",
+            position: Point::new(Nm(100_000_000), Nm(50_000_000)),
+            rotation_steps: 0,
+            mirror: None,
+            uuid,
+            pin_uuids: &PINS,
+        };
+        session.place_symbol(&r_definition(), placement).unwrap()
     }
 
     #[test]
@@ -873,17 +856,15 @@ mod tests {
     fn definitions_stay_sorted_by_library_id() {
         let mut session = session();
         place(&mut session, SYMBOL_1);
-        session
-            .place_symbol(
-                &led_definition(),
-                "Device:LED",
-                Point::ORIGIN,
-                0,
-                None,
-                SYMBOL_2,
-                &[PIN_3],
-            )
-            .unwrap();
+        let placement = Placement {
+            lib_id: "Device:LED",
+            position: Point::ORIGIN,
+            rotation_steps: 0,
+            mirror: None,
+            uuid: SYMBOL_2,
+            pin_uuids: &[PIN_3],
+        };
+        session.place_symbol(&led_definition(), placement).unwrap();
         assert_eq!(
             session.project().schematic().lib_symbol_ids(),
             ["Device:LED", "Device:R"]
@@ -928,40 +909,27 @@ mod tests {
         assert!(!session.can_undo());
 
         place(&mut session, SYMBOL_1);
+        let placement = |uuid, pin_uuids: &[Uuid]| Placement {
+            lib_id: "Device:R",
+            position: Point::ORIGIN,
+            rotation_steps: 0,
+            mirror: None,
+            uuid,
+            pin_uuids,
+        };
         assert!(matches!(
-            session.place_symbol(
-                &r_definition(),
-                "Device:R",
-                Point::ORIGIN,
-                0,
-                None,
-                SYMBOL_1,
-                &PINS,
-            ),
+            session.place_symbol(&r_definition(), placement(SYMBOL_1, &PINS)),
             Err(CoreError::InvalidEdit(_))
         ));
         assert!(matches!(
             session.place_symbol(
                 &crate::sexpr::parse("(wire (pts))").unwrap(),
-                "Device:R",
-                Point::ORIGIN,
-                0,
-                None,
-                SYMBOL_2,
-                &[],
+                placement(SYMBOL_2, &[]),
             ),
             Err(CoreError::InvalidEdit(_))
         ));
         assert!(matches!(
-            session.place_symbol(
-                &r_definition(),
-                "Device:R",
-                Point::ORIGIN,
-                0,
-                None,
-                SYMBOL_2,
-                &PINS[..1],
-            ),
+            session.place_symbol(&r_definition(), placement(SYMBOL_2, &PINS[..1])),
             Err(CoreError::InvalidEdit(_))
         ));
         assert_eq!(session.project().schematic().symbols().len(), 1);
