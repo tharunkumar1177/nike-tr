@@ -8,8 +8,9 @@ use tron_core::kicad::Schematic;
 use tron_core::kicad_value::text_arg;
 use tron_core::sexpr::SExpr;
 use tron_core::{
-    Changes, Junction, Label, LabelKind, LabelShape, Mirror, Nm, NoConnect, PlacedSymbol,
-    Placement, Point, Project, Session, SymbolPreview, TITLE_BLOCK_COMMENTS, TitleBlock, Wire, Xy,
+    Changes, FieldEdit, Junction, Label, LabelKind, LabelShape, Mirror, Nm, NoConnect,
+    PlacedSymbol, Placement, Point, Project, Session, SymbolPreview, TITLE_BLOCK_COMMENTS,
+    TitleBlock, Wire, Xy,
 };
 use ts_rs::TS;
 use uuid::Uuid;
@@ -399,6 +400,36 @@ impl From<&Junction> for JunctionDot {
         JunctionDot {
             uuid: junction.uuid,
             position: Xy::from(junction.position),
+        }
+    }
+}
+
+/// One field of a placed symbol, as the properties dialog edits it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SymbolField {
+    pub name: String,
+    pub value: String,
+    pub visible: bool,
+}
+
+impl From<FieldEdit> for SymbolField {
+    fn from(field: FieldEdit) -> SymbolField {
+        SymbolField {
+            name: field.name,
+            value: field.value,
+            visible: field.visible,
+        }
+    }
+}
+
+impl From<SymbolField> for FieldEdit {
+    fn from(field: SymbolField) -> FieldEdit {
+        FieldEdit {
+            name: field.name,
+            value: field.value,
+            visible: field.visible,
         }
     }
 }
@@ -907,6 +938,53 @@ pub fn place_label(
     Ok(())
 }
 
+/// The fields of a placed symbol: the mandatory ones first, then the rest in file order.
+#[tauri::command]
+pub fn get_symbol_fields(
+    state: State<'_, AppState>,
+    uuid: Uuid,
+) -> Result<Vec<SymbolField>, AppError> {
+    let mut inner = state.lock();
+    let fields = inner.session_mut()?.symbol_fields(uuid)?;
+    Ok(fields.into_iter().map(SymbolField::from).collect())
+}
+
+/// Replaces the fields of a placed symbol, in order, as one undo step.
+#[tauri::command]
+pub fn edit_symbol_fields(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuid: Uuid,
+    fields: Vec<SymbolField>,
+) -> Result<(), AppError> {
+    let fields: Vec<FieldEdit> = fields.into_iter().map(FieldEdit::from).collect();
+    let mut inner = state.lock();
+    let session = inner.session_mut()?;
+    let changes = session.edit_symbol_fields(uuid, &fields)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Sets one field's value on a placed symbol as one undo step.
+#[tauri::command]
+pub fn set_symbol_field(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuid: Uuid,
+    name: String,
+    value: String,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let session = inner.session_mut()?;
+    let changes = session.set_symbol_field(uuid, &name, &value)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
 /// Places a no-connect flag at a point as one undo step.
 #[tauri::command]
 pub fn place_no_connect(
@@ -1218,6 +1296,16 @@ mod tests {
         assert_eq!(json["wires"], serde_json::json!([]));
         assert_eq!(json["labels"], serde_json::json!([]));
         assert_eq!(json["noConnects"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn symbol_fields_round_trip_through_the_ui_payload() {
+        let payload = serde_json::json!({ "name": "MPN", "value": "RC0603", "visible": true });
+        let field: SymbolField = serde_json::from_value(payload.clone()).unwrap();
+        let edit = FieldEdit::from(field.clone());
+        assert_eq!((edit.name.as_str(), edit.visible), ("MPN", true));
+        let json = serde_json::to_value(SymbolField::from(edit)).unwrap();
+        assert_eq!(json, payload);
     }
 
     #[test]

@@ -1168,6 +1168,134 @@ describe("Wiring", () => {
     expect(calls.some((call) => call.cmd === "rotate_labels")).toBe(false);
   });
 
+  const CENTER: [number, number] = [100_000_000, 50_000_000];
+
+  function resistorFields() {
+    return [
+      { name: "Reference", value: "R?", visible: true },
+      { name: "Value", value: "R", visible: true },
+      { name: "Footprint", value: "", visible: false },
+      { name: "Datasheet", value: "", visible: false },
+    ];
+  }
+
+  it("edits symbol fields in the properties dialog", async () => {
+    const { calls, canvas } = await openSheet({
+      get_symbol_fields: () => resistorFields(),
+      edit_symbol_fields: () => null,
+    });
+
+    clickAt(canvas, CENTER);
+    expect(await screen.findByText("Symbol selected")).toBeTruthy();
+    fireEvent.keyDown(canvas, { key: "e" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Symbol Properties",
+    });
+    const apply = within(dialog).getByRole("button", { name: "Apply" });
+    expect(apply.hasAttribute("disabled")).toBe(true);
+
+    const reference = within(dialog).getByRole("textbox", {
+      name: "Reference value",
+    });
+    expect(document.activeElement).toBe(reference);
+    fireEvent.change(reference, { target: { value: "" } });
+    expect(within(dialog).getByRole("alert").textContent).toBe(
+      "Reference cannot be empty.",
+    );
+    expect(apply.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(reference, { target: { value: "R3" } });
+    fireEvent.click(
+      within(dialog).getByRole("checkbox", { name: "Show Footprint" }),
+    );
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add Field" }));
+    const name = within(dialog).getByRole("textbox", {
+      name: "Name of field 5",
+    });
+    expect(document.activeElement).toBe(name);
+    fireEvent.change(name, { target: { value: "MPN" } });
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "MPN value" }),
+      { target: { value: "RC0603" } },
+    );
+    fireEvent.click(apply);
+
+    await waitFor(() =>
+      expect(argsOf(calls, "edit_symbol_fields")).toEqual([
+        {
+          uuid: "symbol-1",
+          fields: [
+            { name: "Reference", value: "R3", visible: true },
+            { name: "Value", value: "R", visible: true },
+            { name: "Footprint", value: "", visible: true },
+            { name: "Datasheet", value: "", visible: false },
+            { name: "MPN", value: "RC0603", visible: false },
+          ],
+        },
+      ]),
+    );
+    expect(await screen.findByText("Symbol properties updated")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("removes a custom field and opens on double-click", async () => {
+    const { calls, canvas } = await openSheet({
+      get_symbol_fields: () => [
+        ...resistorFields(),
+        { name: "MPN", value: "RC0603", visible: false },
+      ],
+      edit_symbol_fields: () => {
+        throw new Error("The symbol is no longer on the schematic.");
+      },
+    });
+
+    const at = screenAt(CENTER);
+    fireEvent.doubleClick(canvas, { clientX: at.x, clientY: at.y });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Symbol Properties",
+    });
+    expect(
+      within(dialog).queryByRole("button", { name: "Remove Reference" }),
+    ).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove MPN" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Apply" }));
+
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "The symbol is no longer on the schematic.",
+    );
+    expect(argsOf(calls, "edit_symbol_fields")[0]?.fields).toHaveLength(4);
+  });
+
+  it("edits the reference inline with U", async () => {
+    const { calls, canvas } = await openSheet({
+      set_symbol_field: () => null,
+    });
+
+    clickAt(canvas, CENTER);
+    fireEvent.keyDown(canvas, { key: "u" });
+    const input = await screen.findByRole("textbox", {
+      name: "Edit Reference",
+    });
+    expect((input as HTMLInputElement).value).toBe("R?");
+    fireEvent.change(input, { target: { value: " " } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Reference cannot be empty.",
+    );
+
+    fireEvent.change(input, { target: { value: "R5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(argsOf(calls, "set_symbol_field")).toEqual([
+        { uuid: "symbol-1", name: "Reference", value: "R5" },
+      ]),
+    );
+    expect(await screen.findByText("Symbol properties updated")).toBeTruthy();
+    expect(
+      screen.queryByRole("textbox", { name: "Edit Reference" }),
+    ).toBeNull();
+  });
+
   it("annotates the schematic from the Tools menu", async () => {
     let numbered = 2;
     const { calls } = await openSheet({ annotate_schematic: () => numbered });

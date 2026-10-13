@@ -9,7 +9,9 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::error::CoreError;
-use crate::kicad::{Mirror, PlacedSymbol, Placement, Schematic, TitleBlock};
+use crate::kicad::{
+    MANDATORY_FIELDS, Mirror, PlacedSymbol, Placement, Schematic, SymbolProperty, TitleBlock,
+};
 use crate::kicad_value::text_arg;
 use crate::manifest::{MAX_GRID, MIN_GRID};
 use crate::project::Project;
@@ -25,6 +27,9 @@ pub const MAX_FIELD_CHARS: usize = 256;
 pub const MAX_WIRE_POINTS: usize = 1024;
 pub const PROPERTIES_LABEL: &str = "Project Properties";
 pub const ANNOTATE_LABEL: &str = "Annotate Schematic";
+pub const EDIT_FIELDS_LABEL: &str = "Edit Symbol Properties";
+/// The longest field value, such as a datasheet URL.
+pub const MAX_FIELD_VALUE_CHARS: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -751,6 +756,99 @@ impl Session {
         (self.execute(command), count)
     }
 
+    /// The fields of the symbol `uuid` as the properties dialog shows them: the mandatory
+    /// fields first, in KiCad's order (an empty one stands in for any the file lacks),
+    /// then the others in file order.
+    pub fn symbol_fields(&self, uuid: Uuid) -> Result<Vec<FieldEdit>, CoreError> {
+        let symbol = self
+            .project
+            .schematic()
+            .symbol(uuid)
+            .ok_or_else(missing_symbol)?;
+        let mut fields = Vec::with_capacity(symbol.properties.len());
+        for key in MANDATORY_FIELDS {
+            let field = match symbol.properties.iter().find(|p| p.key == key) {
+                Some(property) => FieldEdit::from(property),
+                None => FieldEdit {
+                    name: key.to_owned(),
+                    value: String::new(),
+                    visible: matches!(key, "Reference" | "Value"),
+                },
+            };
+            fields.push(field);
+        }
+        let others = symbol
+            .properties
+            .iter()
+            .filter(|property| !MANDATORY_FIELDS.contains(&property.key.as_str()));
+        fields.extend(others.map(FieldEdit::from));
+        Ok(fields)
+    }
+
+    /// Replaces the fields of the symbol `uuid` with `fields`, in that order, as one undo
+    /// step. Fields keep their position and formatting by name; new fields start at the
+    /// symbol's anchor. Every mandatory field must be present, names must be unique and
+    /// non-empty, and the Reference must not be empty.
+    pub fn edit_symbol_fields(
+        &mut self,
+        uuid: Uuid,
+        fields: &[FieldEdit],
+    ) -> Result<Changes, CoreError> {
+        let before = self
+            .project
+            .schematic()
+            .symbol(uuid)
+            .ok_or_else(missing_symbol)?;
+        check_fields(fields)?;
+        let mut after = before.clone();
+        after.properties = fields
+            .iter()
+            .map(|field| {
+                let existing = before.properties.iter().find(|p| p.key == field.name);
+                let mut property = match existing {
+                    Some(property) => property.clone(),
+                    None => SymbolProperty {
+                        key: field.name.clone(),
+                        value: String::new(),
+                        position: before.position,
+                        rotation: Angle::ZERO,
+                        hidden: true,
+                    },
+                };
+                property.value = field.value.clone();
+                property.hidden = !field.visible;
+                property
+            })
+            .collect();
+        if after == before {
+            return Ok(Changes::default());
+        }
+        Ok(self.execute(Command::Group {
+            label: EDIT_FIELDS_LABEL.to_owned(),
+            commands: vec![Command::TransformSymbols {
+                symbols: vec![(uuid, before, after)],
+            }],
+        }))
+    }
+
+    /// Sets the value of one field of the symbol `uuid` as one undo step, with the same
+    /// rules as [`Session::edit_symbol_fields`].
+    pub fn set_symbol_field(
+        &mut self,
+        uuid: Uuid,
+        name: &str,
+        value: &str,
+    ) -> Result<Changes, CoreError> {
+        let mut fields = self.symbol_fields(uuid)?;
+        let Some(field) = fields.iter_mut().find(|field| field.name == name) else {
+            return Err(CoreError::InvalidEdit(format!(
+                "The symbol has no {name} field."
+            )));
+        };
+        field.value = value.to_owned();
+        self.edit_symbol_fields(uuid, &fields)
+    }
+
     /// Plans a wiring edit and records it as one undo step. An edit that changes no node
     /// records nothing.
     fn edit_wiring(
@@ -892,6 +990,61 @@ fn insert_new(plan: &WiringPlan, inserted: &mut NodeEdits, next: &mut usize) {
         inserted.push((*next, item.to_node()));
         *next += 1;
     }
+}
+
+/// A symbol field as the properties dialog edits it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldEdit {
+    pub name: String,
+    pub value: String,
+    pub visible: bool,
+}
+
+impl From<&SymbolProperty> for FieldEdit {
+    fn from(property: &SymbolProperty) -> FieldEdit {
+        FieldEdit {
+            name: property.key.clone(),
+            value: property.value.clone(),
+            visible: !property.hidden,
+        }
+    }
+}
+
+/// Errors unless `fields` holds every mandatory field once, unique non-empty names, values
+/// within the length limit, and a non-empty Reference.
+fn check_fields(fields: &[FieldEdit]) -> Result<(), CoreError> {
+    let invalid = |message: String| Err(CoreError::InvalidEdit(message));
+    let mut names: Vec<&str> = Vec::with_capacity(fields.len());
+    for field in fields {
+        let name = field.name.as_str();
+        if name.trim().is_empty() {
+            return invalid("Field names cannot be empty.".to_owned());
+        }
+        if name.chars().count() > MAX_FIELD_CHARS {
+            return invalid(format!(
+                "Field names can be at most {MAX_FIELD_CHARS} characters."
+            ));
+        }
+        if field.value.chars().count() > MAX_FIELD_VALUE_CHARS {
+            return invalid(format!(
+                "{name} can be at most {MAX_FIELD_VALUE_CHARS} characters."
+            ));
+        }
+        if names.contains(&name) {
+            return invalid(format!("There is already a field named {name}."));
+        }
+        names.push(name);
+    }
+    for key in MANDATORY_FIELDS {
+        if !names.contains(&key) {
+            return invalid(format!("The {key} field is required."));
+        }
+    }
+    let reference = fields.iter().find(|field| field.name == "Reference");
+    if reference.is_some_and(|field| field.value.trim().is_empty()) {
+        return invalid("Reference cannot be empty.".to_owned());
+    }
+    Ok(())
 }
 
 /// The wiring items a selection names, by kind.
@@ -1359,6 +1512,111 @@ mod tests {
         session.undo().unwrap();
         let symbols = session.project().schematic().symbols();
         assert_eq!(symbols[0].reference(), "R?");
+    }
+
+    fn field(name: &str, value: &str, visible: bool) -> FieldEdit {
+        FieldEdit {
+            name: name.to_owned(),
+            value: value.to_owned(),
+            visible,
+        }
+    }
+
+    #[test]
+    fn symbol_fields_list_the_mandatory_fields_first() {
+        let mut session = session();
+        place(&mut session, SYMBOL_1);
+        let fields = session.symbol_fields(SYMBOL_1).unwrap();
+        assert_eq!(
+            fields,
+            [
+                field("Reference", "R?", true),
+                field("Value", "R", true),
+                field("Footprint", "", false),
+                field("Datasheet", "", false),
+            ]
+        );
+        assert!(session.symbol_fields(SYMBOL_2).is_err());
+    }
+
+    #[test]
+    fn editing_fields_adds_hides_and_removes_them_in_one_step() {
+        let mut session = session();
+        place(&mut session, SYMBOL_1);
+        let placed = session.project().clone();
+        let mut fields = vec![
+            field("Reference", "R7", true),
+            field("Value", "10k", false),
+            field("Footprint", "Resistor_SMD:R_0603", true),
+            field("Datasheet", "", false),
+            field("MPN", "RC0603", true),
+        ];
+        let changes = session.edit_symbol_fields(SYMBOL_1, &fields).unwrap();
+        assert!(changes.symbols);
+        assert_eq!(session.undo_label(), Some(EDIT_FIELDS_LABEL));
+        assert_eq!(session.symbol_fields(SYMBOL_1).unwrap(), fields);
+        let text = session.project().schematic().to_file_string();
+        assert!(text.contains("(reference \"R7\")"), "{text}");
+        let reparsed = Schematic::parse(&text).unwrap();
+        let symbol = reparsed.symbol(SYMBOL_1).unwrap();
+        assert_eq!(symbol.property("MPN"), Some("RC0603"));
+        assert_eq!(symbol.properties[4].position, symbol.position);
+        let hidden = |key: &str| {
+            let property = symbol.properties.iter().find(|p| p.key == key);
+            property.unwrap().hidden
+        };
+        assert!(hidden("Value") && !hidden("Footprint") && !hidden("MPN"));
+
+        fields.pop();
+        session.edit_symbol_fields(SYMBOL_1, &fields).unwrap();
+        let text = session.project().schematic().to_file_string();
+        assert!(!text.contains("MPN"), "{text}");
+        let again = session.edit_symbol_fields(SYMBOL_1, &fields).unwrap();
+        assert!(!again.any());
+
+        session.undo().unwrap();
+        session.undo().unwrap();
+        assert_eq!(session.project(), &placed);
+    }
+
+    #[test]
+    fn setting_one_field_updates_the_instances_reference() {
+        let mut session = session();
+        place(&mut session, SYMBOL_1);
+        session
+            .set_symbol_field(SYMBOL_1, "Reference", "R12")
+            .unwrap();
+        let text = session.project().schematic().to_file_string();
+        assert!(text.contains("(reference \"R12\")"), "{text}");
+        let unknown = session.set_symbol_field(SYMBOL_1, "MPN", "x");
+        assert!(matches!(unknown, Err(CoreError::InvalidEdit(_))));
+    }
+
+    #[test]
+    fn invalid_field_edits_are_rejected() {
+        let mut session = session();
+        place(&mut session, SYMBOL_1);
+        let base = session.symbol_fields(SYMBOL_1).unwrap();
+        let mut expect_error = |fields: &[FieldEdit], message: &str| {
+            let result = session.edit_symbol_fields(SYMBOL_1, fields);
+            match result {
+                Err(CoreError::InvalidEdit(text)) => assert_eq!(text, message),
+                other => panic!("expected {message:?}, got {other:?}"),
+            }
+        };
+        let mut fields = base.clone();
+        fields[0].value = " ".to_owned();
+        expect_error(&fields, "Reference cannot be empty.");
+        let mut fields = base.clone();
+        fields.push(field("", "x", true));
+        expect_error(&fields, "Field names cannot be empty.");
+        let mut fields = base.clone();
+        fields.push(field("Value", "x", true));
+        expect_error(&fields, "There is already a field named Value.");
+        let mut fields = base.clone();
+        fields.truncate(3);
+        expect_error(&fields, "The Datasheet field is required.");
+        assert_eq!(session.undo_label(), Some("Place Symbol"));
     }
 
     #[test]
