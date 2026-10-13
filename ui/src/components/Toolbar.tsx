@@ -1,6 +1,12 @@
 import type { ReactNode } from "react";
 import type { HistoryStatus } from "../bindings/HistoryStatus";
-import { LibraryIcon, PropertiesIcon, RedoIcon, UndoIcon } from "./icons";
+import {
+  LibraryIcon,
+  PropertiesIcon,
+  RedoIcon,
+  UndoIcon,
+  WireIcon,
+} from "./icons";
 
 interface IconButtonProps {
   label: string;
@@ -43,6 +49,8 @@ interface ToolbarProps {
   onOpenProperties: () => void;
   libraryOpen: boolean;
   onToggleLibrary: () => void;
+  wireMode: boolean;
+  onToggleWireMode: () => void;
 }
 
 export function Toolbar({
@@ -54,6 +62,8 @@ export function Toolbar({
   onOpenProperties,
   libraryOpen,
   onToggleLibrary,
+  wireMode,
+  onToggleWireMode,
 }: ToolbarProps) {
   return (
     <div className="toolbar" role="toolbar" aria-label="Editor">
@@ -90,6 +100,16 @@ export function Toolbar({
           onClick={onToggleLibrary}
         >
           <LibraryIcon />
+        </IconButton>
+        <span className="toolbar__separator" aria-hidden="true" />
+        <IconButton
+          label="Draw wire"
+          shortcut="W"
+          pressed={wireMode}
+          disabled={disabled}
+          onClick={onToggleWireMode}
+        >
+          <WireIcon />
         </IconButton>
       </div>
       <output className="toolbar__zoom" aria-label="Zoom level">

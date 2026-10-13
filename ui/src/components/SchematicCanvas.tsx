@@ -1,8 +1,9 @@
 /**
- * The schematic canvas: draws placed symbols and drives symbol placement,
- * selection, dragging, transforms, and deletion on top of the generic
- * canvas shell. Every edit is a single core command; the document diff
- * event is the source of truth for what is drawn.
+ * The schematic canvas: draws symbols, wires, junctions, and net labels, and
+ * drives symbol placement, wiring, label and power symbol placement,
+ * selection, dragging, transforms, and deletion on top of the generic canvas
+ * shell. Every edit is a single core command; the document diff event is the
+ * source of truth for what is drawn.
  */
 import {
   type KeyboardEvent,
@@ -10,28 +11,43 @@ import {
   type PointerEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
+import type { GlobalLabelShape } from "../bindings/GlobalLabelShape";
+import type { JunctionDot } from "../bindings/JunctionDot";
 import type { LibraryHit } from "../bindings/LibraryHit";
 import type { MirrorAxis } from "../bindings/MirrorAxis";
+import type { NetLabel } from "../bindings/NetLabel";
 import type { SymbolInstance } from "../bindings/SymbolInstance";
 import type { SymbolPreview } from "../bindings/SymbolPreview";
+import type { WireSegment } from "../bindings/WireSegment";
 import {
   deleteSymbols,
+  deleteWiring,
   describeIpcError,
+  drawWire,
   getLibrarySymbol,
   moveSymbols,
+  moveWiring,
+  placeLabel,
   placeSymbol,
+  rotateLabels,
   transformSymbols,
 } from "../ipc";
-import { type GhostState, drawSchematicScene } from "../schematicDraw";
+import {
+  type GhostState,
+  type LabelAppearance,
+  drawSchematicScene,
+} from "../schematicDraw";
 import {
   findInstanceAt,
   normalizeSteps,
   snapToGrid,
   snappedDragDelta,
 } from "../symbols";
+import type { LibraryStatusState } from "../useLibraryStatus";
 import {
   type ScreenPoint,
   type SheetDimensions,
@@ -39,8 +55,25 @@ import {
   type Viewport,
   pxPerNm,
   screenToWorld,
+  worldToScreen,
 } from "../viewport";
+import {
+  SNAP_RADIUS_PX,
+  type SnappedPoint,
+  WIRE_HIT_PX,
+  connectionPoints,
+  dedupePath,
+  findLabelAt,
+  findWireAt,
+  isOnPin,
+  isOnWire,
+  nextLabelText,
+  snapWirePoint,
+  wirePath,
+} from "../wiring";
 import { Canvas } from "./Canvas";
+import { InlineLabelEditor } from "./InlineLabelEditor";
+import { PowerPicker } from "./PowerPicker";
 import type { StatusHint } from "./StatusBar";
 
 /** A request from the library browser to start placing a symbol. */
@@ -61,16 +94,57 @@ interface PlacingState {
   cursor: ScreenPoint | null;
 }
 
-interface DragState {
+type ItemKind = "symbol" | "wire" | "label";
+
+interface Selection {
+  kind: ItemKind;
   uuid: string;
+}
+
+interface DragState extends Selection {
   startX: number;
   startY: number;
   dx: number;
   dy: number;
 }
 
+interface WireState {
+  /** The fixed points so far: the start and every anchored corner. */
+  anchors: ScreenPoint[];
+  verticalFirst: boolean;
+}
+
+interface LabelPrompt {
+  global: boolean;
+  /** Where the popover opens, in world coordinates. */
+  at: ScreenPoint;
+}
+
+interface LabelPlacingState {
+  text: string;
+  shape: GlobalLabelShape | null;
+  /** Quarter turns counterclockwise; normalized when sent or drawn. */
+  rotation: number;
+}
+
 /** Pointer travel, in screen pixels, before a press becomes a drag. */
 const DRAG_THRESHOLD_PX = 4;
+
+const SELECTION_HINTS: Record<ItemKind, string> = {
+  symbol: "Symbol selected. Drag to move. R/X/Y: Transform. Del: Remove",
+  wire: "Wire selected. Drag to move. Del: Remove",
+  label: "Label selected. Drag to move. R: Rotate. Del: Remove",
+};
+
+const SELECTION_NOUNS: Record<ItemKind, string> = {
+  symbol: "Symbol",
+  wire: "Wire",
+  label: "Label",
+};
+
+function countOf(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
 
 interface SchematicCanvasProps {
   label: string;
@@ -79,6 +153,14 @@ interface SchematicCanvasProps {
   sheet: SheetDimensions;
   definitions: { [key in string]: SymbolPreview };
   instances: SymbolInstance[];
+  wires: WireSegment[];
+  junctions: JunctionDot[];
+  labels: NetLabel[];
+  wireMode: boolean;
+  onWireModeChange: (active: boolean) => void;
+  library: LibraryStatusState;
+  onDownloadLibrary: () => void;
+  onOpenLibrary: () => void;
   placementRequest: PlacementRequest | null;
   onPlacementRequestConsumed: () => void;
   /** The symbol being dragged from the library browser, if any. */
@@ -97,6 +179,14 @@ export function SchematicCanvas({
   sheet,
   definitions,
   instances,
+  wires,
+  junctions,
+  labels,
+  wireMode,
+  onWireModeChange,
+  library,
+  onDownloadLibrary,
+  onOpenLibrary,
   placementRequest,
   onPlacementRequestConsumed,
   symbolDrag,
@@ -109,19 +199,65 @@ export function SchematicCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const loadTicketRef = useRef(0);
   const sizeRef = useRef<Size>({ width: 0, height: 0 });
+  const wireModeRef = useRef(wireMode);
+  const lastLabelRef = useRef<{ text: string; shape: GlobalLabelShape }>({
+    text: "",
+    shape: "input",
+  });
   const [placing, setPlacing] = useState<PlacingState | null>(null);
-  const [selectedUuid, setSelectedUuid] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
-  const [hoverUuid, setHoverUuid] = useState<string | null>(null);
+  const [hover, setHover] = useState(false);
+  const [cursor, setCursor] = useState<ScreenPoint | null>(null);
+  const [wire, setWire] = useState<WireState | null>(null);
+  const [labelPrompt, setLabelPrompt] = useState<LabelPrompt | null>(null);
+  const [labelPlacing, setLabelPlacing] = useState<LabelPlacingState | null>(
+    null,
+  );
+  const [powerPickerAt, setPowerPickerAt] = useState<ScreenPoint | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [commandError, setCommandError] = useState<string | null>(null);
 
+  const targets = useMemo(
+    () => connectionPoints(instances, wires),
+    [instances, wires],
+  );
+  const snapRadiusNm = viewport ? SNAP_RADIUS_PX / pxPerNm(viewport.zoom) : 0;
+
+  const snapWire = (world: ScreenPoint): SnappedPoint =>
+    snapWirePoint(world, gridSizeNm, targets, snapRadiusNm);
+
+  const exitPlacement = useCallback(() => {
+    // Invalidate any in-flight definition load.
+    loadTicketRef.current += 1;
+    setPlacing(null);
+  }, []);
+
+  /** Ends every in-progress tool so another one can start. */
+  const clearTools = useCallback(() => {
+    exitPlacement();
+    setWire(null);
+    setLabelPrompt(null);
+    setLabelPlacing(null);
+    setPowerPickerAt(null);
+    setDrag(null);
+  }, [exitPlacement]);
+
+  /** Leaves wire mode for another tool without the mode change clearing it. */
+  const leaveWireMode = useCallback(() => {
+    if (wireModeRef.current) {
+      wireModeRef.current = false;
+      onWireModeChange(false);
+    }
+  }, [onWireModeChange]);
+
   const beginPlacement = useCallback(
     (hit: LibraryHit, at: ScreenPoint | null) => {
+      clearTools();
+      leaveWireMode();
       const ticket = ++loadTicketRef.current;
-      setSelectedUuid(null);
-      setDrag(null);
-      setHoverUuid(null);
+      setSelection(null);
+      setHover(false);
       setCommandError(null);
       setAnnouncement(`Placing ${hit.name}`);
       setPlacing({
@@ -157,14 +293,8 @@ export function SchematicCanvas({
         () => fail(),
       );
     },
-    [],
+    [clearTools, leaveWireMode],
   );
-
-  const exitPlacement = useCallback(() => {
-    // Invalidate any in-flight definition load.
-    loadTicketRef.current += 1;
-    setPlacing(null);
-  }, []);
 
   useEffect(() => {
     if (placementRequest) {
@@ -173,33 +303,76 @@ export function SchematicCanvas({
     }
   }, [placementRequest, onPlacementRequestConsumed, beginPlacement]);
 
-  // Drop the selection when the symbol disappears (for example via undo).
+  // Entering or leaving wire mode, from the keyboard or the toolbar.
   useEffect(() => {
-    if (
-      selectedUuid !== null &&
-      !instances.some((instance) => instance.uuid === selectedUuid)
-    ) {
-      setSelectedUuid(null);
+    if (wireModeRef.current === wireMode) {
+      return;
     }
-  }, [instances, selectedUuid]);
+    wireModeRef.current = wireMode;
+    clearTools();
+    if (wireMode) {
+      setSelection(null);
+      setCommandError(null);
+      setAnnouncement("Wiring mode started");
+      containerRef.current?.focus();
+    } else {
+      setAnnouncement("Wiring mode ended");
+    }
+  }, [wireMode, clearTools]);
+
+  // Drop the selection when its item disappears (for example via undo).
+  useEffect(() => {
+    if (selection === null) {
+      return;
+    }
+    const present =
+      selection.kind === "symbol"
+        ? instances.some((instance) => instance.uuid === selection.uuid)
+        : selection.kind === "wire"
+          ? wires.some((segment) => segment.uuid === selection.uuid)
+          : labels.some((item) => item.uuid === selection.uuid);
+    if (!present) {
+      setSelection(null);
+    }
+  }, [instances, wires, labels, selection]);
 
   useEffect(() => {
     if (commandError !== null) {
       onHintChange({ text: commandError, error: true });
+    } else if (labelPrompt) {
+      onHintChange({ text: "Enter label name. Esc: Cancel", error: false });
+    } else if (labelPlacing) {
+      onHintChange({
+        text: "Click to place. R: Rotate. Esc: Cancel",
+        error: false,
+      });
     } else if (placing) {
       onHintChange({
         text: "Click to place. R: Rotate, X/Y: Mirror. Esc: Cancel",
         error: false,
       });
-    } else if (selectedUuid !== null) {
+    } else if (wireMode && wire) {
       onHintChange({
-        text: "Symbol selected. Drag to move. R/X/Y: Transform. Del: Remove",
+        text: "Click to anchor. Double-click/Enter/Pin to finish. /: Toggle bend. Esc: Cancel",
         error: false,
       });
+    } else if (wireMode) {
+      onHintChange({ text: "Click to start wire. Esc: Exit", error: false });
+    } else if (selection !== null) {
+      onHintChange({ text: SELECTION_HINTS[selection.kind], error: false });
     } else {
       onHintChange(null);
     }
-  }, [commandError, placing, selectedUuid, onHintChange]);
+  }, [
+    commandError,
+    labelPrompt,
+    labelPlacing,
+    placing,
+    wireMode,
+    wire,
+    selection,
+    onHintChange,
+  ]);
 
   const runCommand = (command: Promise<void>, announce: string | null) => {
     void command.then(
@@ -209,6 +382,21 @@ export function SchematicCanvas({
         }
       },
       (error: unknown) => setCommandError(describeIpcError(error)),
+    );
+  };
+
+  /** The cursor, or the middle of the canvas when the pointer is outside it. */
+  const cursorOrCenter = (): ScreenPoint | null => {
+    if (cursor) {
+      return cursor;
+    }
+    if (!viewport || sizeRef.current.width === 0) {
+      return null;
+    }
+    return screenToWorld(
+      viewport,
+      sizeRef.current.width / 2,
+      sizeRef.current.height / 2,
     );
   };
 
@@ -228,6 +416,80 @@ export function SchematicCanvas({
     );
   };
 
+  const placeLabelAt = (world: ScreenPoint) => {
+    if (!labelPlacing) {
+      return;
+    }
+    runCommand(
+      placeLabel({
+        text: labelPlacing.text,
+        shape: labelPlacing.shape,
+        xNm: snapToGrid(world.x, gridSizeNm),
+        yNm: snapToGrid(world.y, gridSizeNm),
+        rotation: normalizeSteps(labelPlacing.rotation),
+      }),
+      "Label placed",
+    );
+    const next = nextLabelText(labelPlacing.text);
+    lastLabelRef.current = { ...lastLabelRef.current, text: next };
+    setLabelPlacing({ ...labelPlacing, text: next });
+  };
+
+  const finishWire = (points: ScreenPoint[]) => {
+    setWire(null);
+    const path = dedupePath(points);
+    if (path.length < 2) {
+      return;
+    }
+    runCommand(
+      drawWire(path.map((point) => [point.x, point.y])),
+      "Wire completed",
+    );
+  };
+
+  const cancelWire = () => {
+    setWire(null);
+    setAnnouncement("Wire cancelled");
+  };
+
+  const handleWirePointerDown = (world: ScreenPoint) => {
+    const point = snapWire(world).point;
+    if (!wire) {
+      setWire({ anchors: [point], verticalFirst: false });
+      return;
+    }
+    const last = wire.anchors[wire.anchors.length - 1];
+    if (last && last.x === point.x && last.y === point.y) {
+      // The second press of a double-click: the dblclick event finishes.
+      return;
+    }
+    const path = dedupePath(wirePath(wire.anchors, point, wire.verticalFirst));
+    if (isOnPin(instances, point) || isOnWire(wires, point)) {
+      finishWire(path);
+    } else {
+      setWire({ ...wire, anchors: path });
+    }
+  };
+
+  const hitTest = (world: ScreenPoint): Selection | null => {
+    const labelHit = findLabelAt(labels, world);
+    if (labelHit) {
+      return { kind: "label", uuid: labelHit.uuid };
+    }
+    const symbolHit = findInstanceAt(instances, definitions, world);
+    if (symbolHit) {
+      return { kind: "symbol", uuid: symbolHit.uuid };
+    }
+    if (viewport) {
+      const tolerance = WIRE_HIT_PX / pxPerNm(viewport.zoom);
+      const wireHit = findWireAt(wires, world, tolerance);
+      if (wireHit) {
+        return { kind: "wire", uuid: wireHit.uuid };
+      }
+    }
+    return null;
+  };
+
   const handlePointerDown = (
     world: ScreenPoint,
     event: PointerEvent<HTMLDivElement>,
@@ -236,15 +498,28 @@ export function SchematicCanvas({
       return;
     }
     setCommandError(null);
+    if (labelPrompt || powerPickerAt) {
+      setLabelPrompt(null);
+      setPowerPickerAt(null);
+      return;
+    }
+    if (labelPlacing) {
+      placeLabelAt(world);
+      return;
+    }
     if (placing) {
       placeAt(world);
       return;
     }
-    const hit = findInstanceAt(instances, definitions, world);
+    if (wireMode) {
+      handleWirePointerDown(world);
+      return;
+    }
+    const hit = hitTest(world);
     if (hit) {
-      if (hit.uuid !== selectedUuid) {
-        setSelectedUuid(hit.uuid);
-        setAnnouncement("Symbol selected");
+      if (hit.uuid !== selection?.uuid) {
+        setSelection(hit);
+        setAnnouncement(`${SELECTION_NOUNS[hit.kind]} selected`);
       }
       const target = event.currentTarget;
       try {
@@ -252,15 +527,9 @@ export function SchematicCanvas({
       } catch {
         // Environments without active pointers (tests): dragging still works.
       }
-      setDrag({
-        uuid: hit.uuid,
-        startX: world.x,
-        startY: world.y,
-        dx: 0,
-        dy: 0,
-      });
-    } else if (selectedUuid !== null) {
-      setSelectedUuid(null);
+      setDrag({ ...hit, startX: world.x, startY: world.y, dx: 0, dy: 0 });
+    } else if (selection !== null) {
+      setSelection(null);
     }
   };
 
@@ -272,15 +541,26 @@ export function SchematicCanvas({
       return;
     }
     setDrag(null);
-    if (event.type === "pointercancel") {
+    if (event.type === "pointercancel" || (drag.dx === 0 && drag.dy === 0)) {
       return;
     }
-    if (drag.dx !== 0 || drag.dy !== 0) {
-      runCommand(moveSymbols([drag.uuid], drag.dx, drag.dy), null);
+    const uuids = [drag.uuid];
+    runCommand(
+      drag.kind === "symbol"
+        ? moveSymbols(uuids, drag.dx, drag.dy)
+        : moveWiring(uuids, drag.dx, drag.dy),
+      null,
+    );
+  };
+
+  const handleDoubleClick = () => {
+    if (wireMode && wire) {
+      finishWire(wire.anchors);
     }
   };
 
   const handleCursorMove = (position: ScreenPoint | null) => {
+    setCursor(position);
     if (placing) {
       setPlacing((current) =>
         current ? { ...current, cursor: position } : current,
@@ -304,15 +584,61 @@ export function SchematicCanvas({
         setDrag({ ...drag, dx: delta.x, dy: delta.y });
       }
     }
-    if (!placing && !drag) {
-      const hover = position
-        ? (findInstanceAt(instances, definitions, position)?.uuid ?? null)
-        : null;
-      if (hover !== hoverUuid) {
-        setHoverUuid(hover);
+    if (!placing && !drag && !wireMode && !labelPlacing) {
+      const over = position !== null && hitTest(position) !== null;
+      if (over !== hover) {
+        setHover(over);
       }
     }
     onCursorMove(position);
+  };
+
+  const openLabelPrompt = (global: boolean) => {
+    const at = cursorOrCenter();
+    if (!at) {
+      return;
+    }
+    clearTools();
+    leaveWireMode();
+    setSelection(null);
+    setCommandError(null);
+    setLabelPrompt({ global, at });
+  };
+
+  const openPowerPicker = () => {
+    const at = cursorOrCenter();
+    if (!at) {
+      return;
+    }
+    clearTools();
+    leaveWireMode();
+    setSelection(null);
+    setCommandError(null);
+    setPowerPickerAt(at);
+  };
+
+  const handleToolKey = (
+    key: string,
+    event: KeyboardEvent<HTMLDivElement>,
+  ): boolean => {
+    if (key === "w") {
+      event.preventDefault();
+      if (!wireMode) {
+        onWireModeChange(true);
+      }
+      return true;
+    }
+    if (key === "l") {
+      event.preventDefault();
+      openLabelPrompt(event.shiftKey);
+      return true;
+    }
+    if (key === "p") {
+      event.preventDefault();
+      openPowerPicker();
+      return true;
+    }
+    return false;
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -320,21 +646,32 @@ export function SchematicCanvas({
       return;
     }
     const key = event.key.toLowerCase();
+    if (labelPlacing) {
+      if (key === "escape") {
+        event.preventDefault();
+        setLabelPlacing(null);
+      } else if (key === "enter") {
+        event.preventDefault();
+        const at = cursorOrCenter();
+        if (at) {
+          placeLabelAt(at);
+        }
+      } else if (key === "r") {
+        event.preventDefault();
+        setLabelPlacing({
+          ...labelPlacing,
+          rotation: labelPlacing.rotation - 1,
+        });
+      }
+      return;
+    }
     if (placing) {
       if (key === "escape") {
         event.preventDefault();
         exitPlacement();
       } else if (key === "enter") {
         event.preventDefault();
-        const fallback =
-          viewport && sizeRef.current.width > 0
-            ? screenToWorld(
-                viewport,
-                sizeRef.current.width / 2,
-                sizeRef.current.height / 2,
-              )
-            : null;
-        const at = placing.cursor ?? fallback;
+        const at = placing.cursor ?? cursorOrCenter();
         if (at) {
           placeAt(at);
         }
@@ -353,28 +690,73 @@ export function SchematicCanvas({
       }
       return;
     }
-    if (selectedUuid === null) {
+    if (wireMode) {
+      if (key === "escape") {
+        event.preventDefault();
+        if (wire) {
+          cancelWire();
+        } else {
+          onWireModeChange(false);
+        }
+      } else if (key === "enter" && wire) {
+        event.preventDefault();
+        const at = cursor ? snapWire(cursor).point : null;
+        finishWire(
+          at ? wirePath(wire.anchors, at, wire.verticalFirst) : wire.anchors,
+        );
+      } else if (key === "/" && wire) {
+        event.preventDefault();
+        setWire({ ...wire, verticalFirst: !wire.verticalFirst });
+      } else {
+        handleToolKey(key, event);
+      }
       return;
     }
-    const uuids = [selectedUuid];
-    if (key === "r") {
+    if (handleToolKey(key, event) || selection === null) {
+      return;
+    }
+    const uuids = [selection.uuid];
+    if (key === "escape") {
+      event.preventDefault();
+      setSelection(null);
+    } else if (key === "delete" || key === "backspace") {
+      event.preventDefault();
+      setSelection(null);
+      runCommand(
+        selection.kind === "symbol"
+          ? deleteSymbols(uuids)
+          : deleteWiring(uuids),
+        `${SELECTION_NOUNS[selection.kind]} deleted`,
+      );
+    } else if (key === "r" && selection.kind === "label") {
       event.preventDefault();
       // R turns clockwise on screen: three counterclockwise steps.
+      runCommand(rotateLabels(uuids, 3), null);
+    } else if (selection.kind !== "symbol") {
+      return;
+    } else if (key === "r") {
+      event.preventDefault();
       runCommand(transformSymbols(uuids, { type: "rotate", steps: 3 }), null);
     } else if (key === "x" || key === "y") {
       event.preventDefault();
       runCommand(transformSymbols(uuids, { type: "mirror", axis: key }), null);
-    } else if (key === "delete" || key === "backspace") {
-      event.preventDefault();
-      setSelectedUuid(null);
-      runCommand(deleteSymbols(uuids), "Symbol deleted");
     }
   };
 
   const handleContextMenu = (event: MouseEvent<HTMLDivElement>) => {
-    if (placing) {
+    if (labelPlacing) {
+      event.preventDefault();
+      setLabelPlacing(null);
+    } else if (placing) {
       event.preventDefault();
       exitPlacement();
+    } else if (wireMode) {
+      event.preventDefault();
+      if (wire) {
+        cancelWire();
+      } else {
+        onWireModeChange(false);
+      }
     }
   };
 
@@ -382,6 +764,35 @@ export function SchematicCanvas({
     sizeRef.current = size;
     onResize(size);
   };
+
+  const wireCursor = useMemo(
+    () =>
+      wireMode && cursor
+        ? snapWirePoint(cursor, gridSizeNm, targets, snapRadiusNm)
+        : null,
+    [wireMode, cursor, gridSizeNm, targets, snapRadiusNm],
+  );
+  const wirePreview = useMemo(
+    () =>
+      wire && wireCursor
+        ? wirePath(wire.anchors, wireCursor.point, wire.verticalFirst)
+        : null,
+    [wire, wireCursor],
+  );
+  const labelGhost = useMemo((): LabelAppearance | null => {
+    if (!labelPlacing || !cursor) {
+      return null;
+    }
+    return {
+      text: labelPlacing.text,
+      shape: labelPlacing.shape,
+      position: [
+        snapToGrid(cursor.x, gridSizeNm),
+        snapToGrid(cursor.y, gridSizeNm),
+      ],
+      rotation: normalizeSteps(labelPlacing.rotation) * 900,
+    };
+  }, [labelPlacing, cursor, gridSizeNm]);
 
   const drawScene = useCallback(
     (context: CanvasRenderingContext2D, _size: Size, view: Viewport) => {
@@ -397,23 +808,48 @@ export function SchematicCanvas({
       drawSchematicScene(context, view, {
         definitions,
         instances,
-        selectedUuid,
+        wires,
+        junctions,
+        labels,
+        selectedUuid: selection?.uuid ?? null,
         drag,
         ghost,
+        wirePreview,
+        snap: wireCursor,
+        labelGhost,
         gridSizeNm,
       });
     },
-    [definitions, instances, selectedUuid, drag, placing, gridSizeNm],
+    [
+      definitions,
+      instances,
+      wires,
+      junctions,
+      labels,
+      selection,
+      drag,
+      placing,
+      wirePreview,
+      wireCursor,
+      labelGhost,
+      gridSizeNm,
+    ],
   );
 
-  const sceneCursor = drag
-    ? "grabbing"
-    : hoverUuid !== null && !placing
-      ? "pointer"
-      : null;
+  const sceneCursor = drag ? "grabbing" : hover && !placing ? "pointer" : null;
+
+  const popoverAt = (world: ScreenPoint): ScreenPoint =>
+    viewport ? worldToScreen(viewport, world.x, world.y) : { x: 0, y: 0 };
+
+  const refocus = () => containerRef.current?.focus();
+
+  const wiringSummary = [
+    countOf(wires.length, "wire"),
+    countOf(junctions.length, "junction"),
+  ].join(", ");
 
   return (
-    <>
+    <div className="schematic">
       <Canvas
         label={label}
         viewport={viewport}
@@ -425,6 +861,7 @@ export function SchematicCanvas({
         interaction={{
           onPointerDown: handlePointerDown,
           onPointerUp: handlePointerUp,
+          onDoubleClick: handleDoubleClick,
           onKeyDown: handleKeyDown,
           onContextMenu: handleContextMenu,
         }}
@@ -438,6 +875,44 @@ export function SchematicCanvas({
         onResize={handleResize}
         onCursorMove={handleCursorMove}
       />
+      {labelPrompt && (
+        <InlineLabelEditor
+          global={labelPrompt.global}
+          at={popoverAt(labelPrompt.at)}
+          initialText={lastLabelRef.current.text}
+          initialShape={lastLabelRef.current.shape}
+          onSubmit={(text, shape) => {
+            lastLabelRef.current = {
+              text,
+              shape: shape ?? lastLabelRef.current.shape,
+            };
+            setLabelPrompt(null);
+            setLabelPlacing({ text, shape, rotation: 0 });
+            setAnnouncement(`Placing label ${text}`);
+            refocus();
+          }}
+          onCancel={() => {
+            setLabelPrompt(null);
+            refocus();
+          }}
+        />
+      )}
+      {powerPickerAt && (
+        <PowerPicker
+          at={popoverAt(powerPickerAt)}
+          library={library}
+          onPick={(hit) => beginPlacement(hit, powerPickerAt)}
+          onSearchLibrary={() => {
+            setPowerPickerAt(null);
+            onOpenLibrary();
+          }}
+          onDownloadLibrary={onDownloadLibrary}
+          onCancel={() => {
+            setPowerPickerAt(null);
+            refocus();
+          }}
+        />
+      )}
       <div className="visually-hidden" aria-live="polite">
         {announcement}
       </div>
@@ -450,6 +925,14 @@ export function SchematicCanvas({
           </li>
         ))}
       </ul>
-    </>
+      <ul className="visually-hidden" aria-label="Net labels">
+        {labels.map((item) => (
+          <li key={item.uuid}>
+            {item.shape ? `Global label ${item.text}` : `Label ${item.text}`}
+          </li>
+        ))}
+      </ul>
+      <p className="visually-hidden">{wiringSummary}</p>
+    </div>
   );
 }

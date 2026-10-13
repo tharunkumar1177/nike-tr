@@ -44,6 +44,7 @@ export function EditorShell({
   const [placementRequest, setPlacementRequest] =
     useState<PlacementRequest | null>(null);
   const [symbolDrag, setSymbolDrag] = useState<LibraryHit | null>(null);
+  const [wireMode, setWireMode] = useState(false);
   const zoomLabel = viewport ? formatZoom(viewport.zoom) : "—";
 
   useEffect(() => {
@@ -77,6 +78,8 @@ export function EditorShell({
         onOpenProperties={onOpenProperties}
         libraryOpen={libraryOpen}
         onToggleLibrary={() => setLibraryOpen((open) => !open)}
+        wireMode={wireMode}
+        onToggleWireMode={() => setWireMode((active) => !active)}
       />
       <main className="editor__workspace">
         {libraryOpen && (
@@ -95,6 +98,14 @@ export function EditorShell({
           sheet={project.sheet}
           definitions={project.definitions}
           instances={project.instances}
+          wires={project.wires}
+          junctions={project.junctions}
+          labels={project.labels}
+          wireMode={wireMode}
+          onWireModeChange={setWireMode}
+          library={library}
+          onDownloadLibrary={onDownloadLibrary}
+          onOpenLibrary={() => setLibraryOpen(true)}
           placementRequest={placementRequest}
           onPlacementRequestConsumed={() => setPlacementRequest(null)}
           symbolDrag={symbolDrag}

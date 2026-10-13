@@ -814,3 +814,285 @@ describe("Symbol placement", () => {
     expect(await screen.findByText("R? Device:R")).toBeTruthy();
   });
 });
+
+describe("Wiring", () => {
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+  });
+
+  const START: [number, number] = [63_500_000, 50_800_000];
+  const END: [number, number] = [76_200_000, 63_500_000];
+  const PIN_1: [number, number] = [100_000_000, 46_190_000];
+
+  function canvasContainer(): HTMLElement {
+    const surface = screen.getByRole("img", {
+      name: "Schematic sheet of amp",
+    });
+    const container = surface.parentElement;
+    if (!container) {
+      throw new Error("canvas container not found");
+    }
+    return container;
+  }
+
+  function screenAt([x, y]: [number, number]) {
+    const viewport = fitToSheet(CANVAS_SIZE, projectSnapshot().sheet);
+    return worldToScreen(viewport, x, y);
+  }
+
+  function wireButton(): HTMLElement {
+    return screen.getByRole("button", { name: "Draw wire" });
+  }
+
+  function optionNames(list: HTMLElement): (string | null)[] {
+    const textOf = (element: HTMLElement) => element.textContent;
+    return within(list).getAllByRole("option").map(textOf);
+  }
+
+  function argsOf(calls: { cmd: string; args: Args }[], cmd: string): Args[] {
+    return calls.filter((call) => call.cmd === cmd).map((call) => call.args);
+  }
+
+  function clickAt(canvas: HTMLElement, world: [number, number]) {
+    const at = screenAt(world);
+    const position = { pointerId: 1, clientX: at.x, clientY: at.y };
+    fireEvent.pointerMove(canvas, position);
+    fireEvent.pointerDown(canvas, { ...position, button: 0 });
+    fireEvent.pointerUp(canvas, { ...position, button: 0 });
+  }
+
+  async function openSheet(handlers: Handlers, snapshot = wiredSnapshot()) {
+    const calls = mockCore({
+      ...core,
+      get_project: () => snapshot,
+      ...handlers,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "amp" });
+    // The canvas mounts before the resize effect fits the viewport; pointer
+    // coordinates need the fitted viewport, so wait for the zoom readout.
+    expect(await screen.findByText("Zoom 67%")).toBeTruthy();
+    return { calls, canvas: canvasContainer() };
+  }
+
+  function wiredSnapshot(overrides: Partial<ProjectSnapshot> = {}) {
+    return projectSnapshot({
+      definitions: { "Device:R": resistorPreview() },
+      instances: [resistorInstance()],
+      ...overrides,
+    });
+  }
+
+  it("draws an orthogonal wire with a bend and finishes on double-click", async () => {
+    const { calls, canvas } = await openSheet({ draw_wire: () => null });
+
+    fireEvent.keyDown(canvas, { key: "w" });
+    expect(await screen.findByText("Wiring mode started")).toBeTruthy();
+    expect(screen.getByText("Click to start wire. Esc: Exit")).toBeTruthy();
+    expect(wireButton().getAttribute("aria-pressed")).toBe("true");
+
+    clickAt(canvas, START);
+    expect(
+      screen.getByText(
+        "Click to anchor. Double-click/Enter/Pin to finish. /: Toggle bend. Esc: Cancel",
+      ),
+    ).toBeTruthy();
+    clickAt(canvas, END);
+    clickAt(canvas, END);
+    const at = screenAt(END);
+    fireEvent.doubleClick(canvas, { clientX: at.x, clientY: at.y });
+
+    await waitFor(() =>
+      expect(calls.find((call) => call.cmd === "draw_wire")?.args).toEqual({
+        points: [START, [END[0], START[1]], END],
+      }),
+    );
+    expect(await screen.findByText("Wire completed")).toBeTruthy();
+    expect(calls.filter((call) => call.cmd === "draw_wire")).toHaveLength(1);
+  });
+
+  it("toggles the bend and finishes on a pin end", async () => {
+    const { calls, canvas } = await openSheet({ draw_wire: () => null });
+
+    fireEvent.keyDown(canvas, { key: "w" });
+    clickAt(canvas, START);
+    fireEvent.keyDown(canvas, { key: "/" });
+    clickAt(canvas, PIN_1);
+
+    await waitFor(() =>
+      expect(calls.find((call) => call.cmd === "draw_wire")?.args).toEqual({
+        points: [START, [START[0], PIN_1[1]], PIN_1],
+      }),
+    );
+  });
+
+  it("cancels the wire on the first Escape and exits on the second", async () => {
+    const { calls, canvas } = await openSheet({});
+
+    fireEvent.click(wireButton());
+    expect(await screen.findByText("Wiring mode started")).toBeTruthy();
+    clickAt(canvas, START);
+
+    fireEvent.keyDown(canvas, { key: "Escape" });
+    expect(await screen.findByText("Wire cancelled")).toBeTruthy();
+    expect(screen.getByText("Click to start wire. Esc: Exit")).toBeTruthy();
+
+    fireEvent.keyDown(canvas, { key: "Escape" });
+    expect(await screen.findByText("Wiring mode ended")).toBeTruthy();
+    expect(wireButton().getAttribute("aria-pressed")).toBe("false");
+    expect(calls.some((call) => call.cmd === "draw_wire")).toBe(false);
+  });
+
+  it("selects a wire and deletes it", async () => {
+    const { calls, canvas } = await openSheet(
+      { delete_wiring: () => null },
+      wiredSnapshot({
+        wires: [{ uuid: "wire-1", start: START, end: [END[0], START[1]] }],
+      }),
+    );
+    expect(screen.getByText("1 wire, 0 junctions")).toBeTruthy();
+
+    clickAt(canvas, [70_000_000, START[1]]);
+    expect(await screen.findByText("Wire selected")).toBeTruthy();
+    expect(
+      screen.getByText("Wire selected. Drag to move. Del: Remove"),
+    ).toBeTruthy();
+
+    fireEvent.keyDown(canvas, { key: "Delete" });
+    await waitFor(() =>
+      expect(calls.find((call) => call.cmd === "delete_wiring")?.args).toEqual({
+        uuids: ["wire-1"],
+      }),
+    );
+    expect(await screen.findByText("Wire deleted")).toBeTruthy();
+  });
+
+  it("places local labels repeatedly with counting names", async () => {
+    const { calls, canvas } = await openSheet({ place_label: () => null });
+
+    fireEvent.keyDown(canvas, { key: "l" });
+    const name = await screen.findByRole("textbox", {
+      name: "Local label name",
+    });
+    expect(screen.getByText("Enter label name. Esc: Cancel")).toBeTruthy();
+
+    fireEvent.change(name, { target: { value: "SDA 1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Place" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Label names can't contain spaces.");
+
+    fireEvent.change(name, { target: { value: "SDA1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Place" }));
+    expect(await screen.findByText("Placing label SDA1")).toBeTruthy();
+    expect(
+      screen.getByText("Click to place. R: Rotate. Esc: Cancel"),
+    ).toBeTruthy();
+
+    fireEvent.keyDown(canvas, { key: "r" });
+    clickAt(canvas, START);
+    clickAt(canvas, END);
+
+    await waitFor(() =>
+      expect(argsOf(calls, "place_label")).toEqual([
+        {
+          label: {
+            text: "SDA1",
+            shape: null,
+            xNm: START[0],
+            yNm: START[1],
+            rotation: 3,
+          },
+        },
+        {
+          label: {
+            text: "SDA2",
+            shape: null,
+            xNm: END[0],
+            yNm: END[1],
+            rotation: 3,
+          },
+        },
+      ]),
+    );
+    expect(await screen.findByText("Label placed")).toBeTruthy();
+  });
+
+  it("places a global label with the chosen shape", async () => {
+    const { calls, canvas } = await openSheet({ place_label: () => null });
+
+    fireEvent.keyDown(canvas, { key: "L", shiftKey: true });
+    fireEvent.change(
+      await screen.findByRole("textbox", { name: "Global label name" }),
+      { target: { value: "VIN" } },
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "Shape" }), {
+      target: { value: "output" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Place" }));
+    expect(await screen.findByText("Placing label VIN")).toBeTruthy();
+    clickAt(canvas, START);
+
+    await waitFor(() =>
+      expect(calls.find((call) => call.cmd === "place_label")?.args).toEqual({
+        label: {
+          text: "VIN",
+          shape: "output",
+          xNm: START[0],
+          yNm: START[1],
+          rotation: 0,
+        },
+      }),
+    );
+  });
+
+  it("starts power symbol placement from the picker", async () => {
+    const { calls, canvas } = await openSheet({
+      search_library: ({ query }) => [
+        {
+          kind: "symbol",
+          id: query === "GND" ? 41 : 42,
+          name: query,
+          lib: "power",
+          description: "",
+        },
+      ],
+      get_library_symbol: () => deviceRSymbol(),
+    });
+
+    fireEvent.keyDown(canvas, { key: "p" });
+    const picker = await screen.findByRole("listbox", {
+      name: "Power symbols",
+    });
+    await waitFor(() =>
+      expect(optionNames(picker)).toEqual([
+        "GND",
+        "+5V",
+        "+3V3",
+        "VCC",
+        "Search library...",
+      ]),
+    );
+
+    fireEvent.click(within(picker).getByRole("option", { name: "GND" }));
+    expect(await screen.findByText("Placing GND")).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        calls.find((call) => call.cmd === "get_library_symbol")?.args,
+      ).toEqual({ id: 41 }),
+    );
+  });
+
+  it("asks for the library before offering power symbols", async () => {
+    const { calls, canvas } = await openSheet({
+      get_library_status: () => missingLibrary("declined"),
+    });
+
+    fireEvent.keyDown(canvas, { key: "p" });
+    const picker = await screen.findByRole("dialog", { name: "Power symbols" });
+    expect(within(picker).getByText("Component library required")).toBeTruthy();
+    expect(
+      within(picker).getByRole("button", { name: "Download" }),
+    ).toBeTruthy();
+    expect(calls.some((call) => call.cmd === "search_library")).toBe(false);
+  });
+});

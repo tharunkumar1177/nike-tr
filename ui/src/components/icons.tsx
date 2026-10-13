@@ -48,6 +48,16 @@ export function LibraryIcon() {
   );
 }
 
+export function WireIcon() {
+  return (
+    <Icon>
+      <path d="M4 18h6V6h10" />
+      <circle cx="4" cy="18" r="1.5" />
+      <circle cx="20" cy="6" r="1.5" />
+    </Icon>
+  );
+}
+
 export function PropertiesIcon() {
   return (
     <Icon>
