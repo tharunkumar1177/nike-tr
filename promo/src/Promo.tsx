@@ -1,4 +1,4 @@
-import { AbsoluteFill, Sequence } from "remotion";
+import { AbsoluteFill, Html5Audio, Sequence, staticFile } from "remotion";
 import { AiScene } from "./scenes/AiScene";
 import { LayoutScene } from "./scenes/LayoutScene";
 import { OutroScene } from "./scenes/OutroScene";
@@ -9,6 +9,7 @@ import { colors, SCENE_FRAMES } from "./theme";
 export function Promo() {
   return (
     <AbsoluteFill style={{ backgroundColor: colors.background }}>
+      <Html5Audio src={staticFile("soundtrack.wav")} />
       <Sequence name="Schematic" from={0} durationInFrames={SCENE_FRAMES}>
         <SchematicScene />
       </Sequence>

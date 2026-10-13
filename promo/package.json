@@ -7,6 +7,7 @@
     "node": ">=24.15.0"
   },
   "scripts": {
+    "generate:audio": "node audio/generate.js",
     "studio": "remotion studio src/index.ts",
     "render": "remotion render src/index.ts TronPromo out/promo.mp4 --codec=h264",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -22,11 +23,13 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@huggingface/transformers": "3.8.1",
     "@remotion/cli": "4.0.535",
     "@types/react": "19.3.0",
     "eslint": "10.12.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "globals": "17.13.0",
+    "kokoro-js": "1.2.1",
     "prettier": "3.9.9",
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.1"
