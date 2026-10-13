@@ -25,7 +25,10 @@ Evidence for slice 3c:
 
 - [PR #7](https://github.com/tharunkumar1177/tron/pull/7) merged the library browser while CI was red. [PR #9](https://github.com/tharunkumar1177/tron/pull/9) fixed the lockfile, the generated bindings, and the formatting, and [CI run 38373811172](https://github.com/tharunkumar1177/tron/actions/runs/38373811172) is green. `ui/src/App.test.tsx` covers the consent prompt, declining, progress, a failed download with retry, search, and the symbol preview.
 
-Slice 4a prerequisite (Planned until the new index is published and pinned): each symbol row stores its own KiCad definition, and `Index::symbol_definition` returns it flattened for embedding in a schematic. `SCHEMA_VERSION` is 2, so the app rejects the r1 index until an r2 release is pinned.
+Evidence for the slice 4a prerequisite:
+
+- [PR #10](https://github.com/tharunkumar1177/tron/pull/10) is merged with green CI ([38378112909](https://github.com/tharunkumar1177/tron/actions/runs/38378112909)). Each symbol row stores its own KiCad definition, and `Index::symbol_definition` returns it flattened for embedding in a schematic. `SCHEMA_VERSION` is 2.
+- [Library run 38381028065](https://github.com/tharunkumar1177/tron/actions/runs/38381028065) published `library-kicad-10.0.7-r2`. `library.db.gz` is 30,236,000 bytes, up from 16.5 MB, and the size increase was accepted. The slowest benchmark query, `r`, still has a median of about 30 ms. The pin merged in [PR #11](https://github.com/tharunkumar1177/tron/pull/11).
 
 ## Architecture dependencies
 
