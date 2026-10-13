@@ -29,22 +29,13 @@ export function fieldsError(fields: SymbolField[]): string | null {
     if (field.name.trim() === "") {
       return "Custom field names cannot be empty.";
     }
-    if (seen.has(field.name)) {
-      return `There is already a field named ${field.name}.`;
+    const key = field.name.toLowerCase();
+    if (seen.has(key)) {
+      return "Property names must be unique.";
     }
-    seen.add(field.name);
+    seen.add(key);
   }
   return null;
-}
-
-/** A name for a new custom field that no field uses yet. */
-export function newFieldName(fields: SymbolField[]): string {
-  const names = new Set(fields.map((field) => field.name));
-  let number = fields.length + 1;
-  while (names.has(`Field${number}`)) {
-    number += 1;
-  }
-  return `Field${number}`;
 }
 
 export function sameFields(a: SymbolField[], b: SymbolField[]): boolean {

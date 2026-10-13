@@ -722,7 +722,7 @@ describe("Symbol placement", () => {
     expect(await screen.findByText("Symbol selected")).toBeTruthy();
     expect(
       screen.getByText(
-        "Symbol selected. Drag to move. R/X/Y: Transform. Del: Remove",
+        "Symbol selected. Drag to move. R/X/Y: Transform. E: Edit. U/V: Edit text. Del: Remove",
       ),
     ).toBeTruthy();
 
@@ -1213,6 +1213,15 @@ describe("Wiring", () => {
       name: "Name of field 5",
     });
     expect(document.activeElement).toBe(name);
+    const input = name as HTMLInputElement;
+    expect(input.value).toBe("Field");
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(5);
+    fireEvent.change(name, { target: { value: "value" } });
+    expect(within(dialog).getByRole("alert").textContent).toBe(
+      "Property names must be unique.",
+    );
+    expect(apply.hasAttribute("disabled")).toBe(true);
     fireEvent.change(name, { target: { value: "MPN" } });
     fireEvent.change(
       within(dialog).getByRole("textbox", { name: "MPN value" }),
@@ -1229,7 +1238,7 @@ describe("Wiring", () => {
             { name: "Value", value: "R", visible: true },
             { name: "Footprint", value: "", visible: true },
             { name: "Datasheet", value: "", visible: false },
-            { name: "MPN", value: "RC0603", visible: false },
+            { name: "MPN", value: "RC0603", visible: true },
           ],
         },
       ]),

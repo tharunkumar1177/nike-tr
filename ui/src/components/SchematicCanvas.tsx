@@ -157,7 +157,8 @@ interface FieldEditorState {
 const DRAG_THRESHOLD_PX = 4;
 
 const SELECTION_HINTS: Record<ItemKind, string> = {
-  symbol: "Symbol selected. Drag to move. R/X/Y: Transform. Del: Remove",
+  symbol:
+    "Symbol selected. Drag to move. R/X/Y: Transform. E: Edit. U/V: Edit text. Del: Remove",
   wire: "Wire selected. Drag to move. Del: Remove",
   label: "Label selected. Drag to move. R: Rotate. Del: Remove",
   noConnect: "Flag selected. Drag to move. Del: Remove",
