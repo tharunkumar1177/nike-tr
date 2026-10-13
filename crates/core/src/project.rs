@@ -203,6 +203,16 @@ impl Project {
         self.schematic.page_size()
     }
 
+    /// The schematic document, read-only. Edits go through [`crate::session::Session`]
+    /// commands so they stay undoable.
+    pub fn schematic(&self) -> &Schematic {
+        &self.schematic
+    }
+
+    pub(crate) fn schematic_mut(&mut self) -> &mut Schematic {
+        &mut self.schematic
+    }
+
     pub fn manifest_path(&self) -> PathBuf {
         self.dir.join(MANIFEST_FILE)
     }
