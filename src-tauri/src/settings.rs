@@ -18,6 +18,9 @@ pub struct Settings {
     /// Project folders, most recently used first.
     #[serde(default)]
     pub recent_projects: Vec<PathBuf>,
+    /// Whether the user agreed to download the component library; unset until they answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_download: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }

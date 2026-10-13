@@ -1,5 +1,6 @@
 mod error;
 mod ipc;
+mod library;
 mod settings;
 mod shell;
 
@@ -18,6 +19,8 @@ pub fn run() {
             // welcome screen shows the error when it loads the same list.
             let recent = ipc::recent_projects(handle).unwrap_or_default();
             shell::rebuild_recent(handle, &recent)?;
+            app.manage(library::LibraryState::load(handle));
+            library::resume(handle);
             Ok(())
         })
         .on_menu_event(|app, event| {
@@ -49,6 +52,11 @@ pub fn run() {
             ipc::list_recent_projects,
             ipc::remove_recent_project,
             ipc::close_window,
+            library::get_library_status,
+            library::download_library,
+            library::decline_library_download,
+            library::cancel_library_download,
+            library::search_library,
         ])
         .run(tauri::generate_context!())
         .expect("the Tron desktop runtime failed to start");
