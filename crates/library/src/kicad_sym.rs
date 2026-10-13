@@ -41,6 +41,9 @@ pub struct SymbolRecord {
     pub pin_count: u32,
     pub power: bool,
     pub preview: SymbolPreview,
+    /// The symbol's own `(symbol ...)` definition as KiCad text, before merging with any symbol
+    /// it extends. [`flatten`] turns it into the form a schematic embeds.
+    pub source: String,
 }
 
 struct Definition<'a> {
@@ -178,7 +181,97 @@ fn symbol(
             pin_numbers_visible: !hidden(base.node, "pin_numbers"),
             pin_names_visible: !hidden(base.node, "pin_names"),
         },
+        source: own.node.to_pretty_string().trim_end().to_owned(),
     })
+}
+
+/// Merges a symbol with the symbols it extends into the standalone form a schematic embeds in
+/// `(lib_symbols)`, named `<lib>:<name>`. `chain` holds the symbol's own definition followed by
+/// each symbol it extends, ending with the one that has the unit drawings.
+///
+/// Properties and settings such as `(in_bom yes)` come from the nearest definition that has
+/// them. Unit drawings come from the last definition, renamed after the symbol.
+pub fn flatten(lib: &str, chain: &[SExpr]) -> Result<SExpr, String> {
+    let (Some(own), Some(base)) = (chain.first(), chain.last()) else {
+        return Err("there is no definition to flatten".to_owned());
+    };
+    let name = definition_name(own)?;
+    let base_name = definition_name(base)?;
+    if let Some(parent) = child_text(base, "extends") {
+        return Err(format!(
+            "{base_name:?} extends {parent:?}, which is missing"
+        ));
+    }
+
+    let mut settings = Vec::new();
+    let mut properties = Vec::new();
+    for definition in chain.iter().rev() {
+        for item in definition.args().iter().skip(1) {
+            match item.head() {
+                Some("extends" | "symbol") => {}
+                Some("property") => merge(&mut properties, item, same_property),
+                _ => merge(&mut settings, item, same_setting),
+            }
+        }
+    }
+
+    let mut units = Vec::new();
+    for unit in children(base, "symbol") {
+        let unit_name = text_arg(unit, 0).unwrap_or_default();
+        let Some((number, style)) = unit_and_style(unit_name) else {
+            return Err(format!(
+                "unit {unit_name:?} is not named <symbol>_<unit>_<style>"
+            ));
+        };
+        let mut renamed = unit.clone();
+        if let Some(items) = renamed.items_mut() {
+            items[1] = SExpr::string(format!("{name}_{number}_{style}"));
+        }
+        units.push(renamed);
+    }
+
+    let (trailing, leading): (Vec<_>, Vec<_>) = settings
+        .into_iter()
+        .partition(|item| item.head() == Some("embedded_fonts"));
+    let full_name = format!("{lib}:{name}");
+    let mut items = vec![SExpr::atom("symbol"), SExpr::string(full_name)];
+    items.extend(leading);
+    items.extend(properties);
+    items.extend(units);
+    items.extend(trailing);
+    Ok(SExpr::List(items))
+}
+
+fn definition_name(node: &SExpr) -> Result<&str, String> {
+    if node.head() != Some("symbol") {
+        return Err("a definition is not a (symbol) list".to_owned());
+    }
+    match text_arg(node, 0) {
+        Some(name) => Ok(name),
+        None => Err("a definition has no name".to_owned()),
+    }
+}
+
+/// Replaces the item in `items` that `same` matches with `item`, or appends `item`.
+fn merge(items: &mut Vec<SExpr>, item: &SExpr, same: impl Fn(&SExpr, &SExpr) -> bool) {
+    match items.iter_mut().find(|existing| same(existing, item)) {
+        Some(existing) => *existing = item.clone(),
+        None => items.push(item.clone()),
+    }
+}
+
+fn same_property(a: &SExpr, b: &SExpr) -> bool {
+    text_arg(a, 0) == text_arg(b, 0)
+}
+
+/// Settings are lists such as `(in_bom yes)`, matched by head, or older bare flags such as
+/// `power`, matched by text.
+fn same_setting(a: &SExpr, b: &SExpr) -> bool {
+    match (a, b) {
+        (SExpr::List(_), SExpr::List(_)) => a.head().is_some() && a.head() == b.head(),
+        (SExpr::Atom(a), SExpr::Atom(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// The symbol followed by each symbol it extends, ending with the one that has the graphics.
@@ -347,7 +440,16 @@ fn pin_offset(direction: Angle, length: Nm) -> (Nm, Nm) {
 
 #[cfg(test)]
 mod tests {
+    use tron_core::sexpr;
+
     use super::*;
+
+    #[test]
+    fn flattening_needs_the_whole_extends_chain() {
+        let derived = sexpr::parse(r#"(symbol "B" (extends "A"))"#).unwrap();
+        let error = flatten("Lib", &[derived]).unwrap_err();
+        assert_eq!(error, r#""B" extends "A", which is missing"#);
+    }
 
     #[test]
     fn unit_names_split_into_unit_and_style() {

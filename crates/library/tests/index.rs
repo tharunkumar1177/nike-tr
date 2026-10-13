@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use tron_core::sexpr::{self, SExpr};
 use tron_library::preview::{
     Fill, FootprintGraphic, Layer, Pad, PadKind, PadShape, Pin, Shape, Xy,
 };
@@ -236,6 +237,81 @@ fn derived_symbols_inherit_graphics_and_keep_their_own_properties() {
             Xy(-5_080_000, -2_540_000),
         ]
     );
+}
+
+fn property_value<'a>(definition: &'a SExpr, key: &str) -> Option<&'a str> {
+    definition
+        .args()
+        .iter()
+        .filter(|item| item.head() == Some("property"))
+        .find(|item| item.args().first().and_then(SExpr::text) == Some(key))
+        .and_then(|item| item.args().get(1))
+        .and_then(SExpr::text)
+}
+
+fn unit_names(definition: &SExpr) -> Vec<&str> {
+    definition
+        .args()
+        .iter()
+        .filter(|item| item.head() == Some("symbol"))
+        .filter_map(|item| item.args().first().and_then(SExpr::text))
+        .collect()
+}
+
+#[test]
+fn derived_symbols_flatten_into_a_standalone_definition() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = fixture_index(dir.path());
+    let id = index.search("TL072", 1).unwrap()[0].id;
+    let definition = index.symbol_definition(id).unwrap().unwrap();
+
+    assert_eq!(definition.head(), Some("symbol"));
+    assert_eq!(
+        definition.args().first().and_then(SExpr::text),
+        Some("Amplifier_Operational:TL072")
+    );
+    assert!(definition.child("extends").is_none());
+    assert_eq!(
+        unit_names(&definition),
+        ["TL072_1_1", "TL072_2_1", "TL072_3_1"]
+    );
+    assert_eq!(property_value(&definition, "Value"), Some("TL072"));
+    assert_eq!(
+        property_value(&definition, "Datasheet"),
+        Some("http://www.ti.com/lit/ds/symlink/tl071.pdf")
+    );
+    assert_eq!(property_value(&definition, "ki_locked"), Some(""));
+    assert!(definition.child("in_bom").is_some());
+    assert!(definition.child("pin_names").is_some());
+    assert_eq!(
+        definition.args().last().and_then(SExpr::head),
+        Some("embedded_fonts")
+    );
+
+    let reparsed = sexpr::parse(&definition.to_pretty_string()).unwrap();
+    assert_eq!(reparsed, definition);
+}
+
+#[test]
+fn base_symbols_keep_their_unit_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = fixture_index(dir.path());
+    let hits = index.search("Device:R", 5).unwrap();
+    let id = find(&hits, "R").id;
+    let definition = index.symbol_definition(id).unwrap().unwrap();
+    assert_eq!(
+        definition.args().first().and_then(SExpr::text),
+        Some("Device:R")
+    );
+    assert_eq!(unit_names(&definition), ["R_0_1", "R_1_1"]);
+    assert_eq!(property_value(&definition, "Reference"), Some("R"));
+}
+
+#[test]
+fn unknown_symbols_have_no_definition() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = fixture_index(dir.path());
+    assert_eq!(index.symbol_definition(9_999).unwrap(), None);
 }
 
 #[test]

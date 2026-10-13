@@ -6,16 +6,17 @@ use std::path::Path;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, Type, ValueRef};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
 use serde::de::DeserializeOwned;
+use tron_core::sexpr::{self, SExpr};
 
 use crate::builder::BuildReport;
 use crate::error::LibraryError;
 use crate::kicad_mod::{FootprintRecord, Mount};
-use crate::kicad_sym::SymbolRecord;
+use crate::kicad_sym::{SymbolRecord, flatten};
 use crate::search::match_expression;
 
 /// Stored as the database `user_version`. Bump it whenever the schema or the preview JSON
 /// changes shape, so the app refuses an index it cannot read.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// The attribution the KiCad library license requires wherever the index is shown.
 pub const ATTRIBUTION: &str = "Symbols and footprints from the KiCad libraries \
@@ -48,6 +49,7 @@ CREATE TABLE symbols (
     pin_count INTEGER NOT NULL,
     power INTEGER NOT NULL,
     preview TEXT NOT NULL,
+    source TEXT NOT NULL,
     UNIQUE (lib, name)
 );
 
@@ -78,8 +80,8 @@ CREATE VIRTUAL TABLE search USING fts5(
 const INSERT_SYMBOL: &str = "
 INSERT INTO symbols (
     lib, name, description, keywords, datasheet, reference, footprint, footprint_filters,
-    extends, unit_count, pin_count, power, preview
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+    extends, unit_count, pin_count, power, preview, source
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
 
 const INSERT_FOOTPRINT: &str = "
 INSERT INTO footprints (lib, name, description, tags, pad_count, mount, preview)
@@ -104,9 +106,13 @@ LIMIT ?3";
 
 const SELECT_SYMBOL: &str = "
 SELECT lib, name, description, keywords, datasheet, reference, footprint, footprint_filters,
-    extends, unit_count, pin_count, power, preview
+    extends, unit_count, pin_count, power, preview, source
 FROM symbols
 WHERE id = ?1";
+
+const SELECT_DEFINITION: &str = "SELECT lib, name, extends, source FROM symbols WHERE id = ?1";
+
+const SELECT_PARENT: &str = "SELECT extends, source FROM symbols WHERE lib = ?1 AND name = ?2";
 
 const SELECT_FOOTPRINT: &str = "
 SELECT lib, name, description, tags, pad_count, mount, preview
@@ -186,6 +192,7 @@ impl Writer {
             record.pin_count,
             record.power,
             preview,
+            record.source,
         ])?;
         let id = self.conn.last_insert_rowid();
         let mut search = self.conn.prepare_cached(INSERT_SEARCH)?;
@@ -327,10 +334,50 @@ impl Index {
                     pin_count: row.get(10)?,
                     power: row.get(11)?,
                     preview: json_column(row, 12)?,
+                    source: row.get(13)?,
                 })
             })
             .optional()?;
         Ok(record)
+    }
+
+    /// The symbol as a schematic embeds it in `(lib_symbols)`: merged with every symbol it
+    /// extends and named `<lib>:<name>`. Ancestors are looked up in the symbol's own library.
+    pub fn symbol_definition(&self, id: i64) -> Result<Option<SExpr>, LibraryError> {
+        let mut select = self.conn.prepare_cached(SELECT_DEFINITION)?;
+        let row: Option<(String, String, Stored)> = select
+            .query_row([id], |row| Ok((row.get(0)?, row.get(1)?, stored(row, 2)?)))
+            .optional()?;
+        let Some((lib, name, own)) = row else {
+            return Ok(None);
+        };
+        let invalid = |message: String| LibraryError::Definition {
+            lib: lib.clone(),
+            name: name.clone(),
+            message,
+        };
+
+        let mut chain = vec![parse_source(&own.source).map_err(invalid)?];
+        let mut visited = vec![name.clone()];
+        let mut extends = own.extends;
+        let mut select_parent = self.conn.prepare_cached(SELECT_PARENT)?;
+        while let Some(parent) = extends {
+            if visited.contains(&parent) {
+                let message = format!("its extends chain loops back to {parent:?}");
+                return Err(invalid(message));
+            }
+            let found = select_parent
+                .query_row(params![lib, parent], |row| stored(row, 0))
+                .optional()?;
+            let Some(found) = found else {
+                let message = format!("it extends {parent:?}, which is not in the index");
+                return Err(invalid(message));
+            };
+            chain.push(parse_source(&found.source).map_err(invalid)?);
+            visited.push(parent);
+            extends = found.extends;
+        }
+        flatten(&lib, &chain).map(Some).map_err(invalid)
     }
 
     pub fn footprint(&self, id: i64) -> Result<Option<FootprintRecord>, LibraryError> {
@@ -350,6 +397,23 @@ impl Index {
             .optional()?;
         Ok(record)
     }
+}
+
+/// A symbol's own definition and the symbol it extends, if any.
+struct Stored {
+    extends: Option<String>,
+    source: String,
+}
+
+fn stored(row: &Row<'_>, start: usize) -> rusqlite::Result<Stored> {
+    Ok(Stored {
+        extends: row.get(start)?,
+        source: row.get(start + 1)?,
+    })
+}
+
+fn parse_source(source: &str) -> Result<SExpr, String> {
+    sexpr::parse(source).map_err(|err| format!("stored definition: {err}"))
 }
 
 fn json_column<T: DeserializeOwned>(row: &Row<'_>, index: usize) -> rusqlite::Result<T> {

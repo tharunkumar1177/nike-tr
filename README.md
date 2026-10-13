@@ -1,4 +1,4 @@
-# Tron
+      # Tron
 
 Tron is a local-first desktop application for electronics design: schematic capture, ngspice circuit simulation, PCB layout, fabrication output, and AI-assisted design. Projects are plain files on your disk, saved in a KiCad-compatible format. There are no accounts, no cloud storage, and no telemetry.
 
