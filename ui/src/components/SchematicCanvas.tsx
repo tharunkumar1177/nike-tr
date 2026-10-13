@@ -21,6 +21,7 @@ import type { LibraryHit } from "../bindings/LibraryHit";
 import type { MirrorAxis } from "../bindings/MirrorAxis";
 import type { NetLabel } from "../bindings/NetLabel";
 import type { NoConnectFlag } from "../bindings/NoConnectFlag";
+import type { SymbolField } from "../bindings/SymbolField";
 import type { SymbolInstance } from "../bindings/SymbolInstance";
 import type { SymbolPreview } from "../bindings/SymbolPreview";
 import type { WireSegment } from "../bindings/WireSegment";
@@ -30,13 +31,16 @@ import {
   deleteWiring,
   describeIpcError,
   drawWire,
+  editSymbolFields,
   getLibrarySymbol,
+  getSymbolFields,
   moveSymbols,
   moveWiring,
   placeLabel,
   placeNoConnect,
   placeSymbol,
   rotateLabels,
+  setSymbolField,
   transformSymbols,
 } from "../ipc";
 import {
@@ -77,8 +81,10 @@ import {
 } from "../wiring";
 import { Canvas } from "./Canvas";
 import { InlineLabelEditor } from "./InlineLabelEditor";
+import { InlinePropertyEditor } from "./InlinePropertyEditor";
 import { PowerPicker } from "./PowerPicker";
 import type { StatusHint } from "./StatusBar";
+import { SymbolPropertiesDialog } from "./SymbolPropertiesDialog";
 
 /** A canvas tool the toolbar can start. `noConnect` toggles its mode. */
 export type CanvasTool = "localLabel" | "globalLabel" | "power" | "noConnect";
@@ -132,6 +138,19 @@ interface LabelPlacingState {
   shape: GlobalLabelShape | null;
   /** Quarter turns counterclockwise; normalized when sent or drawn. */
   rotation: number;
+}
+
+interface PropertiesDialogState {
+  uuid: string;
+  fields: SymbolField[];
+}
+
+interface FieldEditorState {
+  uuid: string;
+  field: "Reference" | "Value";
+  /** The property text's position, in world coordinates. */
+  at: ScreenPoint;
+  value: string;
 }
 
 /** Pointer travel, in screen pixels, before a press becomes a drag. */
@@ -237,6 +256,9 @@ export function SchematicCanvas({
   );
   const [powerPickerAt, setPowerPickerAt] = useState<ScreenPoint | null>(null);
   const [noConnectMode, setNoConnectMode] = useState(false);
+  const [propertiesDialog, setPropertiesDialog] =
+    useState<PropertiesDialogState | null>(null);
+  const [fieldEditor, setFieldEditor] = useState<FieldEditorState | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [commandError, setCommandError] = useState<string | null>(null);
   /** A command result shown in the status bar until the next input. */
@@ -265,6 +287,7 @@ export function SchematicCanvas({
     setLabelPlacing(null);
     setPowerPickerAt(null);
     setNoConnectMode(false);
+    setFieldEditor(null);
     setDrag(null);
   }, [exitPlacement]);
 
@@ -624,9 +647,10 @@ export function SchematicCanvas({
     }
     setCommandError(null);
     setNotice(null);
-    if (labelPrompt || powerPickerAt) {
+    if (labelPrompt || powerPickerAt || fieldEditor) {
       setLabelPrompt(null);
       setPowerPickerAt(null);
+      setFieldEditor(null);
       return;
     }
     if (labelPlacing) {
@@ -683,9 +707,53 @@ export function SchematicCanvas({
     );
   };
 
-  const handleDoubleClick = () => {
-    if (wireMode && wire) {
-      finishWire(wire.anchors);
+  const openProperties = (uuid: string) => {
+    setCommandError(null);
+    void getSymbolFields(uuid).then(
+      (fields) => setPropertiesDialog({ uuid, fields }),
+      (error: unknown) => setCommandError(describeIpcError(error)),
+    );
+  };
+
+  const openFieldEditor = (uuid: string, field: "Reference" | "Value") => {
+    const instance = instances.find((item) => item.uuid === uuid);
+    if (!instance) {
+      return;
+    }
+    const text = field === "Reference" ? instance.reference : instance.value;
+    setCommandError(null);
+    setFieldEditor({
+      uuid,
+      field,
+      at: text
+        ? { x: text.xNm, y: text.yNm }
+        : { x: instance.xNm, y: instance.yNm },
+      value: text?.text ?? "",
+    });
+  };
+
+  /** The selected symbol, or else the one under the cursor. */
+  const symbolTarget = (): string | null => {
+    if (selection?.kind === "symbol") {
+      return selection.uuid;
+    }
+    const hit = cursor ? findInstanceAt(instances, definitions, cursor) : null;
+    return hit?.uuid ?? null;
+  };
+
+  const handleDoubleClick = (world: ScreenPoint) => {
+    if (wireMode) {
+      if (wire) {
+        finishWire(wire.anchors);
+      }
+      return;
+    }
+    if (placing || labelPlacing || noConnectMode) {
+      return;
+    }
+    const hit = findInstanceAt(instances, definitions, world);
+    if (hit) {
+      openProperties(hit.uuid);
     }
   };
 
@@ -847,7 +915,22 @@ export function SchematicCanvas({
       }
       return;
     }
-    if (handleToolKey(key, event) || selection === null) {
+    if (handleToolKey(key, event)) {
+      return;
+    }
+    if (key === "e" || key === "u" || key === "v") {
+      const uuid = symbolTarget();
+      if (uuid) {
+        event.preventDefault();
+        if (key === "e") {
+          openProperties(uuid);
+        } else {
+          openFieldEditor(uuid, key === "u" ? "Reference" : "Value");
+        }
+      }
+      return;
+    }
+    if (selection === null) {
       return;
     }
     const uuids = [selection.uuid];
@@ -1061,6 +1144,46 @@ export function SchematicCanvas({
             setPowerPickerAt(null);
             refocus();
           }}
+        />
+      )}
+      {fieldEditor && (
+        <InlinePropertyEditor
+          key={`${fieldEditor.uuid}-${fieldEditor.field}`}
+          field={fieldEditor.field}
+          at={popoverAt(fieldEditor.at)}
+          initialValue={fieldEditor.value}
+          onSubmit={async (value) => {
+            try {
+              await setSymbolField(fieldEditor.uuid, fieldEditor.field, value);
+            } catch (error) {
+              return describeIpcError(error);
+            }
+            setFieldEditor(null);
+            setAnnouncement("Symbol properties updated");
+            refocus();
+            return null;
+          }}
+          onCancel={() => {
+            setFieldEditor(null);
+            refocus();
+          }}
+        />
+      )}
+      {propertiesDialog && (
+        <SymbolPropertiesDialog
+          key={propertiesDialog.uuid}
+          fields={propertiesDialog.fields}
+          onApply={async (fields) => {
+            try {
+              await editSymbolFields(propertiesDialog.uuid, fields);
+            } catch (error) {
+              return describeIpcError(error);
+            }
+            setPropertiesDialog(null);
+            setAnnouncement("Symbol properties updated");
+            return null;
+          }}
+          onCancel={() => setPropertiesDialog(null)}
         />
       )}
       <div className="visually-hidden" aria-live="polite">

@@ -14,12 +14,12 @@ pub mod wiring;
 
 pub use error::CoreError;
 pub use kicad::{
-    Mirror, PageSize, PinConnection, PlacedPin, PlacedSymbol, Placement, SymbolProperty,
-    TITLE_BLOCK_COMMENTS, TitleBlock,
+    MANDATORY_FIELDS, Mirror, PageSize, PinConnection, PlacedPin, PlacedSymbol, Placement,
+    SymbolProperty, TITLE_BLOCK_COMMENTS, TitleBlock,
 };
 pub use netlist::{Net, NetNode, netlist};
 pub use project::{Project, validate_name, write_atomic};
-pub use session::{Changes, Command, Session, SymbolTransform};
+pub use session::{Changes, Command, FieldEdit, Session, SymbolTransform};
 pub use symbol::{Fill, Pin, Shape, SymbolGraphics, SymbolPreview, Xy, unit_count};
 pub use units::{Angle, Nm, Point, UnitError};
 pub use wiring::{Junction, Label, LabelKind, LabelShape, NoConnect, Wire};

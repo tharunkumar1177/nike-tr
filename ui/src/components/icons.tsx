@@ -78,6 +78,15 @@ export function GlobalLabelIcon() {
   );
 }
 
+export function RemoveIcon() {
+  return (
+    <Icon>
+      <path d="M6 6l12 12" />
+      <path d="M6 18L18 6" />
+    </Icon>
+  );
+}
+
 export function NoConnectIcon() {
   return (
     <Icon>

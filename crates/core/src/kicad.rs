@@ -436,9 +436,9 @@ impl Schematic {
         }
         let quarter = placement.rotation_steps.rem_euclid(4);
         let rotation = Angle::from_decidegrees(quarter * 900);
-        let mut properties = Vec::with_capacity(PLACED_PROPERTY_KEYS.len());
-        let mut definition_properties = Vec::with_capacity(PLACED_PROPERTY_KEYS.len());
-        for key in PLACED_PROPERTY_KEYS {
+        let mut properties = Vec::with_capacity(MANDATORY_FIELDS.len());
+        let mut definition_properties = Vec::with_capacity(MANDATORY_FIELDS.len());
+        for key in MANDATORY_FIELDS {
             let definition_node =
                 children(definition, "property").find(|item| text_arg(item, 0) == Some(key));
             match definition_node {
@@ -629,7 +629,8 @@ impl Schematic {
 }
 
 /// The property keys copied from a definition into a placed symbol, in KiCad's order.
-const PLACED_PROPERTY_KEYS: [&str; 4] = ["Reference", "Value", "Footprint", "Datasheet"];
+/// The properties every placed symbol has, in the order KiCad lists them.
+pub const MANDATORY_FIELDS: [&str; 4] = ["Reference", "Value", "Footprint", "Datasheet"];
 
 /// How a new symbol is placed on the schematic: where it sits, how it is oriented, and the
 /// fresh UUIDs it and its pins get.
@@ -693,8 +694,9 @@ impl SymbolProperty {
         })
     }
 
-    /// Builds the property node with the typed key, value, and `(at ...)`, keeping every
-    /// other child of `previous` (the definition's or the current file's node) as it is.
+    /// Builds the property node with the typed key, value, `(at ...)`, and `(hide yes)`,
+    /// keeping every other child of `previous` (the definition's or the current file's
+    /// node) as it is. A new `(hide yes)` goes before `(effects ...)`, where KiCad writes it.
     fn to_node(&self, previous: Option<&SExpr>) -> SExpr {
         let mut items = vec![
             SExpr::atom("property"),
@@ -702,21 +704,27 @@ impl SymbolProperty {
             SExpr::string(self.value.as_str()),
             at_node(self.position, self.rotation),
         ];
-        match previous {
-            Some(previous) => items.extend(
-                previous
-                    .args()
-                    .iter()
-                    .skip(2)
-                    .filter(|child| child.head() != Some("at"))
-                    .cloned(),
-            ),
-            None => {
-                if self.hidden {
-                    items.push(SExpr::node("hide", vec![SExpr::atom("yes")]));
+        let mut hide = self
+            .hidden
+            .then(|| SExpr::node("hide", vec![SExpr::atom("yes")]));
+        let kept_children = previous.map(SExpr::args).unwrap_or_default();
+        for child in kept_children.iter().skip(2) {
+            match child.head() {
+                Some("at") => {}
+                Some("hide") => {
+                    if let Some(node) = hide.take() {
+                        let kept = text_arg(child, 0) != Some("no");
+                        items.push(if kept { child.clone() } else { node });
+                    }
                 }
+                Some("effects") => {
+                    items.extend(hide.take());
+                    items.push(child.clone());
+                }
+                _ => items.push(child.clone()),
             }
         }
+        items.extend(hide);
         SExpr::List(items)
     }
 }
@@ -967,10 +975,12 @@ impl PlacedSymbol {
     }
 
     /// Rebuilds the file node from the typed state, reusing `previous` so unknown children
-    /// keep their text and order. Properties and pins merge with the previous node's
-    /// children one by one, in file order.
+    /// keep their text and order. Properties merge with the previous node's property of
+    /// the same key: a key no longer present is dropped, and new keys follow the last
+    /// property. Pins merge one by one, in file order.
     fn to_node(&self, previous: &SExpr) -> SExpr {
-        let mut properties = self.properties.iter();
+        let mut written = vec![false; self.properties.len()];
+        let mut property_end = None;
         let mut pins = self.pins.iter();
         let mut items = vec![SExpr::atom("symbol")];
         let mut at_index = None;
@@ -999,10 +1009,23 @@ impl PlacedSymbol {
                     "uuid",
                     vec![SExpr::string(self.uuid.to_string())],
                 )),
-                Some("property") => match properties.next() {
-                    Some(property) => items.push(property.to_node(Some(child))),
-                    None => items.push(child.clone()),
-                },
+                Some("property") => {
+                    let key = text_arg(child, 0);
+                    let index = self
+                        .properties
+                        .iter()
+                        .enumerate()
+                        .position(|(i, p)| !written[i] && Some(p.key.as_str()) == key);
+                    match (index, key) {
+                        (Some(index), _) => {
+                            written[index] = true;
+                            items.push(self.properties[index].to_node(Some(child)));
+                        }
+                        (None, Some(_)) => {}
+                        (None, None) => items.push(child.clone()),
+                    }
+                    property_end = Some(items.len());
+                }
                 Some("pin") => match pins.next() {
                     Some(pin) => items.push(pin_node(pin, Some(child))),
                     None => items.push(child.clone()),
@@ -1011,15 +1034,22 @@ impl PlacedSymbol {
                 _ => items.push(child.clone()),
             }
         }
+        let added = self
+            .properties
+            .iter()
+            .zip(written)
+            .filter(|(_, done)| !done)
+            .map(|(property, _)| property.to_node(None));
+        let at = property_end.unwrap_or(items.len());
+        for (offset, node) in added.enumerate() {
+            items.insert(at + offset, node);
+        }
         if let (Some(mirror), false) = (self.mirror, mirror_written) {
             let node = SExpr::node("mirror", vec![SExpr::atom(mirror.as_str())]);
             match at_index {
                 Some(index) => items.insert(index + 1, node),
                 None => items.push(node),
             }
-        }
-        for property in properties {
-            items.push(property.to_node(None));
         }
         for pin in pins {
             items.push(pin_node(pin, None));

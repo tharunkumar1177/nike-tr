@@ -10,6 +10,7 @@ import type { LibrarySymbol } from "./bindings/LibrarySymbol";
 import type { ProjectProperties } from "./bindings/ProjectProperties";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
+import type { SymbolField } from "./bindings/SymbolField";
 import type { SymbolPlacement } from "./bindings/SymbolPlacement";
 import type { SymbolTransform } from "./bindings/SymbolTransform";
 import type { Xy } from "./bindings/Xy";
@@ -112,6 +113,25 @@ export function rotateLabels(uuids: string[], steps: number): Promise<void> {
 
 export function deleteWiring(uuids: string[]): Promise<void> {
   return invoke<void>("delete_wiring", { uuids });
+}
+
+export function getSymbolFields(uuid: string): Promise<SymbolField[]> {
+  return invoke<SymbolField[]>("get_symbol_fields", { uuid });
+}
+
+export function editSymbolFields(
+  uuid: string,
+  fields: SymbolField[],
+): Promise<void> {
+  return invoke<void>("edit_symbol_fields", { uuid, fields });
+}
+
+export function setSymbolField(
+  uuid: string,
+  name: string,
+  value: string,
+): Promise<void> {
+  return invoke<void>("set_symbol_field", { uuid, name, value });
 }
 
 export function placeNoConnect(position: Xy): Promise<void> {

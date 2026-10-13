@@ -26,7 +26,13 @@ Slice 4c (properties and ERC) is Partial. 4c-1 (no-connect flags and annotation)
 - IPC: `noConnects` in snapshots and diffs, and the "Place No-Connect Flag" undo label.
 - UI: Vitest covers Q mode with pin snapping and repeated placement, Escape, the core's duplicate-flag message, selecting and deleting a flag (R does nothing), and Tools > Annotate Schematic with both result messages. `wiring.test.ts` covers flag hit-testing.
 
-4c-2 to 4c-4 are Planned.
+4c-2 (property editing) is green in [CI run 38455427365](https://github.com/tharunkumar1177/tron/actions/runs/38455427365). Covered by tests:
+
+- Core: fields list the mandatory four first; one dialog edit adds, hides, and removes fields and undoes in one step; setting Reference updates `(instances)`; empty, duplicate, missing-mandatory, and over-long fields are rejected without recording an undo step.
+- IPC: fields round-trip through the UI payload.
+- UI: Vitest covers E opening the dialog with focus on Reference, the empty-Reference error, Show toggles, Add Field with focus on the new name, Apply's payload, removing a custom field from a double-click, a core error shown in the dialog, and U editing Reference inline with validation.
+
+4c-3 and 4c-4 are Planned.
 
 ## Architecture dependencies
 
@@ -112,6 +118,9 @@ Four PRs, each green in CI on its own, built in this order.
 - As built (UI): the toolbar's "Add no-connect flag" button (Q, `aria-pressed`) toggles placing mode. A ghost X follows the cursor, snapping to pins and wire ends like the wire tool, and each click places a flag until Escape, Q, or right-click. Flags draw as a 1.27 mm X in `--color-primary` (`--color-focus` when selected), select and drag like labels, and can't be rotated. Hints: "Click to place flag. Esc: Cancel" and "Flag selected. Drag to move. Del: Remove". The native **Tools > Annotate Schematic** item has no shortcut and no confirmation. It shows "Annotated N symbols" or "Schematic is already fully annotated" in the status bar until the next input, and announces the same text.
 
 **4c-2. Property editing.** `edit_symbol_properties(uuid, properties)` replaces the symbol node in one `EditItems` step. Each property has a key, a value, a position, a rotation, and visibility, and Reference edits also update `(instances)`. E or a double-click opens the dialog; U and V edit Reference and Value inline. References must not be empty. Duplicates are left to ERC.
+
+- As built: the commands are `get_symbol_fields`, `edit_symbol_fields(uuid, fields)` for the dialog, and `set_symbol_field(uuid, name, value)` for inline edits. Each field is a name, a value, and visibility; positions and rotations of existing fields are kept, and new fields are placed hidden at the symbol anchor. Both edits are a `Group` ("Edit Symbol Properties") of one `TransformSymbols`. Reference, Value, Footprint, and Datasheet are always listed first and can't be removed or renamed. Field names must be unique and non-empty, names are capped at 256 characters, and values at 4096. `PlacedSymbol::to_node` now matches property nodes by key, so removed fields drop out and unknown children are kept, and `SymbolProperty::to_node` writes `(hide yes)` and drops `(hide no)`.
+- As built (UI): **Symbol Properties** is a modal grid of Name, Value, and Show columns with Add Field (default name `FieldN`, hidden) and a remove button on custom rows. Apply is disabled until something changes and the fields are valid; core errors show inline. U and V open a small popover at the field's text with Cancel and Apply. E, U, and V act on the selected symbol or else the one under the cursor; a double-click opens the dialog outside tool modes. Success announces "Symbol properties updated".
 
 **4c-3. ERC.** `erc.rs` checks the schematic and its derived netlist and returns transient violations: kind, severity, position, the item UUIDs, and KiCad's message. Violations are never saved in `.kicad_sch`.
 
