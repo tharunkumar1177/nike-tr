@@ -670,7 +670,7 @@ mod tests {
             "V1 a 0 DC 1",
             "R1 a b 1e3",
             "C1 b 0 1e-6",
-            ".tran 1e-5 5e-2 0 1e-7 uic",
+            ".tran 1e-5 1e-1 0 1e-7 uic",
             ".end",
         ];
         let deck = Deck {
@@ -693,6 +693,7 @@ mod tests {
             panic!("{error}; status lines: {statuses:?}");
         }
         let seen = seen.lock().unwrap();
-        assert!(!seen.is_empty(), "no progress; status lines: {statuses:?}");
+        let midway = seen.iter().any(|&value| value > 0.0 && value < 100.0);
+        assert!(midway, "progress {seen:?}; status lines: {statuses:?}");
     }
 }
