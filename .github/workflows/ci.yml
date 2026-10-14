@@ -17,7 +17,7 @@ env:
   NODE_VERSION: "24.21.0"
   CARGO_TERM_COLOR: always
   NGSPICE_URL: https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/47/ngspice-47_dll_64.7z
-  NGSPICE_SHA256: ""
+  NGSPICE_SHA256: 5bf5eec7db989f74849cdb32f7df62693f4f149cceeebcbd222eb35c2bb821eb
 
 jobs:
   lockfiles:
@@ -176,7 +176,7 @@ jobs:
         run: |
           curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
             --output "$RUNNER_TEMP/ngspice.7z" "$NGSPICE_URL"
-          actual="$(sha256sum "$RUNNER_TEMP/ngspice.7z" | cut -d ' ' -f 1)"
+          actual="$(sha256sum < "$RUNNER_TEMP/ngspice.7z" | cut -d ' ' -f 1)"
           echo "ngspice archive SHA-256: $actual"
           if [ "$actual" != "$NGSPICE_SHA256" ]; then
             7z l "$RUNNER_TEMP/ngspice.7z"

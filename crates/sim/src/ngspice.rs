@@ -62,7 +62,9 @@ static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
 extern "C" fn send_char(text: *const c_char, _id: c_int, _user: *mut c_void) -> c_int {
     if !text.is_null() {
         // SAFETY: ngspice passes a NUL-terminated string that lives for this call.
-        let line = unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned();
+        let line = unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned();
         OUTPUT
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -109,7 +111,11 @@ impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             EngineError::Load { path, message } => {
-                write!(f, "ngspice could not be loaded from {}: {message}", path.display())
+                write!(
+                    f,
+                    "ngspice could not be loaded from {}: {message}",
+                    path.display()
+                )
             }
             EngineError::AlreadyLoaded { path } => {
                 write!(f, "ngspice is already loaded from {}.", path.display())
@@ -176,13 +182,17 @@ impl Deref for EngineGuard {
     type Target = Engine;
 
     fn deref(&self) -> &Engine {
-        self.0.as_ref().expect("the guard always holds a loaded engine")
+        self.0
+            .as_ref()
+            .expect("the guard always holds a loaded engine")
     }
 }
 
 impl DerefMut for EngineGuard {
     fn deref_mut(&mut self) -> &mut Engine {
-        self.0.as_mut().expect("the guard always holds a loaded engine")
+        self.0
+            .as_mut()
+            .expect("the guard always holds a loaded engine")
     }
 }
 
@@ -264,10 +274,8 @@ impl Engine {
             .map(|line| CString::new(line.as_str()))
             .collect::<Result<_, _>>()
             .map_err(|_| EngineError::Circuit(vec!["The deck contains a NUL byte.".to_owned()]))?;
-        let mut pointers: Vec<*mut c_char> = lines
-            .iter()
-            .map(|line| line.as_ptr().cast_mut())
-            .collect();
+        let mut pointers: Vec<*mut c_char> =
+            lines.iter().map(|line| line.as_ptr().cast_mut()).collect();
         pointers.push(ptr::null_mut());
         // SAFETY: a NULL-terminated array of NUL-terminated lines; ngspice copies them.
         let status = unsafe { (self.circ)(pointers.as_mut_ptr()) };
@@ -389,7 +397,11 @@ unsafe fn owned_string(text: *const c_char) -> Option<String> {
         return None;
     }
     // SAFETY: checked for null above; validity is the caller's contract.
-    Some(unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned())
+    Some(
+        unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 /// # Safety
