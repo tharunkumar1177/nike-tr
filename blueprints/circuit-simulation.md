@@ -8,7 +8,7 @@ The user runs DC operating point, transient, and AC analyses on their schematic 
 
 **Status:** Partial
 
-Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. Slice 5b is green in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376): `crates/sim` loads the pinned ngspice 46 DLL and runs `.op` and `.tran` against it. Slice 5c is green in [CI 38595951934](https://github.com/tharunkumar1177/tron/actions/runs/38595951934), including the Windows installer. It adds cancellable background runs with progress, min-max waveform decimation, the analysis settings in `tron.json`, and the simulation IPC commands. There is no UI and no bundled ngspice yet (5d).
+Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. Slice 5b is green in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376): `crates/sim` loads the pinned ngspice 46 DLL and runs `.op` and `.tran` against it. Slice 5c is green in [CI 38595951934](https://github.com/tharunkumar1177/tron/actions/runs/38595951934), including the Windows installer. It adds cancellable background runs with progress, min-max waveform decimation, the analysis settings in `tron.json`, and the simulation IPC commands. Slice 5d-1a is green in [CI 38636022839](https://github.com/tharunkumar1177/tron/actions/runs/38636022839). The Windows installer now bundles ngspice 46, its OpenMP runtime, the seven XSPICE code models, and both license notices. The engine skips `spinit` and loads the code models from an absolute path at startup. There is no simulation UI yet (5d-1b onward).
 
 ## Architecture dependencies
 
@@ -56,10 +56,10 @@ When a run fails to converge, `sim` retries with gmin stepping and then source s
 - `crates/sim/src/value.rs` — parses SI values and writes exact round-trip numbers for SPICE. Implemented.
 - `crates/sim/src/analysis.rs` — the `.op` and `.tran` directives and their range checks. Implemented.
 - `crates/core/src/kicad.rs` `Schematic::symbol_flag` — reads `(exclude_from_sim yes)` on a placed symbol.
-- `crates/sim/src/ngspice.rs` — the `libloading` wrapper around the ngspice shared API. The library is loaded and initialized once per process, and `Engine::lock` serializes runs through a static mutex. Each run resets ngspice (`destroy all`, `remcirc`), loads the deck, and sends `bg_run`. The caller then waits on a condition variable that the background-thread and exit callbacks signal, and collects every real vector of the current plot. The time vector becomes the plot's `scale`. `Engine::halt` sends `bg_halt` without the engine lock, and `run_cancellable` also takes a cancel flag, so a cancel that arrives before the background thread starts is still honored. `SendStat` percentages go to the run's progress callback. Errors come from ngspice's stderr lines and its exit callback. A second library path in the same process is rejected. Implemented.
+- `crates/sim/src/ngspice.rs` — the `libloading` wrapper around the ngspice shared API. The library is loaded and initialized once per process, and `Engine::lock` serializes runs through a static mutex. Each run resets ngspice (`destroy all`, `remcirc`), loads the deck, and sends `bg_run`. The caller then waits on a condition variable that the background-thread and exit callbacks signal, and collects every real vector of the current plot. The time vector becomes the plot's `scale`. `Engine::halt` sends `bg_halt` without the engine lock, and `run_cancellable` also takes a cancel flag, so a cancel that arrives before the background thread starts is still honored. `SendStat` percentages go to the run's progress callback. Errors come from ngspice's stderr lines and its exit callback. A second library path in the same process is rejected. `skip_spinit` and `Engine::lock(library, code_models)` follow the 5d-1 runtime rules below. Implemented.
 - `crates/sim/src/waveform.rs` — `decimate` and `Plot::waveform`: min-max reduction per x span, the nearest neighbor outside each end of the range, NaN samples dropped, and runs of equal sample count when x decreases. Implemented.
 - `crates/core/src/manifest.rs` `AnalysisSettings` and `Session::edit_analysis` — the optional `simulation.analysis` key in `tron.json`, kept with unknown sibling keys, edited as the undoable "Simulation Settings" command. Implemented.
-- `src-tauri/src/sim.rs` — `start_simulation` (async: checks the schematic, runs on a blocking worker, emits `simulation-progress`, and resolves with `SimulationFinished`), `cancel_simulation`, and `fetch_waveform` (capped at 20,000 samples). Results are dropped on any document change, open, or close, and a run that overlapped a change returns `simCancelled`. ngspice is found through `TRON_NGSPICE`, then the resource `ngspice/ngspice.dll`. `src-tauri/src/ipc.rs` adds `get_analysis_settings` and `edit_analysis_settings`. `src-tauri/src/error.rs` maps each pre-flight and engine error to its own `AppErrorKind`. Implemented.
+- `src-tauri/src/sim.rs` — `start_simulation` (async: checks the schematic, runs on a blocking worker, emits `simulation-progress`, and resolves with `SimulationFinished`), `cancel_simulation`, and `fetch_waveform` (capped at 20,000 samples). Results are dropped on any document change, open, or close, and a run that overlapped a change returns `simCancelled`. ngspice is found through `TRON_NGSPICE`, then the resource `ngspice/ngspice.dll`. `code_model_dir` uses the `codemodels` folder beside the library, or else `lib/ngspice` in the archive layout, and fails with `simEngineLoad` if neither exists. `src-tauri/tauri.bundle.conf.json` adds the `ngspice/` resources for the bundle job only. `src-tauri/src/ipc.rs` adds `get_analysis_settings` and `edit_analysis_settings`. `src-tauri/src/error.rs` maps each pre-flight and engine error to its own `AppErrorKind`. Implemented.
 - Tests: unit tests in each `crates/sim/src` module, and `crates/sim/tests/deck.rs`, which builds KiCad-format divider and RC schematics and checks the exact deck text and every pre-flight error. `crates/sim/tests/ngspice.rs` runs real ngspice from `TRON_NGSPICE`, which CI sets after downloading and checking the pinned archive.
 
 ## Slice 5 plan (approved 2026-10-14)
@@ -81,6 +81,41 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
      - Any published document change drops the stored results.
      - ngspice is found through `TRON_NGSPICE`, then the resource `ngspice/ngspice.dll`.
    - **Errors.** One `AppErrorKind` per pre-flight problem (`SimNoAnalysis`, `SimInvalidAnalysis`, `SimNoGround`, `SimNoModel`, `SimUnannotated`, `SimDuplicateReference`, `SimNetlist`, `SimEmpty`), plus `SimEngineLoad`, `SimCircuitRejected`, `SimAnalysisFailed`, `SimRunning`, `SimCancelled`, and `SimNotFound`.
+   **5d split (architect, 2026-10-14).**
+   - **5d-1:** bundled ngspice, the analysis settings editor, run and cancel controls with progress and elapsed time, and `.op` annotations on the schematic.
+   - **5d-2:** the probe tool and the base waveform viewer.
+   - **5d-3:** zoom and pan, two cursors with a delta readout, and the measurement table.
+
+   **5d-1 runtime and bundling.**
+   - ngspice.dll loaded through `LoadLibrary` finds `spinit` through `SPICE_SCRIPTS` or the process working directory, not its own location, and the `codemodel` lines inside it are relative to the working directory too. So before loading the library, `crates/sim` sets `SPICE_SCRIPTS` to the library's own folder, which has no `spinit`. It uses `_putenv_s`, because ngspice reads the C runtime's copy of the environment and `std::env::set_var` doesn't update that copy. `ngSpice_nospinit()` can't be used: in ngspice 46 it calls `cp_vset`, which reaches `ft_find_analysis` and dereferences `ft_sim` before `ngSpice_Init` creates it. That crashed every engine test with STATUS_ACCESS_VIOLATION ([CI 38604269148](https://github.com/tharunkumar1177/tron/actions/runs/38604269148)).
+   - `Engine::lock(library, code_models)` loads the code models once, right after `ngSpice_Init` and before any circuit, the way KiCad does. Loading them after circuits had run crashed the test process with STATUS_ACCESS_VIOLATION ([CI 38632253529](https://github.com/tharunkumar1177/tron/actions/runs/38632253529)). A later lock that asks for a different folder gets an error.
+   - Code model loading sends a `codemodel '<absolute path>'` command for each `*.cm` file. It uses single quotes because ngspice 46's lexer strips them and keeps the path as one word, spaces included. It keeps double quotes as part of the file name ([CI 38626825806](https://github.com/tharunkumar1177/tron/actions/runs/38626825806)). A path that contains `'` is rejected with an error.
+   - `spinit` is not shipped. Without it, `.op` and `.tran` on R, C, L, V, and I behave the same.
+   - Only the bundle job gets the ngspice files. It downloads the pinned archive, ngspice's `COPYING` from the `ngspice-46` tag, and the LLVM OpenMP `LICENSE.TXT` (for `libomp140.x86_64.dll`, Apache-2.0 with the LLVM exception), each checked against a pinned SHA-256, into `src-tauri/resources/ngspice/{ngspice.dll, libomp140.x86_64.dll, codemodels/*.cm, COPYING, LICENSE-libomp.txt}`.
+   - It builds with `--config src-tauri/tauri.bundle.conf.json`. `tauri-build` checks `bundle.resources` at compile time, so the resources can't go in `tauri.conf.json` without breaking the rust job.
+   - The `.osdi` and `ivlng` files are not shipped.
+   - `ProjectSnapshot` gains `simulationSettings` and `DocumentDiff` gains `simulationSettingsChanged`.
+   **5d-1 is built in two PRs.**
+   - **5d-1a:** the runtime and bundling above.
+   - **5d-1b:** the three UI surfaces below, the snapshot and diff fields, and an op-point anchor mapping over IPC.
+
+   **5d-1 design decisions (designer, 2026-10-14; the full plans are in the session transcript).**
+   - **Settings dialog** (`SimulationSettingsDialog.tsx`, `ui/src/utils/si.ts`).
+     - It opens from a toolbar gear, a menu item, and `Ctrl+Alt+S`.
+     - An "Analysis type" select offers "Operating Point (.op)" and "Transient (.tran)". The transient fields are "Time step", "Final time", "Initial time", "Maximum time step" (placeholder "Optional"), and "Start from initial conditions (UIC)".
+     - Fields hold the raw SI text. Each field shows its own error ("Invalid SI number.", "Must be greater than 0.", "Must be greater than or equal to 0.", "Must be less than final time.", "Must not exceed final time minus initial time."), and OK is disabled while any error shows.
+     - With no analysis set, it defaults to a transient of 1u / 1m / 0. OK and Cancel only, so one dialog session is one undo step.
+   - **Run panel** (`SimPanel.tsx`, modeled on `ErcPanel`, plus toolbar Run, Cancel, and Settings buttons).
+     - F5 runs and Esc cancels.
+     - The progress bar is indeterminate until a percentage arrives, alongside "Elapsed: N.N s".
+     - The panel shows success ("Simulation complete in {time} s."), "Simulation cancelled.", and an "Out of date" badge after an edit.
+     - Pre-flight errors appear as rows like the ERC panel's. Errors that name a symbol jump to it, and analysis errors open the settings dialog.
+     - An `aria-live` region announces start, finish, and errors.
+   - **Op annotations** (drawn in `schematicDraw.ts`, with hidden hitboxes and a screen-reader list in `SchematicCanvas.tsx`, and an eye toggle in the toolbar).
+     - Each voltage sits at its net label, or else at the middle of the net's longest wire. Each current sits at its device's first pin. Ground is hidden.
+     - Values show 3 significant digits with an SI prefix and unit, such as `3.30 V` or `-1.25 mA`.
+     - Annotations clear on any edit. A tooltip shows the exact value.
+     - It needs, per vector: `vector`, `kind` (voltage or current), `label`, and an `anchorNm`.
 4. **5d. Bundling and UI.** Ship `ngspice.dll`, `spinit`, the code models, and `COPYING` as Tauri resources. Add the probe tool, `.op` annotations, and a waveform viewer with zoom, two cursors with a delta readout, and measurements (min, max, average, RMS, peak-to-peak). This needs a designer plan first.
 
 ## Acceptance or verification criteria
@@ -89,12 +124,14 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
 - [x] (5b) An RC low-pass transient matches the analytic response within 1% in a CI test using real ngspice. Verified by `crates/sim/tests/ngspice.rs` in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376).
 - [x] (5b) A voltage divider `.op` matches the analytic value exactly to 6 significant figures. Verified by the same test file and run, which also checks that a rejected deck reports the ngspice error and that the engine recovers afterward.
 - [x] (5c) A long transient reports progress midway through the run and can be cancelled while it runs, after which the engine runs the next deck normally. The waveform fetch respects its budget and keeps peaks. The analysis settings are an undoable edit that survives a save and reopen, and each pre-flight error has its own error kind. Verified by `crates/sim/src/ngspice.rs` and `crates/sim/tests/ngspice.rs` (real ngspice), `crates/sim/src/waveform.rs`, `crates/core/src/session.rs`, `crates/core/src/manifest.rs`, and `src-tauri/src/error.rs` in [CI 38595951934](https://github.com/tharunkumar1177/tron/actions/runs/38595951934).
+- [x] (5d-1a) Running an XSPICE `gain` model loaded from a folder whose path contains a space gives the expected `.op` value. The installer build places `ngspice.dll`, `libomp140.x86_64.dll`, `COPYING`, `LICENSE-libomp.txt`, and `codemodels/*.cm` under `ngspice/` beside the app. Every download is checked against a pinned SHA-256. Verified by `crates/sim/tests/ngspice.rs`, `src-tauri/src/sim.rs`, and the bundle job's "Check bundled ngspice" step in [CI 38636022839](https://github.com/tharunkumar1177/tron/actions/runs/38636022839).
 - [ ] The `.ac` −3 dB point of an RC filter matches 1/(2πRC) within 1%.
 - [ ] Probing a wire or pin plots its signal, and plots support zoom, cursors, and measurement readouts.
 
 ## Remaining gaps and unknowns
 
 - Encrypted vendor models (PSpice) are not supported.
+- **Bundled ngspice in an installed app (unverified):** CI checks that the files are bundled but never runs the installed app. Still unverified: an install under `Program Files`, an install path with non-ASCII characters (ngspice receives a narrow-string path), and a path that contains `'` (rejected by design).
 - **Progress on very long transients (unexplained):** a 0.1 s transient with a 0.1 µs maximum step reports progress midway. A 2 s transient with the same step reported none in its first 10 s on the CI runner ([CI 38594420004](https://github.com/tharunkumar1177/tron/actions/runs/38594420004)). The cause is unknown, so the 5d UI must not treat a run without progress as stuck, and should show elapsed time as well.
 - The `start_simulation`, `cancel_simulation`, and `fetch_waveform` commands have no test through Tauri itself. The engine, decimation, settings, and error mapping beneath them are tested.
 

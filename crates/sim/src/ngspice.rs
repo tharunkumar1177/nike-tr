@@ -54,7 +54,6 @@ type CommandFn = unsafe extern "C" fn(*const c_char) -> c_int;
 type VecInfoFn = unsafe extern "C" fn(*const c_char) -> *const VectorInfo;
 type CurPlotFn = unsafe extern "C" fn() -> *const c_char;
 type AllVecsFn = unsafe extern "C" fn(*const c_char) -> *const *const c_char;
-
 /// Lines ngspice printed since the last run started, with its `stdout ` or `stderr ` prefix.
 static OUTPUT: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -263,6 +262,8 @@ pub struct Engine {
     vec_info: VecInfoFn,
     cur_plot: CurPlotFn,
     all_vecs: AllVecsFn,
+    /// The folder whose XSPICE code models were loaded at startup.
+    code_models: Option<PathBuf>,
     /// Kept loaded for the life of the process; the function pointers above point into it.
     _library: Library,
 }
@@ -289,8 +290,9 @@ impl DerefMut for EngineGuard {
 }
 
 impl Engine {
-    /// Locks the engine, loading and initializing ngspice from `path` on first use.
-    pub fn lock(path: &Path) -> Result<EngineGuard, EngineError> {
+    /// Locks the engine. On first use, loads and initializes ngspice from `path` and then
+    /// the XSPICE code models (`*.cm`) in `code_models`. Later calls must ask for the same.
+    pub fn lock(path: &Path, code_models: Option<&Path>) -> Result<EngineGuard, EngineError> {
         let mut slot = ENGINE.lock().unwrap_or_else(PoisonError::into_inner);
         match slot.as_ref() {
             Some(engine) if engine.path != path => {
@@ -298,8 +300,26 @@ impl Engine {
                     path: engine.path.clone(),
                 });
             }
+            Some(engine) if engine.code_models.as_deref() != code_models => {
+                let loaded = match &engine.code_models {
+                    Some(dir) => format!("the code models in {}", dir.display()),
+                    None => "no code models".to_owned(),
+                };
+                return Err(EngineError::Load {
+                    path: path.to_owned(),
+                    message: format!("ngspice already started with {loaded}."),
+                });
+            }
             Some(_) => {}
-            None => *slot = Some(Engine::load(path)?),
+            None => {
+                // Kept even if a code model fails, because ngspice can't be unloaded.
+                let engine = slot.insert(Engine::load(path)?);
+                if let Some(dir) = code_models {
+                    // ngspice sizes each circuit's device tables when it is created, so
+                    // code models, which add device types, load before any circuit.
+                    engine.load_code_models(dir)?;
+                }
+            }
         }
         Ok(EngineGuard(slot))
     }
@@ -309,6 +329,10 @@ impl Engine {
             path: path.to_owned(),
             message,
         };
+        // ngspice would run a `spinit` from its default folders, whose code model paths are
+        // relative to the working directory, so Tron points it at the library's folder,
+        // which has none, and loads the code models itself.
+        skip_spinit(path.parent().unwrap_or(path)).map_err(failed)?;
         // SAFETY: loading ngspice runs no initializers that depend on Tron's state.
         let library = unsafe { open(path) }.map_err(|error| failed(with_sources(&error)))?;
         // SAFETY: each type matches the prototype in ngspice's `sharedspice.h`.
@@ -355,8 +379,47 @@ impl Engine {
             vec_info,
             cur_plot,
             all_vecs,
+            code_models: None,
             _library: library,
         })
+    }
+
+    fn load_code_models(&mut self, dir: &Path) -> Result<(), EngineError> {
+        let failed = |message: String| EngineError::Load {
+            path: dir.to_owned(),
+            message,
+        };
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => return Err(failed(error.to_string())),
+        };
+        let mut models: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| is_code_model(path))
+            .collect();
+        if models.is_empty() {
+            return Err(failed("the folder has no code models (*.cm).".to_owned()));
+        }
+        models.sort();
+        take_errors();
+        for model in &models {
+            // ngspice's lexer keeps a path in single quotes as one word and strips the
+            // quotes, but passes double quotes through to the file name. Windows accepts
+            // forward slashes.
+            let path = model.display().to_string().replace('\\', "/");
+            if path.contains('\'') {
+                let message = format!("{path}: ngspice can't load a path containing '.");
+                return Err(failed(message));
+            }
+            let status = self.command(&format!("codemodel '{path}'"))?;
+            let errors = take_errors();
+            if status != 0 || !errors.is_empty() {
+                return Err(failed(format!("{path}: {}", errors.join(" "))));
+            }
+        }
+        self.code_models = Some(dir.to_owned());
+        Ok(())
     }
 
     /// Loads `deck`, runs its analysis to completion, and returns the results.
@@ -485,7 +548,7 @@ impl Engine {
         if EXITED.load(Ordering::SeqCst) {
             return Err(EngineError::Exited);
         }
-        let command = CString::new(command).expect("commands are fixed ASCII text");
+        let command = CString::new(command).expect("commands and file paths contain no NUL");
         // SAFETY: a NUL-terminated command string that outlives the call.
         let status = unsafe { (self.command)(command.as_ptr()) };
         if EXITED.load(Ordering::SeqCst) {
@@ -528,6 +591,11 @@ impl Engine {
     }
 }
 
+fn is_code_model(path: &Path) -> bool {
+    let extension = path.extension().and_then(|ext| ext.to_str());
+    extension.is_some_and(|ext| ext.eq_ignore_ascii_case("cm"))
+}
+
 fn send_halt() {
     if let Some(&command) = COMMAND.get() {
         // SAFETY: a NUL-terminated command string. `bg_halt` only interrupts ngspice's
@@ -564,6 +632,32 @@ fn with_sources(error: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     text
+}
+
+/// Makes ngspice look for `spinit` only in `dir`. `ngSpice_nospinit` can't be used: in
+/// ngspice 46 it dereferences simulator state that only `ngSpice_Init` creates.
+#[cfg(windows)]
+fn skip_spinit(dir: &Path) -> Result<(), String> {
+    unsafe extern "C" {
+        fn _putenv_s(name: *const c_char, value: *const c_char) -> c_int;
+    }
+    // ngspice reads the C runtime's copy of the environment, which `std::env::set_var`
+    // does not update. `_putenv_s` updates both.
+    let value = CString::new(dir.display().to_string());
+    let value = value.map_err(|error| error.to_string())?;
+    // SAFETY: both arguments are NUL-terminated strings that the C runtime copies.
+    let status = unsafe { _putenv_s(c"SPICE_SCRIPTS".as_ptr(), value.as_ptr()) };
+    if status != 0 {
+        return Err(format!("SPICE_SCRIPTS could not be set (error {status})."));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn skip_spinit(dir: &Path) -> Result<(), String> {
+    // SAFETY: called once, under the engine lock, before ngspice starts its threads.
+    unsafe { std::env::set_var("SPICE_SCRIPTS", dir) };
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -680,7 +774,7 @@ mod tests {
         };
         let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
         let sink = std::sync::Arc::clone(&seen);
-        let mut engine = match Engine::lock(&path) {
+        let mut engine = match Engine::lock(&path, None) {
             Ok(engine) => engine,
             Err(error) => panic!("{error}"),
         };
