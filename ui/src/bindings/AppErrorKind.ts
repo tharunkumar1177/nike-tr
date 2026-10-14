@@ -3,4 +3,4 @@
 /**
  * A stable, machine-readable error category the UI maps to its own copy.
  */
-export type AppErrorKind = "noProject" | "io" | "parse" | "invalidFile" | "unsupportedVersion" | "invalidName" | "alreadyExists" | "notAProject" | "invalidEdit" | "nothingToUndo" | "nothingToRedo" | "settings" | "window" | "network" | "checksum" | "libraryNotReady" | "library";
+export type AppErrorKind = "noProject" | "io" | "parse" | "invalidFile" | "unsupportedVersion" | "invalidName" | "alreadyExists" | "notAProject" | "invalidEdit" | "nothingToUndo" | "nothingToRedo" | "settings" | "window" | "network" | "checksum" | "libraryNotReady" | "library" | "simNoAnalysis" | "simInvalidAnalysis" | "simNoGround" | "simNoModel" | "simUnannotated" | "simDuplicateReference" | "simNetlist" | "simEmpty" | "simEngineLoad" | "simCircuitRejected" | "simAnalysisFailed" | "simRunning" | "simCancelled" | "simNotFound";

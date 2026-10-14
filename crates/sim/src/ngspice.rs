@@ -3,6 +3,10 @@
 //! ngspice keeps its state in globals and must be initialized only once per process, so the
 //! library is loaded on first use and stays loaded. [`Engine::lock`] hands out exclusive
 //! access, and every run starts by clearing the previous circuit and its results.
+//!
+//! The analysis runs on ngspice's background thread so that [`Engine::halt`] can stop it.
+//! The caller's thread waits for the thread to finish and reads the results itself; the
+//! callbacks only record what happened and never call back into ngspice.
 
 #![allow(unsafe_code)]
 
@@ -12,7 +16,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use libloading::Library;
 
@@ -59,6 +63,54 @@ static EXITED: AtomicBool = AtomicBool::new(false);
 
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
 
+/// `ngSpice_Command`, kept outside the engine lock so a run can be halted while it waits.
+static COMMAND: OnceLock<CommandFn> = OnceLock::new();
+
+/// `vector_info.v_type` of a time scale, from ngspice's `sim.h`.
+const SV_TIME: c_int = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Idle,
+    /// `bg_run` was sent and has not returned yet.
+    Starting,
+    /// ngspice's background thread is running the analysis.
+    Running,
+    /// The background thread finished, or ngspice exited.
+    Finished,
+}
+
+struct RunState {
+    phase: Phase,
+    halt_requested: bool,
+}
+
+static RUN: Mutex<RunState> = Mutex::new(RunState {
+    phase: Phase::Idle,
+    halt_requested: false,
+});
+static RUN_FINISHED: Condvar = Condvar::new();
+/// Held while `bg_halt` is in progress, so the next command waits for it to return.
+static HALTING: Mutex<()> = Mutex::new(());
+
+/// Receives the analysis progress in percent.
+type Progress = Box<dyn Fn(f64) + Send>;
+
+static PROGRESS: Mutex<Option<Progress>> = Mutex::new(None);
+
+/// Every status line ngspice sent, so a test can show them when progress is missing.
+#[cfg(test)]
+static STATUS_LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn run_state() -> MutexGuard<'static, RunState> {
+    RUN.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn finish_run() {
+    run_state().phase = Phase::Finished;
+    RUN_FINISHED.notify_all();
+}
+
 extern "C" fn send_char(text: *const c_char, _id: c_int, _user: *mut c_void) -> c_int {
     if !text.is_null() {
         // SAFETY: ngspice passes a NUL-terminated string that lives for this call.
@@ -73,8 +125,37 @@ extern "C" fn send_char(text: *const c_char, _id: c_int, _user: *mut c_void) -> 
     0
 }
 
-extern "C" fn send_stat(_text: *const c_char, _id: c_int, _user: *mut c_void) -> c_int {
+extern "C" fn send_stat(text: *const c_char, _id: c_int, _user: *mut c_void) -> c_int {
+    if text.is_null() {
+        return 0;
+    }
+    // SAFETY: ngspice passes a NUL-terminated string that lives for this call.
+    let status = unsafe { CStr::from_ptr(text) }.to_string_lossy();
+    #[cfg(test)]
+    STATUS_LINES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(status.to_string());
+    if let Some(percent) = parse_percent(&status) {
+        let progress = PROGRESS.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(progress) = progress.as_ref() {
+            progress(percent);
+        }
+    }
     0
+}
+
+/// The percentage in an ngspice status line such as `tran: 45.3%`, or `None` for lines
+/// without one, such as `--ready--`.
+fn parse_percent(status: &str) -> Option<f64> {
+    let number = status.trim().strip_suffix('%')?.trim_end();
+    let start = number
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_ascii_digit() || *c == '.'))
+        .map_or(0, |(index, c)| index + c.len_utf8());
+    let percent: f64 = number[start..].parse().ok()?;
+    Some(percent.clamp(0.0, 100.0))
 }
 
 extern "C" fn controlled_exit(
@@ -85,10 +166,15 @@ extern "C" fn controlled_exit(
     _user: *mut c_void,
 ) -> c_int {
     EXITED.store(true, Ordering::SeqCst);
+    finish_run();
     0
 }
 
-extern "C" fn background_running(_running: bool, _id: c_int, _user: *mut c_void) -> c_int {
+/// ngspice reports `true` when its background thread stops and `false` when it starts.
+extern "C" fn background_running(stopped: bool, _id: c_int, _user: *mut c_void) -> c_int {
+    if stopped {
+        finish_run();
+    }
     0
 }
 
@@ -105,6 +191,8 @@ pub enum EngineError {
     Circuit(Vec<String>),
     /// The analysis failed. The lines are what it printed on standard error.
     Analysis(Vec<String>),
+    /// [`Engine::halt`] stopped the run, and its partial results were discarded.
+    Cancelled,
 }
 
 impl fmt::Display for EngineError {
@@ -130,6 +218,7 @@ impl fmt::Display for EngineError {
             EngineError::Analysis(lines) => {
                 write!(f, "The simulation failed: {}", lines.join(" "))
             }
+            EngineError::Cancelled => write!(f, "The simulation was cancelled."),
         }
     }
 }
@@ -150,6 +239,9 @@ pub struct Vector {
 pub struct Plot {
     /// The ngspice plot name, such as `op1` or `tran1`.
     pub name: String,
+    /// The vector the others are plotted against, such as `time`. An operating point has
+    /// none: each vector holds one value.
+    pub scale: Option<String>,
     pub vectors: Vec<Vector>,
 }
 
@@ -254,6 +346,8 @@ impl Engine {
         if status != 0 {
             return Err(failed(format!("ngSpice_Init returned {status}.")));
         }
+        // The library stays loaded for the life of the process, so the pointer stays valid.
+        let _ = COMMAND.set(command);
         Ok(Engine {
             path: path.to_owned(),
             circ,
@@ -267,6 +361,56 @@ impl Engine {
 
     /// Loads `deck`, runs its analysis to completion, and returns the results.
     pub fn run(&mut self, deck: &Deck) -> Result<Plot, EngineError> {
+        self.run_cancellable(deck, &AtomicBool::new(false), |_| {})
+    }
+
+    /// Like [`Engine::run`], and calls `progress` with the percentage ngspice reports as
+    /// the analysis advances. `progress` runs on ngspice's thread.
+    ///
+    /// To cancel, set `cancel` and then call [`Engine::halt`]. Setting the flag first
+    /// covers a cancel that arrives before the analysis has started.
+    pub fn run_cancellable(
+        &mut self,
+        deck: &Deck,
+        cancel: &AtomicBool,
+        progress: impl Fn(f64) + Send + 'static,
+    ) -> Result<Plot, EngineError> {
+        *PROGRESS.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(progress));
+        let result = self.load_and_run(deck, cancel);
+        *PROGRESS.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        let mut state = run_state();
+        state.phase = Phase::Idle;
+        state.halt_requested = false;
+        result
+    }
+
+    /// Stops the analysis that is running, which then fails with
+    /// [`EngineError::Cancelled`]. A halt that arrives while a run is being set up stops it
+    /// as soon as it starts. Does nothing when no run is in progress.
+    pub fn halt() {
+        let _halting = HALTING.lock().unwrap_or_else(PoisonError::into_inner);
+        let send = {
+            let mut state = run_state();
+            if state.phase == Phase::Idle {
+                return;
+            }
+            state.halt_requested = true;
+            state.phase == Phase::Running
+        };
+        if send {
+            send_halt();
+        }
+    }
+
+    fn load_and_run(&mut self, deck: &Deck, cancel: &AtomicBool) -> Result<Plot, EngineError> {
+        {
+            let mut state = run_state();
+            state.phase = Phase::Starting;
+            state.halt_requested = false;
+        }
+        if cancel.load(Ordering::SeqCst) {
+            return Err(EngineError::Cancelled);
+        }
         self.reset()?;
         let lines: Vec<CString> = deck
             .lines
@@ -283,9 +427,42 @@ impl Engine {
         if status != 0 || !errors.is_empty() {
             return Err(EngineError::Circuit(errors));
         }
-        let status = self.command("run")?;
+        if run_state().halt_requested {
+            return Err(EngineError::Cancelled);
+        }
+        let status = self.command("bg_run")?;
+        if status != 0 {
+            return Err(EngineError::Analysis(take_errors()));
+        }
+        let halt_now = {
+            let mut state = run_state();
+            if state.phase == Phase::Starting {
+                state.phase = Phase::Running;
+            }
+            state.halt_requested && state.phase == Phase::Running
+        };
+        if halt_now {
+            let _halting = HALTING.lock().unwrap_or_else(PoisonError::into_inner);
+            send_halt();
+        }
+        let halted = {
+            let mut state = run_state();
+            while state.phase != Phase::Finished {
+                state = RUN_FINISHED
+                    .wait(state)
+                    .unwrap_or_else(PoisonError::into_inner);
+            }
+            state.halt_requested
+        };
+        drop(HALTING.lock().unwrap_or_else(PoisonError::into_inner));
+        if EXITED.load(Ordering::SeqCst) {
+            return Err(EngineError::Exited);
+        }
+        if halted {
+            return Err(EngineError::Cancelled);
+        }
         let errors = take_errors();
-        if status != 0 || !errors.is_empty() {
+        if !errors.is_empty() {
             return Err(EngineError::Analysis(errors));
         }
         self.plot()
@@ -329,19 +506,33 @@ impl Engine {
         // SAFETY: ngspice returns a NULL-terminated array of names it owns, or null.
         let names = unsafe { owned_strings((self.all_vecs)(plot.as_ptr())) };
         let mut vectors = Vec::with_capacity(names.len());
+        let mut scale = None;
         for vector in names {
             let qualified = CString::new(format!("{name}.{vector}")).map_err(|_| no_results())?;
             // SAFETY: ngspice returns a pointer to its own vector record, or null. The data
             // stays valid until the next command, and is copied before then.
-            let values = unsafe { real_values((self.vec_info)(qualified.as_ptr())) };
-            if let Some(values) = values {
-                vectors.push(Vector {
-                    name: vector.to_ascii_lowercase(),
-                    values,
-                });
+            let data = unsafe { real_values((self.vec_info)(qualified.as_ptr())) };
+            if let Some((kind, values)) = data {
+                let name = vector.to_ascii_lowercase();
+                if kind == SV_TIME && scale.is_none() {
+                    scale = Some(name.clone());
+                }
+                vectors.push(Vector { name, values });
             }
         }
-        Ok(Plot { name, vectors })
+        Ok(Plot {
+            name,
+            scale,
+            vectors,
+        })
+    }
+}
+
+fn send_halt() {
+    if let Some(&command) = COMMAND.get() {
+        // SAFETY: a NUL-terminated command string. `bg_halt` only interrupts ngspice's
+        // background thread and waits for it to stop.
+        unsafe { command(c"bg_halt".as_ptr()) };
     }
 }
 
@@ -438,10 +629,12 @@ unsafe fn owned_strings(list: *const *const c_char) -> Vec<String> {
     }
 }
 
+/// The vector's type (`v_type`) and a copy of its values.
+///
 /// # Safety
 ///
 /// `info` must be null or point to a valid `vector_info` whose data is live.
-unsafe fn real_values(info: *const VectorInfo) -> Option<Vec<f64>> {
+unsafe fn real_values(info: *const VectorInfo) -> Option<(c_int, Vec<f64>)> {
     // SAFETY: the caller guarantees the pointer is null or valid.
     let info = unsafe { info.as_ref() }?;
     let length = usize::try_from(info.length).ok()?;
@@ -449,5 +642,58 @@ unsafe fn real_values(info: *const VectorInfo) -> Option<Vec<f64>> {
         return None;
     }
     // SAFETY: ngspice stores `v_length` doubles at `v_realdata`.
-    Some(unsafe { std::slice::from_raw_parts(info.real, length) }.to_vec())
+    let values = unsafe { std::slice::from_raw_parts(info.real, length) };
+    Some((info.kind, values.to_vec()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_lines_yield_their_percentage() {
+        assert_eq!(parse_percent("tran: 45.3%"), Some(45.3));
+        assert_eq!(parse_percent("Transient analysis 100%"), Some(100.0));
+        assert_eq!(parse_percent("tran 120.0%"), Some(100.0));
+        assert_eq!(parse_percent("tran 7.5 %"), Some(7.5));
+        assert_eq!(parse_percent("--ready--"), None);
+        assert_eq!(parse_percent("%"), None);
+    }
+
+    #[test]
+    fn a_transient_reports_its_progress() {
+        let path = std::env::var_os("TRON_NGSPICE")
+            .map(PathBuf::from)
+            .expect("TRON_NGSPICE must name the ngspice shared library");
+        let lines = [
+            "* progress",
+            "V1 a 0 DC 1",
+            "R1 a b 1e3",
+            "C1 b 0 1e-6",
+            ".tran 1e-5 1e-1 0 1e-7 uic",
+            ".end",
+        ];
+        let deck = Deck {
+            lines: Vec::from(lines.map(str::to_owned)),
+            nodes: Default::default(),
+            devices: Default::default(),
+        };
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&seen);
+        let mut engine = match Engine::lock(&path) {
+            Ok(engine) => engine,
+            Err(error) => panic!("{error}"),
+        };
+        let cancel = AtomicBool::new(false);
+        let result = engine.run_cancellable(&deck, &cancel, move |percent| {
+            sink.lock().unwrap().push(percent);
+        });
+        let statuses = STATUS_LINES.lock().unwrap().clone();
+        if let Err(error) = result {
+            panic!("{error}; status lines: {statuses:?}");
+        }
+        let seen = seen.lock().unwrap();
+        let midway = seen.iter().any(|&value| value > 0.0 && value < 100.0);
+        assert!(midway, "progress {seen:?}; status lines: {statuses:?}");
+    }
 }
