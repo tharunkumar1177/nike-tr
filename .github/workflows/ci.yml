@@ -190,6 +190,25 @@ jobs:
             echo "::error::ngspice.dll is not at Spice64_dll/dll-vs in the archive."
             exit 1
           fi
+          vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+          dumpbin="$("$vswhere" -latest -find 'VC/Tools/MSVC/**/bin/Hostx64/x64/dumpbin.exe' | head -n 1 | tr -d '\r')"
+          missing=""
+          for module in "$dll" "$(dirname "$dll")"/*.dll; do
+            echo "Imports of $(basename "$module"):"
+            imports="$(MSYS_NO_PATHCONV=1 "$dumpbin" /nologo /dependents "$(cygpath --windows "$module")" \
+              | tr -d '\r' | grep -iE '^ +[^ ]+\.dll$' | tr -d ' ')"
+            echo "$imports"
+            for import in $imports; do
+              case "${import,,}" in api-ms-win-*|ext-ms-*) continue ;; esac
+              if [ ! -f "$(dirname "$dll")/$import" ] && [ ! -f "/c/Windows/System32/$import" ]; then
+                missing="$missing $import"
+              fi
+            done
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::ngspice needs DLLs this runner lacks:$missing"
+            exit 1
+          fi
           echo "TRON_NGSPICE=$(cygpath --windows "$dll")" >> "$GITHUB_ENV"
           cygpath --windows "$(dirname "$dll")" >> "$GITHUB_PATH"
 
