@@ -8,7 +8,7 @@ use std::path::Path;
 
 use uuid::Uuid;
 
-use crate::erc::Violation;
+use crate::erc::{RuleSeverities, Violation};
 use crate::error::CoreError;
 use crate::kicad::{
     MANDATORY_FIELDS, Mirror, PlacedSymbol, Placement, Schematic, SymbolProperty, TitleBlock,
@@ -16,6 +16,7 @@ use crate::kicad::{
 use crate::kicad_value::text_arg;
 use crate::manifest::{MAX_GRID, MIN_GRID};
 use crate::project::Project;
+use crate::project_file::ProjectFile;
 use crate::sexpr::SExpr;
 use crate::symbol::unit_count;
 use crate::units::{Angle, Nm, Point};
@@ -29,6 +30,7 @@ pub const MAX_WIRE_POINTS: usize = 1024;
 pub const PROPERTIES_LABEL: &str = "Project Properties";
 pub const ANNOTATE_LABEL: &str = "Annotate Schematic";
 pub const EDIT_FIELDS_LABEL: &str = "Edit Symbol Properties";
+pub const ERC_SEVERITIES_LABEL: &str = "Edit ERC Severities";
 /// The longest field value, such as a datasheet URL.
 pub const MAX_FIELD_VALUE_CHARS: usize = 4096;
 
@@ -79,6 +81,11 @@ pub enum Command {
         removed: Vec<(usize, SExpr)>,
         inserted: Vec<(usize, SExpr)>,
     },
+    /// The `.kicad_pro` settings were replaced.
+    SetKicadProject {
+        before: Box<ProjectFile>,
+        after: Box<ProjectFile>,
+    },
     /// Commands applied in order as one undo step.
     Group {
         label: String,
@@ -105,6 +112,7 @@ impl Command {
             Command::DeleteSymbols { .. } => "Delete Symbol",
             Command::MoveSymbols { .. } => "Move Symbol",
             Command::TransformSymbols { .. } => "Transform Symbol",
+            Command::SetKicadProject { .. } => "Project Settings",
             Command::EditItems { label, .. } | Command::Group { label, .. } => label,
         }
     }
@@ -156,6 +164,10 @@ impl Command {
                 label: label.clone(),
                 removed: inserted.clone(),
                 inserted: removed.clone(),
+            },
+            Command::SetKicadProject { before, after } => Command::SetKicadProject {
+                before: after.clone(),
+                after: before.clone(),
             },
             Command::Group { label, commands } => Command::Group {
                 label: label.clone(),
@@ -242,6 +254,10 @@ impl Command {
                 }
                 changes.wiring = true;
             }
+            Command::SetKicadProject { after, .. } => {
+                project.set_kicad_project((**after).clone());
+                changes.erc_settings = true;
+            }
             Command::Group { commands, .. } => {
                 for command in commands {
                     command.apply(project, changes);
@@ -262,11 +278,18 @@ pub struct Changes {
     pub definitions: bool,
     /// Wires, junctions, or labels were added, moved, or removed.
     pub wiring: bool,
+    /// The ERC rule severities in `.kicad_pro` changed.
+    pub erc_settings: bool,
 }
 
 impl Changes {
     pub fn any(self) -> bool {
-        self.title_block || self.grid_size || self.symbols || self.definitions || self.wiring
+        self.title_block
+            || self.grid_size
+            || self.symbols
+            || self.definitions
+            || self.wiring
+            || self.erc_settings
     }
 }
 
@@ -757,14 +780,69 @@ impl Session {
         (self.execute(command), count)
     }
 
+    /// Runs the electrical rules check on the current schematic with the project's rule
+    /// severities.
+    pub fn erc(&self) -> Result<Vec<Violation>, CoreError> {
+        let severities = self.project.rule_severities();
+        let schematic = self.project.schematic();
+        crate::erc::check(schematic, &severities).map_err(CoreError::InvalidEdit)
+    }
+
+    /// The setting of every ERC rule, or an error when `.kicad_pro` can't be changed.
+    pub fn erc_severities(&self) -> Result<RuleSeverities, CoreError> {
+        self.project
+            .kicad_project()
+            .check_writable()
+            .map_err(|reason| self.unwritable_settings(&reason))?;
+        Ok(self.project.rule_severities())
+    }
+
+    /// Changes the ERC rule severities in `.kicad_pro` as one undo step, creating the file
+    /// on the next save if there is none. Rules left out keep their setting, and an edit
+    /// that changes nothing records nothing.
+    pub fn edit_erc_severities(
+        &mut self,
+        severities: &RuleSeverities,
+    ) -> Result<Changes, CoreError> {
+        let current = self.project.rule_severities();
+        let mut changed = RuleSeverities::new();
+        for (key, setting) in severities {
+            let Some(previous) = current.get(key) else {
+                return Err(CoreError::InvalidEdit(format!(
+                    "There is no ERC rule named {key}."
+                )));
+            };
+            if previous != setting {
+                changed.insert(key.clone(), *setting);
+            }
+        }
+        if changed.is_empty() {
+            return Ok(Changes::default());
+        }
+        let before = self.project.kicad_project().clone();
+        let file_name = format!("{}.kicad_pro", self.project.name());
+        let after = before
+            .with_rule_severities(&file_name, &changed)
+            .map_err(|reason| self.unwritable_settings(&reason))?;
+        Ok(self.execute(Command::Group {
+            label: ERC_SEVERITIES_LABEL.to_owned(),
+            commands: vec![Command::SetKicadProject {
+                before: Box::new(before),
+                after: Box::new(after),
+            }],
+        }))
+    }
+
+    fn unwritable_settings(&self, reason: &str) -> CoreError {
+        CoreError::InvalidEdit(format!(
+            "{}.kicad_pro can't be read, so its ERC settings can't be changed: {reason}",
+            self.project.name()
+        ))
+    }
+
     /// The fields of the symbol `uuid` as the properties dialog shows them: the mandatory
     /// fields first, in KiCad's order (an empty one stands in for any the file lacks),
     /// then the others in file order.
-    /// Runs the electrical rules check on the current schematic.
-    pub fn erc(&self) -> Result<Vec<Violation>, CoreError> {
-        crate::erc::check(self.project.schematic()).map_err(CoreError::InvalidEdit)
-    }
-
     pub fn symbol_fields(&self, uuid: Uuid) -> Result<Vec<FieldEdit>, CoreError> {
         let symbol = self
             .project
@@ -1159,6 +1237,7 @@ mod tests {
                 symbols: false,
                 definitions: false,
                 wiring: false,
+                erc_settings: false,
             }
         );
         let edited = session.project().clone();
@@ -1320,6 +1399,7 @@ mod tests {
                 symbols: true,
                 definitions: true,
                 wiring: false,
+                erc_settings: false,
             }
         );
         let schematic = session.project().schematic();

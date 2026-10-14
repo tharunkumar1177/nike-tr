@@ -25,4 +25,8 @@ instances: Array<SymbolInstance> | null,
 /**
  * Every wire, junction, label, and no-connect flag when the wiring changed.
  */
-wires: Array<WireSegment> | null, junctions: Array<JunctionDot> | null, labels: Array<NetLabel> | null, noConnects: Array<NoConnectFlag> | null, history: HistoryStatus, };
+wires: Array<WireSegment> | null, junctions: Array<JunctionDot> | null, labels: Array<NetLabel> | null, noConnects: Array<NoConnectFlag> | null, 
+/**
+ * The ERC rule severities changed, so earlier ERC results no longer apply.
+ */
+ercSettings: boolean, history: HistoryStatus, };

@@ -1,5 +1,5 @@
 //! A project on disk: a directory holding `tron.json`, `<name>.kicad_sch`,
-//! and `<name>.kicad_pcb`.
+//! `<name>.kicad_pcb`, and, once it has settings, `<name>.kicad_pro`.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -7,9 +7,11 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::erc::RuleSeverities;
 use crate::error::CoreError;
 use crate::kicad::{Board, FileError, PageSize, Schematic, TitleBlock};
 use crate::manifest::{Manifest, ManifestError};
+use crate::project_file::ProjectFile;
 use crate::units::Nm;
 
 pub const MANIFEST_FILE: &str = "tron.json";
@@ -65,6 +67,9 @@ pub struct Project {
     manifest: Manifest,
     schematic: Schematic,
     board: Board,
+    kicad_project: ProjectFile,
+    /// The `.kicad_pro` as last read or written, so saving rewrites it only after a change.
+    kicad_project_on_disk: ProjectFile,
 }
 
 impl Project {
@@ -76,6 +81,8 @@ impl Project {
             manifest: Manifest::new(name),
             schematic: Schematic::new_empty(uuid),
             board: Board::new_empty(),
+            kicad_project: ProjectFile::Missing,
+            kicad_project_on_disk: ProjectFile::Missing,
         })
     }
 
@@ -83,7 +90,7 @@ impl Project {
     /// The folder may already exist only if it is empty.
     pub fn create(parent: &Path, name: &str, uuid: Uuid) -> Result<Project, CoreError> {
         let dir = prepare_dir(parent, name)?;
-        let project = Project::new(dir, name, uuid)?;
+        let mut project = Project::new(dir, name, uuid)?;
         project.save()?;
         Ok(project)
     }
@@ -156,20 +163,55 @@ impl Project {
             Board::new_empty()
         };
 
+        // An unreadable `.kicad_pro` doesn't stop the project from opening; it is only
+        // never written.
+        let kicad_project_path = dir.join(format!("{}.kicad_pro", manifest.name));
+        let kicad_project = if kicad_project_path.is_file() {
+            match fs::read_to_string(&kicad_project_path) {
+                Ok(source) => ProjectFile::parse(&source),
+                Err(error) => ProjectFile::Unreadable(error.to_string()),
+            }
+        } else {
+            ProjectFile::Missing
+        };
+
         Ok(Project {
             dir,
             manifest,
             schematic,
             board,
+            kicad_project_on_disk: kicad_project.clone(),
+            kicad_project,
         })
     }
 
-    /// Writes all three files. Each write is atomic, so a failure leaves the
-    /// previous version of that file intact.
-    pub fn save(&self) -> Result<(), CoreError> {
+    /// Writes the manifest, schematic, and board, and the `.kicad_pro` when its settings
+    /// changed. Each write is atomic, so a failure leaves the previous version of that
+    /// file intact. A `.kicad_pro` Tron created is removed again when undo took the
+    /// project back to having none.
+    pub fn save(&mut self) -> Result<(), CoreError> {
         write_atomic(&self.manifest_path(), &self.manifest.to_file_string())?;
         write_atomic(&self.schematic_path(), &self.schematic.to_file_string())?;
-        write_atomic(&self.board_path(), &self.board.to_file_string())
+        write_atomic(&self.board_path(), &self.board.to_file_string())?;
+        if self.kicad_project == self.kicad_project_on_disk {
+            return Ok(());
+        }
+        let path = self.kicad_project_path();
+        let file_name = format!("{}.kicad_pro", self.manifest.name);
+        match (&self.kicad_project, &self.kicad_project_on_disk) {
+            (ProjectFile::Missing, ProjectFile::Json(_)) => match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(CoreError::io(&path, error)),
+            },
+            (file, _) => {
+                if let Some(text) = file.to_file_string(&file_name) {
+                    write_atomic(&path, &text)?;
+                }
+            }
+        }
+        self.kicad_project_on_disk = self.kicad_project.clone();
+        Ok(())
     }
 
     /// Writes a copy of this project into the new folder `parent/name` and
@@ -179,6 +221,7 @@ impl Project {
         let mut copy = self.clone();
         copy.dir = dir;
         copy.manifest.name = name.to_owned();
+        copy.kicad_project_on_disk = ProjectFile::Missing;
         copy.save()?;
         Ok(copy)
     }
@@ -223,6 +266,25 @@ impl Project {
 
     pub fn board_path(&self) -> PathBuf {
         self.dir.join(format!("{}.kicad_pcb", self.manifest.name))
+    }
+
+    pub fn kicad_project_path(&self) -> PathBuf {
+        self.dir.join(format!("{}.kicad_pro", self.manifest.name))
+    }
+
+    /// The `.kicad_pro` settings, read-only. Changes go through [`crate::session::Session`]
+    /// commands so they stay undoable.
+    pub fn kicad_project(&self) -> &ProjectFile {
+        &self.kicad_project
+    }
+
+    pub(crate) fn set_kicad_project(&mut self, file: ProjectFile) {
+        self.kicad_project = file;
+    }
+
+    /// The setting of every ERC rule.
+    pub fn rule_severities(&self) -> RuleSeverities {
+        self.kicad_project.rule_severities()
     }
 
     pub(crate) fn set_title_block(&mut self, block: &TitleBlock) {

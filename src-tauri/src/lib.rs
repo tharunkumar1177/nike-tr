@@ -61,6 +61,8 @@ pub fn run() {
             ipc::place_no_connect,
             ipc::annotate_schematic,
             ipc::run_erc,
+            ipc::get_erc_rules,
+            ipc::edit_erc_severities,
             ipc::get_symbol_fields,
             ipc::edit_symbol_fields,
             ipc::set_symbol_field,

@@ -11,7 +11,7 @@ name = "tron_core"
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 ts-rs = { workspace = true }
 uuid = { workspace = true }
 

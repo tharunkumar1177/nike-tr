@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppErrorKind } from "./bindings/AppErrorKind";
 import type { AppInfo } from "./bindings/AppInfo";
+import type { ErcRuleSetting } from "./bindings/ErcRuleSetting";
+import type { ErcRuleSeverity } from "./bindings/ErcRuleSeverity";
 import type { ErcViolation } from "./bindings/ErcViolation";
 import type { LabelPlacement } from "./bindings/LabelPlacement";
 import type { LibraryFootprint } from "./bindings/LibraryFootprint";
@@ -147,6 +149,16 @@ export function annotateSchematic(): Promise<number> {
 /** Runs the electrical rules check: errors first, then warnings. */
 export function runErc(): Promise<ErcViolation[]> {
   return invoke<ErcViolation[]>("run_erc");
+}
+
+export function getErcRules(): Promise<ErcRuleSetting[]> {
+  return invoke<ErcRuleSetting[]>("get_erc_rules");
+}
+
+export function editErcSeverities(
+  severities: Record<string, ErcRuleSeverity>,
+): Promise<void> {
+  return invoke<void>("edit_erc_severities", { severities });
 }
 
 export function listRecentProjects(): Promise<RecentProject[]> {

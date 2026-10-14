@@ -12,6 +12,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { DocumentDiff } from "./bindings/DocumentDiff";
+import type { ErcRuleSetting } from "./bindings/ErcRuleSetting";
+import type { ErcRuleSeverity } from "./bindings/ErcRuleSeverity";
 import type { ErcViolation } from "./bindings/ErcViolation";
 import type { LibraryHit } from "./bindings/LibraryHit";
 import type { LibraryStatus } from "./bindings/LibraryStatus";
@@ -198,6 +200,7 @@ describe("App", () => {
       junctions: null,
       labels: null,
       noConnects: null,
+      ercSettings: false,
       history: {
         dirty: true,
         canUndo: true,
@@ -805,6 +808,7 @@ describe("Symbol placement", () => {
       junctions: null,
       labels: null,
       noConnects: null,
+      ercSettings: false,
       history: {
         ...snapshot.history,
         dirty: true,
@@ -1417,6 +1421,7 @@ describe("Wiring", () => {
       junctions: null,
       labels: null,
       noConnects: null,
+      ercSettings: false,
       history: { ...snapshot.history, dirty: true },
     });
     expect(await within(panel).findByText("Out of date")).toBeTruthy();
@@ -1461,5 +1466,115 @@ describe("Wiring", () => {
     expect(within(await ercPanel()).getByRole("alert").textContent).toBe(
       failure,
     );
+  });
+
+  function ercRule(
+    key: string,
+    message: string,
+    severity: ErcRuleSeverity,
+    defaultSeverity: ErcRuleSeverity = severity,
+  ): ErcRuleSetting {
+    return { key, message, severity, defaultSeverity };
+  }
+
+  function severitySelect(dialog: HTMLElement, message: string) {
+    return within(dialog).getByRole<HTMLSelectElement>("combobox", {
+      name: `Severity for ${message}`,
+    });
+  }
+
+  it("edits ERC rule severities and re-runs an open check", async () => {
+    const snapshot = wiredSnapshot();
+    const rules = [
+      ercRule("pin_not_connected", "Pin not connected", "warning", "error"),
+      ercRule("pin_to_pin", "Conflict problem between pins", "warning"),
+    ];
+    const { calls } = await openSheet(
+      {
+        run_erc: () => [],
+        get_erc_rules: () => rules,
+        edit_erc_severities: () => null,
+      },
+      snapshot,
+    );
+
+    await emitFromCore("menu-action", "electrical-rules-checker");
+    const panel = await ercPanel();
+    fireEvent.click(within(panel).getByRole("button", { name: "Run ERC" }));
+    expect(await within(panel).findByText("No violations found.")).toBeTruthy();
+
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "Rule Severities" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "ERC Rule Severities",
+    });
+    const pinSelect = await waitFor(() =>
+      severitySelect(dialog, "Pin not connected"),
+    );
+    await waitFor(() => expect(document.activeElement).toBe(pinSelect));
+    const matrix = severitySelect(dialog, "Conflict problem between pins");
+    const choices = within(matrix).getAllByRole("option");
+    expect(choices.map((choice) => choice.textContent)).toEqual([
+      "Use Pin Conflict Matrix",
+      "Ignore",
+    ]);
+    const apply = within(dialog).getByRole<HTMLButtonElement>("button", {
+      name: "Apply",
+    });
+    expect(apply.disabled).toBe(true);
+
+    fireEvent.change(matrix, { target: { value: "ignore" } });
+    expect(apply.disabled).toBe(false);
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Reset to Defaults" }),
+    );
+    expect(pinSelect.value).toBe("error");
+    expect(matrix.value).toBe("matrix");
+    fireEvent.click(apply);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(argsOf(calls, "edit_erc_severities")).toEqual([
+      { severities: { pin_not_connected: "error" } },
+    ]);
+
+    await emitFromCore("document-changed", {
+      baseRevision: snapshot.revision,
+      revision: snapshot.revision + 1,
+      titleBlock: null,
+      gridSizeNm: null,
+      definitions: null,
+      instances: null,
+      wires: null,
+      junctions: null,
+      labels: null,
+      noConnects: null,
+      ercSettings: true,
+      history: { ...snapshot.history, dirty: true, canUndo: true },
+    });
+    await waitFor(() => expect(argsOf(calls, "run_erc")).toHaveLength(2));
+    await waitFor(() =>
+      expect(within(panel).queryByText("Out of date")).toBeNull(),
+    );
+  });
+
+  it("explains why ERC rule severities can't be loaded", async () => {
+    const reason =
+      "amp.kicad_pro can't be read, so its ERC settings can't be changed: EOF while parsing an object at line 1 column 10";
+    await openSheet({
+      get_erc_rules: () => {
+        throw new Error(reason);
+      },
+    });
+
+    await emitFromCore("menu-action", "erc-rule-severities");
+    const dialog = await screen.findByRole("dialog", {
+      name: "ERC Rule Severities",
+    });
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      `Failed to load project settings: ${reason}`,
+    );
+    expect(within(dialog).queryByRole("button", { name: "Apply" })).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

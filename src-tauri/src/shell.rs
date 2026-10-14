@@ -101,6 +101,13 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         None,
         false,
     )?;
+    let erc_severities = item(
+        app,
+        "erc-rule-severities",
+        "ERC Rule &Severities...",
+        None,
+        false,
+    )?;
 
     let file = SubmenuBuilder::new(app, "&File")
         .item(&new_project)
@@ -129,6 +136,7 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
     let tools = SubmenuBuilder::new(app, "&Tools")
         .item(&annotate_schematic)
         .item(&electrical_rules)
+        .item(&erc_severities)
         .build()?;
     let menu = MenuBuilder::new(app)
         .item(&file)
@@ -149,6 +157,7 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
             zoom_actual,
             annotate_schematic,
             electrical_rules,
+            erc_severities,
         ],
         undo,
         redo,
