@@ -168,8 +168,7 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
 
     let emitter = app.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let mut engine = Engine::lock(&path)?;
-        engine.load_code_models(&code_models)?;
+        let mut engine = Engine::lock(&path, Some(&code_models))?;
         engine.run_cancellable(&deck, &cancel, move |percentage| {
             let progress = SimulationProgress { percentage };
             if let Err(error) = emitter.emit(SIMULATION_PROGRESS_EVENT, progress) {

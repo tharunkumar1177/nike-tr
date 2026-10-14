@@ -262,8 +262,8 @@ pub struct Engine {
     vec_info: VecInfoFn,
     cur_plot: CurPlotFn,
     all_vecs: AllVecsFn,
-    /// Folders whose code models are loaded. ngspice keeps them for the life of the process.
-    code_models: Vec<PathBuf>,
+    /// The folder whose XSPICE code models were loaded at startup.
+    code_models: Option<PathBuf>,
     /// Kept loaded for the life of the process; the function pointers above point into it.
     _library: Library,
 }
@@ -290,8 +290,9 @@ impl DerefMut for EngineGuard {
 }
 
 impl Engine {
-    /// Locks the engine, loading and initializing ngspice from `path` on first use.
-    pub fn lock(path: &Path) -> Result<EngineGuard, EngineError> {
+    /// Locks the engine. On first use, loads and initializes ngspice from `path` and then
+    /// the XSPICE code models (`*.cm`) in `code_models`. Later calls must ask for the same.
+    pub fn lock(path: &Path, code_models: Option<&Path>) -> Result<EngineGuard, EngineError> {
         let mut slot = ENGINE.lock().unwrap_or_else(PoisonError::into_inner);
         match slot.as_ref() {
             Some(engine) if engine.path != path => {
@@ -299,8 +300,26 @@ impl Engine {
                     path: engine.path.clone(),
                 });
             }
+            Some(engine) if engine.code_models.as_deref() != code_models => {
+                let loaded = match &engine.code_models {
+                    Some(dir) => format!("the code models in {}", dir.display()),
+                    None => "no code models".to_owned(),
+                };
+                return Err(EngineError::Load {
+                    path: path.to_owned(),
+                    message: format!("ngspice already started with {loaded}."),
+                });
+            }
             Some(_) => {}
-            None => *slot = Some(Engine::load(path)?),
+            None => {
+                // Kept even if a code model fails, because ngspice can't be unloaded.
+                let engine = slot.insert(Engine::load(path)?);
+                if let Some(dir) = code_models {
+                    // ngspice sizes each circuit's device tables when it is created, so
+                    // code models, which add device types, load before any circuit.
+                    engine.load_code_models(dir)?;
+                }
+            }
         }
         Ok(EngineGuard(slot))
     }
@@ -360,17 +379,12 @@ impl Engine {
             vec_info,
             cur_plot,
             all_vecs,
-            code_models: Vec::new(),
+            code_models: None,
             _library: library,
         })
     }
 
-    /// Loads every XSPICE code model (`*.cm`) in `dir`. A folder already loaded is
-    /// skipped, since ngspice keeps code models until the process ends.
-    pub fn load_code_models(&mut self, dir: &Path) -> Result<(), EngineError> {
-        if self.code_models.iter().any(|loaded| loaded == dir) {
-            return Ok(());
-        }
+    fn load_code_models(&mut self, dir: &Path) -> Result<(), EngineError> {
         let failed = |message: String| EngineError::Load {
             path: dir.to_owned(),
             message,
@@ -404,7 +418,7 @@ impl Engine {
                 return Err(failed(format!("{path}: {}", errors.join(" "))));
             }
         }
-        self.code_models.push(dir.to_owned());
+        self.code_models = Some(dir.to_owned());
         Ok(())
     }
 
@@ -760,7 +774,7 @@ mod tests {
         };
         let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
         let sink = std::sync::Arc::clone(&seen);
-        let mut engine = match Engine::lock(&path) {
+        let mut engine = match Engine::lock(&path, None) {
             Ok(engine) => engine,
             Err(error) => panic!("{error}"),
         };
