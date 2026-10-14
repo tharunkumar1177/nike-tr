@@ -6,7 +6,9 @@ The user runs DC operating point, transient, and AC analyses on their schematic 
 
 ## Current verified status
 
-**Status:** Planned
+**Status:** Partial
+
+Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. ngspice is not integrated yet (5b), and there is no session, IPC, or UI (5c and 5d).
 
 ## Architecture dependencies
 
@@ -49,7 +51,12 @@ When a run fails to converge, `sim` retries with gmin stepping and then source s
 
 ## Relevant implementation and tests
 
-- `crates/sim` — Planned
+- `crates/sim/src/deck.rs` — the deck builder: ground nets (`GND`, `0`) become node `0`, net names are made safe for ngspice and kept distinct regardless of case, and symbols that are excluded from simulation (`exclude_from_sim` or `Sim.Enable` set to `0`) or are `#` symbols are skipped. Implemented.
+- `crates/sim/src/model.rs` — maps a symbol to an R, C, L, V, or I element from `Sim.Device`, `Sim.Type` (DC, SIN, PULSE), `Sim.Params`, and `Sim.Pins`, or infers it from the reference prefix and `Value`. A `Sim.Library` model is a clear error for now. Implemented.
+- `crates/sim/src/value.rs` — parses SI values and writes exact round-trip numbers for SPICE. Implemented.
+- `crates/sim/src/analysis.rs` — the `.op` and `.tran` directives and their range checks. Implemented.
+- `crates/core/src/kicad.rs` `Schematic::symbol_flag` — reads `(exclude_from_sim yes)` on a placed symbol.
+- Tests: unit tests in each `crates/sim/src` module, and `crates/sim/tests/deck.rs`, which builds KiCad-format divider and RC schematics and checks the exact deck text and every pre-flight error.
 
 ## Slice 5 plan (approved 2026-10-14)
 
@@ -62,7 +69,7 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
 
 ## Acceptance or verification criteria
 
-- [ ] (5a) The SPICE deck for a divider and an RC circuit is exact text, and each pre-flight error is reported with the symbol or setting involved.
+- [x] (5a) The SPICE deck for a divider and an RC circuit is exact text, and each pre-flight error is reported with the symbol or setting involved. Verified by `crates/sim/tests/deck.rs`.
 - [ ] An RC low-pass transient matches the analytic response within 1% in a CI test using real ngspice.
 - [ ] A voltage divider `.op` matches the analytic value exactly to 6 significant figures.
 - [ ] The `.ac` −3 dB point of an RC filter matches 1/(2πRC) within 1%.
