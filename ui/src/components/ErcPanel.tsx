@@ -13,6 +13,7 @@ interface ErcPanelProps {
   /** Read by screen readers when a run finishes. */
   announcement: string;
   onRun: () => void;
+  onOpenSeverities: () => void;
   onSelect: (violation: ErcViolation) => void;
   /** Selects the violation and shows it on the canvas. */
   onJump: (violation: ErcViolation) => void;
@@ -27,6 +28,7 @@ export function ErcPanel({
   selectedId,
   announcement,
   onRun,
+  onOpenSeverities,
   onSelect,
   onJump,
   onClose,
@@ -180,6 +182,9 @@ export function ErcPanel({
         <h2 className="erc-panel__title">Electrical Rules Checker</h2>
         {stale && <span className="erc-panel__badge">Out of date</span>}
         <div className="erc-panel__actions">
+          <button type="button" className="button" onClick={onOpenSeverities}>
+            Rule Severities
+          </button>
           {showRun && (
             <button
               type="button"

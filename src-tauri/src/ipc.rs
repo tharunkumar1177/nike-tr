@@ -8,9 +8,9 @@ use tron_core::kicad::Schematic;
 use tron_core::kicad_value::text_arg;
 use tron_core::sexpr::SExpr;
 use tron_core::{
-    Changes, FieldEdit, Junction, Label, LabelKind, LabelShape, Mirror, Nm, NoConnect,
-    PlacedSymbol, Placement, Point, Project, Session, Severity, SymbolPreview,
-    TITLE_BLOCK_COMMENTS, TitleBlock, Violation, Wire, Xy,
+    Changes, ERC_RULES, FieldEdit, Junction, Label, LabelKind, LabelShape, Mirror, Nm, NoConnect,
+    PlacedSymbol, Placement, Point, Project, RuleSeverities, RuleSeverity, Session, Severity,
+    SymbolPreview, TITLE_BLOCK_COMMENTS, TitleBlock, Violation, Wire, Xy,
 };
 use ts_rs::TS;
 use uuid::Uuid;
@@ -235,6 +235,8 @@ pub struct DocumentDiff {
     pub junctions: Option<Vec<JunctionDot>>,
     pub labels: Option<Vec<NetLabel>>,
     pub no_connects: Option<Vec<NoConnectFlag>>,
+    /// The ERC rule severities changed, so earlier ERC results no longer apply.
+    pub erc_settings: bool,
     pub history: HistoryStatus,
 }
 
@@ -259,6 +261,7 @@ fn document_diff(
         junctions: changes.wiring.then(|| junction_dots(project)),
         labels: changes.wiring.then(|| net_labels(project)),
         no_connects: changes.wiring.then(|| no_connect_flags(project)),
+        erc_settings: changes.erc_settings,
         history: HistoryStatus::from(session),
     }
 }
@@ -495,6 +498,61 @@ impl From<Violation> for ErcViolation {
             items: violation.items,
         }
     }
+}
+
+/// How an ERC rule is reported. For `pin_to_pin`, any setting but `ignore` leaves the
+/// severity to the pin conflict matrix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ErcRuleSeverity {
+    Error,
+    Warning,
+    Ignore,
+}
+
+impl From<RuleSeverity> for ErcRuleSeverity {
+    fn from(setting: RuleSeverity) -> ErcRuleSeverity {
+        match setting {
+            RuleSeverity::Error => ErcRuleSeverity::Error,
+            RuleSeverity::Warning => ErcRuleSeverity::Warning,
+            RuleSeverity::Ignore => ErcRuleSeverity::Ignore,
+        }
+    }
+}
+
+impl From<ErcRuleSeverity> for RuleSeverity {
+    fn from(setting: ErcRuleSeverity) -> RuleSeverity {
+        match setting {
+            ErcRuleSeverity::Error => RuleSeverity::Error,
+            ErcRuleSeverity::Warning => RuleSeverity::Warning,
+            ErcRuleSeverity::Ignore => RuleSeverity::Ignore,
+        }
+    }
+}
+
+/// One ERC rule with its setting in the project, in the order violations are listed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ErcRuleSetting {
+    /// KiCad's rule key, such as `pin_not_connected`.
+    pub key: String,
+    pub message: String,
+    pub severity: ErcRuleSeverity,
+    pub default_severity: ErcRuleSeverity,
+}
+
+fn erc_rule_settings(severities: &RuleSeverities) -> Vec<ErcRuleSetting> {
+    ERC_RULES
+        .iter()
+        .map(|rule| ErcRuleSetting {
+            key: rule.key.to_owned(),
+            message: rule.message.to_owned(),
+            severity: ErcRuleSeverity::from(rule.setting(severities)),
+            default_severity: ErcRuleSeverity::from(RuleSeverity::from(rule.severity)),
+        })
+        .collect()
 }
 
 /// The outline of a global label.
@@ -1054,6 +1112,35 @@ pub fn run_erc(state: State<'_, AppState>) -> Result<Vec<ErcViolation>, AppError
     Ok(violations.into_iter().map(ErcViolation::from).collect())
 }
 
+/// Every ERC rule with its setting. Fails when the project's `.kicad_pro` can't be read,
+/// since its settings then can't be changed.
+#[tauri::command]
+pub fn get_erc_rules(state: State<'_, AppState>) -> Result<Vec<ErcRuleSetting>, AppError> {
+    let mut inner = state.lock();
+    let severities = inner.session_mut()?.erc_severities()?;
+    Ok(erc_rule_settings(&severities))
+}
+
+/// Changes ERC rule severities in `.kicad_pro` as one undo step. Rules left out keep
+/// their setting.
+#[tauri::command]
+pub fn edit_erc_severities(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    severities: BTreeMap<String, ErcRuleSeverity>,
+) -> Result<(), AppError> {
+    let severities: RuleSeverities = severities
+        .into_iter()
+        .map(|(key, setting)| (key, RuleSeverity::from(setting)))
+        .collect();
+    let mut inner = state.lock();
+    let changes = inner.session_mut()?.edit_erc_severities(&severities)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
 /// Numbers every unannotated symbol as one undo step and returns how many changed.
 #[tauri::command]
 pub fn annotate_schematic(app: AppHandle, state: State<'_, AppState>) -> Result<u32, AppError> {
@@ -1368,6 +1455,37 @@ mod tests {
         assert_eq!(json["position"], serde_json::json!([1_270_000, 2_540_000]));
         assert_eq!(json["uuids"][0], Uuid::nil().to_string());
         assert_eq!(json["items"][0], "R3 pin 2 [Passive]");
+    }
+
+    #[test]
+    fn erc_rule_settings_round_trip_through_the_ui_payload() {
+        let mut session = session();
+        let payload = serde_json::json!({ "pin_to_pin": "ignore", "unannotated": "warning" });
+        let edit: BTreeMap<String, ErcRuleSeverity> = serde_json::from_value(payload).unwrap();
+        let severities: RuleSeverities = edit
+            .into_iter()
+            .map(|(key, setting)| (key, RuleSeverity::from(setting)))
+            .collect();
+        let changes = session.edit_erc_severities(&severities).unwrap();
+        let diff = serde_json::to_value(document_diff(&session, 1, 2, changes)).unwrap();
+        assert_eq!(diff["ercSettings"], true);
+        assert_eq!(diff["instances"], serde_json::Value::Null);
+
+        let rules = erc_rule_settings(&session.erc_severities().unwrap());
+        assert_eq!(rules.len(), ERC_RULES.len());
+        let json = serde_json::to_value(&rules).unwrap();
+        let pin_to_pin = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|rule| rule["key"] == "pin_to_pin")
+            .unwrap();
+        assert_eq!(pin_to_pin["severity"], "ignore");
+        assert_eq!(pin_to_pin["defaultSeverity"], "warning");
+        assert_eq!(pin_to_pin["message"], "Conflict problem between pins");
+        assert_eq!(json[0]["key"], "unannotated");
+        assert_eq!(json[0]["severity"], "warning");
+        assert_eq!(json[0]["defaultSeverity"], "error");
     }
 
     #[test]

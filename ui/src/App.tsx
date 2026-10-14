@@ -8,10 +8,12 @@ import {
   useState,
 } from "react";
 import type { AppInfo } from "./bindings/AppInfo";
+import type { ErcRuleSeverity } from "./bindings/ErcRuleSeverity";
 import type { ProjectProperties } from "./bindings/ProjectProperties";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
 import { EditorShell } from "./components/EditorShell";
+import { ErcSeveritiesDialog } from "./components/ErcSeveritiesDialog";
 import { ErrorDialog } from "./components/ErrorDialog";
 import { LibraryDialog } from "./components/LibraryDialog";
 import { ProjectLocationDialog } from "./components/ProjectLocationDialog";
@@ -26,6 +28,7 @@ import {
   closeProject,
   closeWindow,
   createProject,
+  editErcSeverities,
   editProjectProperties,
   getAppInfo,
   listRecentProjects,
@@ -61,6 +64,7 @@ type ModalState =
   | { type: "newProject" }
   | { type: "saveAs" }
   | { type: "properties" }
+  | { type: "ercSeverities" }
   | { type: "unsaved"; next: LeaveAction }
   | {
       type: "error";
@@ -70,7 +74,8 @@ type ModalState =
     };
 
 export function App() {
-  const { project, loadError, setProject, resync } = useProjectDocument();
+  const { project, ercSettingsVersion, loadError, setProject, resync } =
+    useProjectDocument();
   const [modal, setModal] = useState<ModalState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [recent, setRecent] = useState<RecentState>({ status: "loading" });
@@ -292,6 +297,18 @@ export function App() {
     }
   }
 
+  async function applyErcSeverities(
+    severities: Record<string, ErcRuleSeverity>,
+  ): Promise<ErrorReport | null> {
+    try {
+      await editErcSeverities(severities);
+      setModal(null);
+      return null;
+    } catch (error) {
+      return toErrorReport(error);
+    }
+  }
+
   async function removeRecent(path: string) {
     try {
       const projects = await removeRecentProject(path);
@@ -391,6 +408,9 @@ export function App() {
       case "electrical-rules-checker":
         setErcTicket((ticket) => ticket + 1);
         return;
+      case "erc-rule-severities":
+        setModal({ type: "ercSeverities" });
+        return;
     }
   }
 
@@ -448,6 +468,13 @@ export function App() {
           <ProjectPropertiesDialog
             project={project}
             onApply={applyProperties}
+            onCancel={dismiss}
+          />
+        ) : null;
+      case "ercSeverities":
+        return project ? (
+          <ErcSeveritiesDialog
+            onApply={applyErcSeverities}
             onCancel={dismiss}
           />
         ) : null;
@@ -523,11 +550,13 @@ export function App() {
         library={library}
         annotateTicket={annotateTicket}
         ercTicket={ercTicket}
+        ercSettingsVersion={ercSettingsVersion}
         onViewportChange={updateViewport}
         onCanvasResize={setCanvasSize}
         onUndo={() => void runHistory(undo, "Couldn't undo")}
         onRedo={() => void runHistory(redo, "Couldn't redo")}
         onOpenProperties={() => setModal({ type: "properties" })}
+        onOpenErcSeverities={() => setModal({ type: "ercSeverities" })}
         onDownloadLibrary={() => setLibraryDialogOpen(true)}
       />
     );

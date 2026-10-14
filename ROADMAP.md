@@ -20,6 +20,7 @@ Tron is a local-first desktop app (Tauri 2, Rust, React) for schematic capture, 
 - Slice 4 split into 4a and 4b (approved 2026-10-13). Placed symbols embed their full KiCad definition in the schematic's `(lib_symbols)`, so a project renders and opens in KiCad without the downloaded library. The index therefore stores each symbol's definition (schema version 2), which ships first as its own PR with a new pinned release.
 - Slice 4b split into 4b (connectivity and netlist) and 4c (properties and ERC) (approved 2026-10-13). Connections are made by exact coordinate match, and net names follow KiCad's driver priority (see [Connectivity and netlist](architecture.md#connectivity-and-netlist)). Wires are drawn horizontal and vertical only, with automatic bends. The user exports the reference netlist from KiCad for the golden schematic. Netlists are compared by net names and pin sets, not bytes.
 - Slice 4c split into four PRs, 4c-1 to 4c-4 (approved 2026-10-13). No-connect flags, annotation, and exclusions stay in scope. Tron writes the ERC section of `.kicad_pro`, and severity and exclusion changes are undoable (see [File format](architecture.md#file-format)).
+- 4c-4 narrowed to rule severities, and exclusions moved to a new 4c-5 (decided 2026-10-14). No public project has saved exclusions to confirm their entry format against, so 4c-5 waits for a KiCad-written `.kicad_pro` with exclusions.
 
 ## Slices
 
@@ -34,7 +35,8 @@ Tron is a local-first desktop app (Tauri 2, Rust, React) for schematic capture, 
 - [x] **4c-1. No-connect flags and annotation** (UI) — place, move, and delete no-connect flags (Q), and annotate references like `R?` by position as one undo step. Blueprint: [schematic-capture](blueprints/schematic-capture.md)
 - [x] **4c-2. Property editing** (UI) — a symbol properties dialog (E or double-click) and inline Reference (U) and Value (V) editing, each one undo step. Blueprint: [schematic-capture](blueprints/schematic-capture.md)
 - [x] **4c-3. ERC** (UI) — the ERC rules and KiCad's default pin conflict matrix in core, and an ERC panel with jump-to-location. Blueprint: [schematic-capture](blueprints/schematic-capture.md)
-- [ ] **4c-4. ERC exclusions and severities** (UI) — exclude violations and change rule severities, saved in the ERC section of `.kicad_pro` through the undo stack. Blueprint: [schematic-capture](blueprints/schematic-capture.md)
+- [ ] **4c-4. ERC rule severities** (UI) — change each rule to Error, Warning, or Ignore, saved in `erc.rule_severities` of `.kicad_pro` through the undo stack. Blueprint: [schematic-capture](blueprints/schematic-capture.md)
+- [ ] **4c-5. ERC exclusions** (UI) — exclude violations with an optional comment, saved in `erc.erc_exclusions`. Waits for a KiCad-written `.kicad_pro` with exclusions to verify the format. Blueprint: [schematic-capture](blueprints/schematic-capture.md)
 - [ ] **5. Simulation** (UI) — `.op` and `.tran` through libngspice, a probe tool, and a waveform viewer. Blueprint: [circuit-simulation](blueprints/circuit-simulation.md)
 - [ ] **6. AC sweep and convergence** (UI) — `.ac` with a Bode plot, gmin and source stepping, and readable convergence errors. Blueprint: [circuit-simulation](blueprints/circuit-simulation.md)
 - [ ] **7. PCB foundation** (UI) — update the board from the schematic, footprints, ratsnest, outline, and stackup. Blueprint: [board-layout](blueprints/board-layout.md)

@@ -953,6 +953,14 @@ body,
   align-self: flex-start;
 }
 
+.field-grid--severities {
+  grid-template-columns: 1fr auto 10rem;
+}
+
+.modal__action--start {
+  margin-right: auto;
+}
+
 .busy-overlay {
   position: fixed;
   inset: 0;

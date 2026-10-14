@@ -17,6 +17,7 @@ describe("applyDiff", () => {
       junctions: null,
       labels: null,
       noConnects: null,
+      ercSettings: false,
       history: { ...project.history, dirty: true, canUndo: true },
     };
     const next = applyDiff(project, diff);
@@ -41,6 +42,7 @@ describe("applyDiff", () => {
       junctions: null,
       labels: null,
       noConnects: null,
+      ercSettings: false,
       history: project.history,
     };
     const next = applyDiff(project, diff);
@@ -62,6 +64,7 @@ describe("applyDiff", () => {
       junctions: [{ uuid: "junction-1", position: [0, 0] }],
       labels: [],
       noConnects: [{ uuid: "flag-1", position: [2_540_000, 0] }],
+      ercSettings: false,
       history: project.history,
     };
     const next = applyDiff(project, diff);
@@ -86,6 +89,7 @@ describe("applyDiff", () => {
       junctions: null,
       labels: null,
       noConnects: null,
+      ercSettings: false,
       history: project.history,
     };
     expect(applyDiff(project, diff)).toBeNull();

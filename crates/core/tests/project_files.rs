@@ -51,7 +51,7 @@ fn a_saved_project_reopens_with_identical_content() {
     session.save().unwrap();
     assert!(!session.is_dirty());
 
-    let reopened = Project::load(session.project().dir()).unwrap();
+    let mut reopened = Project::load(session.project().dir()).unwrap();
     assert_eq!(&reopened, session.project());
 
     let files = |project: &Project| {
@@ -105,7 +105,7 @@ fn a_kicad_project_without_a_manifest_opens_and_keeps_unknown_nodes() {
     let source = include_str!("golden/kicad-only/amp.kicad_sch");
     fs::write(dir.join("amp.kicad_sch"), source).unwrap();
 
-    let project = Project::load(&dir).unwrap();
+    let mut project = Project::load(&dir).unwrap();
     assert_eq!(project.name(), "amp");
     assert_eq!(project.title_block().title, "Class A amplifier");
     assert_eq!(project.title_block().comments[1], "Bench prototype");

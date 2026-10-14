@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ErcViolation } from "../bindings/ErcViolation";
 import type { LibraryHit } from "../bindings/LibraryHit";
 import type { ProjectSnapshot } from "../bindings/ProjectSnapshot";
@@ -53,11 +53,14 @@ interface EditorShellProps {
   annotateTicket: number;
   /** Counts Electrical Rules Checker menu requests; each toggles the panel. */
   ercTicket: number;
+  /** Increases when the ERC rule severities change; an open panel re-runs. */
+  ercSettingsVersion: number;
   onViewportChange: (update: (viewport: Viewport) => Viewport) => void;
   onCanvasResize: (size: Size) => void;
   onUndo: () => void;
   onRedo: () => void;
   onOpenProperties: () => void;
+  onOpenErcSeverities: () => void;
   onDownloadLibrary: () => void;
 }
 
@@ -68,14 +71,17 @@ export function EditorShell({
   library,
   annotateTicket,
   ercTicket,
+  ercSettingsVersion,
   onViewportChange,
   onCanvasResize,
   onUndo,
   onRedo,
   onOpenProperties,
+  onOpenErcSeverities,
   onDownloadLibrary,
 }: EditorShellProps) {
   const ercTicketRef = useRef(ercTicket);
+  const ercSettingsRef = useRef(ercSettingsVersion);
   const [ercOpen, setErcOpen] = useState(false);
   const [ercResults, setErcResults] = useState<ErcResults | null>(null);
   const [ercRunning, setErcRunning] = useState(false);
@@ -126,6 +132,21 @@ export function EditorShell({
       )
       .finally(() => setErcRunning(false));
   };
+
+  const runCheckRef = useRef(runCheck);
+  useLayoutEffect(() => {
+    runCheckRef.current = runCheck;
+  });
+
+  useEffect(() => {
+    if (ercSettingsVersion === ercSettingsRef.current) {
+      return;
+    }
+    ercSettingsRef.current = ercSettingsVersion;
+    if (ercOpen) {
+      runCheckRef.current();
+    }
+  }, [ercSettingsVersion, ercOpen]);
 
   const jumpTo = (violation: ErcViolation) => {
     setSelectedViolation(violation.id);
@@ -228,6 +249,7 @@ export function EditorShell({
               selectedId={selectedViolation}
               announcement={ercAnnouncement}
               onRun={runCheck}
+              onOpenSeverities={onOpenErcSeverities}
               onSelect={(violation) => setSelectedViolation(violation.id)}
               onJump={jumpTo}
               onClose={() => setErcOpen(false)}

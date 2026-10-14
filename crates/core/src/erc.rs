@@ -21,6 +21,46 @@ pub enum Severity {
     Error,
 }
 
+/// How a rule is reported, as `.kicad_pro` stores it in `erc.rule_severities`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuleSeverity {
+    Error,
+    Warning,
+    Ignore,
+}
+
+impl RuleSeverity {
+    /// The `.kicad_pro` spelling.
+    pub fn key(self) -> &'static str {
+        match self {
+            RuleSeverity::Error => "error",
+            RuleSeverity::Warning => "warning",
+            RuleSeverity::Ignore => "ignore",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<RuleSeverity> {
+        match key {
+            "error" => Some(RuleSeverity::Error),
+            "warning" => Some(RuleSeverity::Warning),
+            "ignore" => Some(RuleSeverity::Ignore),
+            _ => None,
+        }
+    }
+}
+
+impl From<Severity> for RuleSeverity {
+    fn from(severity: Severity) -> RuleSeverity {
+        match severity {
+            Severity::Error => RuleSeverity::Error,
+            Severity::Warning => RuleSeverity::Warning,
+        }
+    }
+}
+
+/// The setting of each rule by key. A rule that isn't listed keeps its default.
+pub type RuleSeverities = BTreeMap<String, RuleSeverity>;
+
 /// One ERC rule: KiCad's settings key, message, and default severity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErcRule {
@@ -54,7 +94,8 @@ pub const POWER_PIN_NOT_DRIVEN: ErcRule = ErcRule {
     message: "Input Power pin not driven by any Output Power pins",
     severity: Severity::Error,
 };
-/// Its severity per violation comes from the pin conflict matrix.
+/// Its severity per violation comes from the pin conflict matrix. Its setting only turns
+/// it off: any setting other than ignore leaves the matrix in charge.
 pub const PIN_TO_PIN: ErcRule = ErcRule {
     key: "pin_to_pin",
     message: "Conflict problem between pins",
@@ -283,10 +324,18 @@ fn describe_symbol(symbol: &PlacedSymbol) -> String {
     format!("Symbol {} [{value}]", symbol.reference())
 }
 
-/// Runs every ERC rule with KiCad's default severities. Violations are sorted errors
-/// first, then by rule, then top to bottom and left to right. Fails when a placed
-/// symbol's definition is missing or unreadable.
-pub fn check(schematic: &Schematic) -> Result<Vec<Violation>, String> {
+impl ErcRule {
+    /// This rule's setting in `settings`, or its default.
+    pub fn setting(&self, settings: &RuleSeverities) -> RuleSeverity {
+        let default = RuleSeverity::from(self.severity);
+        settings.get(self.key).copied().unwrap_or(default)
+    }
+}
+
+/// Runs every ERC rule, reporting each with its setting in `settings`; ignored rules
+/// report nothing. Violations are sorted errors first, then by rule, then top to bottom
+/// and left to right. Fails when a placed symbol's definition is missing or unreadable.
+pub fn check(schematic: &Schematic, settings: &RuleSeverities) -> Result<Vec<Violation>, String> {
     let symbols = schematic.symbols();
     let wires = schematic.wires();
     let labels = schematic.labels();
@@ -432,6 +481,7 @@ pub fn check(schematic: &Schematic) -> Result<Vec<Violation>, String> {
         violations.push(found);
     }
 
+    apply_settings(&mut violations, settings);
     let rank = |key: &str| ERC_RULES.iter().position(|rule| rule.key == key);
     violations.sort_by(|a, b| {
         let order = |v: &Violation| {
@@ -441,6 +491,28 @@ pub fn check(schematic: &Schematic) -> Result<Vec<Violation>, String> {
         order(a).cmp(&order(b)).then_with(|| a.id.cmp(&b.id))
     });
     Ok(violations)
+}
+
+/// Drops the violations of ignored rules and gives the rest their rule's severity, except
+/// `pin_to_pin`, whose severity stays the pin conflict matrix's.
+fn apply_settings(violations: &mut Vec<Violation>, settings: &RuleSeverities) {
+    violations.retain_mut(|found| {
+        let Some(rule) = ERC_RULES.iter().find(|rule| rule.key == found.rule) else {
+            return true;
+        };
+        match rule.setting(settings) {
+            RuleSeverity::Ignore => false,
+            _ if rule.key == PIN_TO_PIN.key => true,
+            RuleSeverity::Error => {
+                found.severity = Severity::Error;
+                true
+            }
+            RuleSeverity::Warning => {
+                found.severity = Severity::Warning;
+                true
+            }
+        }
+    });
 }
 
 fn check_symbols(symbols: &[PlacedSymbol], violations: &mut Vec<Violation>) {
@@ -559,6 +631,61 @@ mod tests {
         let unspecified = conflict(UNSPECIFIED, INPUT);
         assert_eq!(unspecified, Some(Severity::Warning));
         assert_eq!(conflict(NO_CONNECT, passive), Some(Severity::Error));
+    }
+
+    fn found(rule: ErcRule, severity: Severity) -> Violation {
+        let mut found = violation(rule, Point::ORIGIN, &["x".to_owned()]);
+        found.severity = severity;
+        found
+    }
+
+    #[test]
+    fn settings_ignore_rules_and_override_severities_but_not_the_matrix() {
+        let mut violations = vec![
+            found(PIN_NOT_CONNECTED, Severity::Error),
+            found(ISOLATED_PIN_LABEL, Severity::Warning),
+            found(UNANNOTATED, Severity::Error),
+            found(PIN_TO_PIN, Severity::Error),
+            found(PIN_TO_PIN, Severity::Warning),
+        ];
+        let settings = RuleSeverities::from([
+            ("pin_not_connected".to_owned(), RuleSeverity::Warning),
+            ("isolated_pin_label".to_owned(), RuleSeverity::Error),
+            ("unannotated".to_owned(), RuleSeverity::Ignore),
+            ("pin_to_pin".to_owned(), RuleSeverity::Warning),
+        ]);
+        apply_settings(&mut violations, &settings);
+        let kept: Vec<(&str, Severity)> = violations
+            .iter()
+            .map(|found| (found.rule, found.severity))
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                ("pin_not_connected", Severity::Warning),
+                ("isolated_pin_label", Severity::Error),
+                ("pin_to_pin", Severity::Error),
+                ("pin_to_pin", Severity::Warning),
+            ]
+        );
+
+        let ignore = RuleSeverities::from([("pin_to_pin".to_owned(), RuleSeverity::Ignore)]);
+        apply_settings(&mut violations, &ignore);
+        assert!(violations.iter().all(|found| found.rule != "pin_to_pin"));
+        assert_eq!(violations.len(), 2);
+    }
+
+    #[test]
+    fn rule_severity_keys_round_trip() {
+        let settings = [
+            RuleSeverity::Error,
+            RuleSeverity::Warning,
+            RuleSeverity::Ignore,
+        ];
+        for setting in settings {
+            assert_eq!(RuleSeverity::from_key(setting.key()), Some(setting));
+        }
+        assert_eq!(RuleSeverity::from_key("Error"), None);
     }
 
     #[test]

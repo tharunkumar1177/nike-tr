@@ -30,7 +30,7 @@ fn a_schematic_with_placed_symbols_round_trips_byte_identically() {
     assert_eq!(schematic.to_file_string(), GOLDEN);
 
     let temp = tempfile::tempdir().unwrap();
-    let project = golden_project(temp.path());
+    let mut project = golden_project(temp.path());
     project.save().unwrap();
     assert_eq!(read(&project.schematic_path()), GOLDEN);
     assert_eq!(Project::load(project.dir()).unwrap(), project);

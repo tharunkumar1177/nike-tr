@@ -38,7 +38,13 @@ Slice 4c (properties and ERC) is Partial. 4c-1 (no-connect flags and annotation)
 - IPC: the violation payload's shape.
 - UI: Vitest covers opening from the menu, grouping and row text, marker selection, keyboard and click selection, "Out of date" after an edit, the clean result, a core error, closing, and the toolbar toggle.
 
-4c-4 is Planned.
+4c-4 (rule severities) is built; CI is pending. Covered by tests:
+
+- Core: `project_file.rs` unit tests cover reading stored settings with defaults for the rest, rejecting non-project files, changing one setting while every other key survives (including `erc_exclusions`, `pin_map`, and a float), adding the ERC section to a file without one, and a new file's contents. `erc.rs` unit tests cover ignore and override, the matrix keeping `pin_to_pin` severities, and the setting keys. The `erc` integration tests cover the undo step and dirty flag, ignored and promoted rules in `Session::erc`, the saved file and its reload, undo removing a created file on save, unknown rules being rejected, and an unreadable file never being written.
+- IPC: the settings payload and the diff's `ercSettings` flag.
+- UI: Vitest covers opening from the panel, focus on the first select, the `pin_to_pin` choices, Apply enabling, Reset to Defaults, the Apply payload, the re-run after the diff, and the load error with only Close.
+
+4c-5 (exclusions) is Planned.
 
 ## Architecture dependencies
 
@@ -169,7 +175,13 @@ NC    E  E  E  E  E  E  E  E  E  E  E  E
 - As built (netlist): a power symbol joins a net by its Value only when its pin is a power input, as in KiCad, so `PWR_FLAG` (a power output) no longer merges the nets it sits on.
 - As built (UI): **Tools > Electrical Rules Checker** and a toolbar button (clipboard check, left of Project Properties, `aria-pressed`, no shortcut) toggle a 240 px panel docked below the canvas. ERC runs only when the user clicks Run ERC. States: never run, "Running checks...", "No violations found.", a core error, and an `Errors (N)` / `Warnings (N)` listbox. Each row shows the message over the item descriptions. Up, Down, Home, and End select, and Enter or a click centers the canvas on the violation. Markers are 12 px hollow diamonds in the error or warning color (`--color-focus` when selected), drawn only while the panel is open. Clicking a marker selects its row. Results are "Out of date" once the document revision passes the run's, which also fades the markers and makes Run ERC primary. Each run announces "ERC complete: N errors, M warnings" or "ERC complete: No violations found".
 
-**4c-4. Exclusions and severities.** `.kicad_pro` is read as JSON with every key kept. Only the ERC section changes: `rule_severities` and the exclusion list. An `EditErcSettings` command makes changes undoable and marks the project unsaved. The exact KiCad 10 exclusion string identity must be verified against a KiCad-written `.kicad_pro` before 4c-4 is built.
+**4c-4. Rule severities.** `.kicad_pro` is read as JSON with every key kept. Only `erc.rule_severities` changes. A `SetKicadProject` command makes changes undoable and marks the project unsaved. Exclusions moved to 4c-5.
+
+- As built (core): `project_file.rs` holds `ProjectFile`: `Missing`, `Json`, or `Unreadable`. A file that isn't JSON, or whose root, `erc`, or `erc.rule_severities` isn't an object, still lets the project open with default severities, but it is never written and `Session::erc_severities` and `edit_erc_severities` fail with "`<name>.kicad_pro` can't be read, so its ERC settings can't be changed: `<reason>`". An edit writes only the settings that changed. Rule keys Tron doesn't check, `erc_exclusions`, `pin_map`, and every other key are kept. A new file lists all 11 rules plus `meta {filename, version: 1}`. Saving rewrites `.kicad_pro` only when its settings differ from the last read or write, with `meta.filename` set, keys sorted as KiCad writes them, two-space indents, and a final newline. If undo takes a project back to having no file, the next save removes the one Tron created. `serde_json` uses `float_roundtrip`, so numbers in untouched keys keep their value.
+- As built (rules): `erc::check(schematic, settings)` drops ignored rules and gives the others their setting's severity. `pin_to_pin` follows KiCad's `ERC_SETTINGS::GetSeverity`: ignore turns it off, and any other setting leaves each conflict's severity to the matrix.
+- As built (IPC and UI): `get_erc_rules` returns `ErcRuleSetting {key, message, severity, defaultSeverity}` per rule. `edit_erc_severities` takes the changed settings, and `DocumentDiff.ercSettings` reports the change. **Tools > ERC Rule Severities...** and the ERC panel's Rule Severities button open the "ERC Rule Severities" dialog, which has Rule, ID, and Severity columns, Error/Warning/Ignore selects (Use Pin Conflict Matrix/Ignore for `pin_to_pin`), Reset to Defaults, and Apply (disabled until something changes). It shows "Loading settings..." while loading, or "Failed to load project settings: …" with only Close. The undo label is "Edit ERC Severities". An open ERC panel re-runs after every severity change, including undo and redo.
+
+**4c-5. Exclusions.** Excluding a violation, with an optional comment, saved in `erc.erc_exclusions`. This waits for a KiCad-written `.kicad_pro` containing exclusions, because no public project has one to verify the entry format against.
 
 ## Related blueprints
 
@@ -192,6 +204,8 @@ NC    E  E  E  E  E  E  E  E  E  E  E  E
 - `crates/core/src/wiring.rs` — wires, junctions, labels, and the split and junction planner. `netlist.rs` derives nets. `session.rs` holds the `EditItems` wiring commands. Tests: `crates/core/tests/netlist.rs` and `tests/golden/wiring/divider.kicad_sch`
 - `src-tauri/src/ipc.rs` — `draw_wire`, `place_label`, `move_wiring`, `rotate_labels`, `delete_wiring`, symbol `pins`, and the `wires`, `junctions`, and `labels` fields
 - `ui/src/wiring.ts`, `powerSymbols.ts`, `components/InlineLabelEditor.tsx`, `components/PowerPicker.tsx` — wiring geometry, the label popover, and the power picker. Tests: `App.test.tsx` ("Wiring"), `wiring.test.ts`
+- `crates/core/src/erc.rs`, `project_file.rs` — the ERC rules, rule severities, and the `.kicad_pro` settings. `session.rs` holds `edit_erc_severities`. Tests: `crates/core/tests/erc.rs`
+- `ui/src/components/ErcPanel.tsx`, `ErcSeveritiesDialog.tsx` — the ERC panel and the rule severities dialog. Tests: `App.test.tsx`
 
 ## Acceptance or verification criteria
 

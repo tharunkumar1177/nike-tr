@@ -13,12 +13,14 @@ import {
 /**
  * Mirrors the open project from the core. `project` is `undefined` until the
  * first snapshot arrives and `null` when no project is open.
+ * `ercSettingsVersion` increases each time the ERC rule severities change.
  */
 export function useProjectDocument() {
   const [project, setProjectState] = useState<
     ProjectSnapshot | null | undefined
   >(undefined);
   const [loadError, setLoadError] = useState<ErrorReport | null>(null);
+  const [ercSettingsVersion, setErcSettingsVersion] = useState(0);
   const projectRef = useRef<ProjectSnapshot | null | undefined>(undefined);
 
   const setProject = useCallback((next: ProjectSnapshot | null) => {
@@ -46,6 +48,9 @@ export function useProjectDocument() {
       if (!current) {
         return;
       }
+      if (diff.ercSettings) {
+        setErcSettingsVersion((version) => version + 1);
+      }
       const next = applyDiff(current, diff);
       if (next) {
         setProject(next);
@@ -55,5 +60,5 @@ export function useProjectDocument() {
     });
   }, [resync, setProject]);
 
-  return { project, loadError, setProject, resync };
+  return { project, ercSettingsVersion, loadError, setProject, resync };
 }
