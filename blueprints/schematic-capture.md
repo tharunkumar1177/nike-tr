@@ -38,7 +38,7 @@ Slice 4c (properties and ERC) is Partial. 4c-1 (no-connect flags and annotation)
 - IPC: the violation payload's shape.
 - UI: Vitest covers opening from the menu, grouping and row text, marker selection, keyboard and click selection, "Out of date" after an edit, the clean result, a core error, closing, and the toolbar toggle.
 
-4c-4 (rule severities) is built; CI is pending. Covered by tests:
+4c-4 (rule severities) is green in CI (see `ROADMAP.md`). Covered by tests:
 
 - Core: `project_file.rs` unit tests cover reading stored settings with defaults for the rest, rejecting non-project files, changing one setting while every other key survives (including `erc_exclusions`, `pin_map`, and a float), adding the ERC section to a file without one, and a new file's contents. `erc.rs` unit tests cover ignore and override, the matrix keeping `pin_to_pin` severities, and the setting keys. The `erc` integration tests cover the undo step and dirty flag, ignored and promoted rules in `Session::erc`, the saved file and its reload, undo removing a created file on save, unknown rules being rejected, and an unreadable file never being written.
 - IPC: the settings payload and the diff's `ercSettings` flag.
