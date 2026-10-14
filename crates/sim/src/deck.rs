@@ -142,8 +142,9 @@ fn is_ground(net: &str) -> bool {
     net == "GND" || net == GROUND
 }
 
-/// A SPICE node name for every net. Characters ngspice would misread become `_`, and
-/// because ngspice ignores case, names that collide get a numeric suffix.
+/// A SPICE node name for every net. Characters ngspice would misread become `_`, including
+/// `.`, which separates a plot from a vector in result names. Because ngspice ignores case,
+/// names that collide get a numeric suffix.
 fn node_names(nets: &[Net]) -> HashMap<&str, String> {
     let mut taken: HashSet<String> = HashSet::from([GROUND.to_owned()]);
     let mut names = HashMap::with_capacity(nets.len());
@@ -166,7 +167,7 @@ fn node_names(nets: &[Net]) -> HashMap<&str, String> {
 }
 
 fn node_char(c: char) -> char {
-    if c.is_ascii_alphanumeric() || "/_-+.".contains(c) {
+    if c.is_ascii_alphanumeric() || "/_-+".contains(c) {
         c
     } else {
         '_'

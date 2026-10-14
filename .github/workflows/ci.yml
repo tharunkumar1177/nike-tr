@@ -16,6 +16,8 @@ permissions:
 env:
   NODE_VERSION: "24.21.0"
   CARGO_TERM_COLOR: always
+  NGSPICE_URL: https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/47/ngspice-47_dll_64.7z
+  NGSPICE_SHA256: ""
 
 jobs:
   lockfiles:
@@ -167,8 +169,31 @@ jobs:
         if: ${{ !cancelled() && steps.icons.outcome == 'success' }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Download ngspice
+        id: ngspice
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
+            --output "$RUNNER_TEMP/ngspice.7z" "$NGSPICE_URL"
+          actual="$(sha256sum "$RUNNER_TEMP/ngspice.7z" | cut -d ' ' -f 1)"
+          echo "ngspice archive SHA-256: $actual"
+          if [ "$actual" != "$NGSPICE_SHA256" ]; then
+            7z l "$RUNNER_TEMP/ngspice.7z"
+            echo "::error::The ngspice archive's SHA-256 is $actual, not the pinned NGSPICE_SHA256."
+            exit 1
+          fi
+          7z x -y -o"$RUNNER_TEMP/ngspice" "$RUNNER_TEMP/ngspice.7z" > /dev/null
+          dll="$RUNNER_TEMP/ngspice/Spice64_dll/dll-vs/ngspice.dll"
+          if [ ! -f "$dll" ]; then
+            find "$RUNNER_TEMP/ngspice" -maxdepth 3
+            echo "::error::ngspice.dll is not at Spice64_dll/dll-vs in the archive."
+            exit 1
+          fi
+          echo "TRON_NGSPICE=$(cygpath --windows "$dll")" >> "$GITHUB_ENV"
+
       - name: Test
-        if: ${{ !cancelled() && steps.icons.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.icons.outcome == 'success' && steps.ngspice.outcome == 'success' }}
         run: cargo test --workspace --locked --no-fail-fast
 
       - name: Check generated IPC bindings
