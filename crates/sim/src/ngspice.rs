@@ -218,7 +218,7 @@ impl Engine {
             message,
         };
         // SAFETY: loading ngspice runs no initializers that depend on Tron's state.
-        let library = unsafe { open(path) }.map_err(|error| failed(error.to_string()))?;
+        let library = unsafe { open(path) }.map_err(|error| failed(with_sources(&error)))?;
         // SAFETY: each type matches the prototype in ngspice's `sharedspice.h`.
         let (init, circ, command, vec_info, cur_plot, all_vecs) = unsafe {
             (
@@ -362,6 +362,19 @@ fn take_errors() -> Vec<String> {
     errors
 }
 
+/// The error and every cause under it, such as the operating system error behind a failed
+/// library load.
+fn with_sources(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}
+
 #[cfg(windows)]
 unsafe fn open(path: &Path) -> Result<Library, libloading::Error> {
     use libloading::os::windows::{LOAD_WITH_ALTERED_SEARCH_PATH, Library as WindowsLibrary};
@@ -386,7 +399,7 @@ unsafe fn symbol<T: Copy>(library: &Library, name: &[u8]) -> Result<T, String> {
     // SAFETY: forwarded from the caller.
     unsafe { library.get::<T>(name) }
         .map(|symbol| *symbol)
-        .map_err(|error| error.to_string())
+        .map_err(|error| with_sources(&error))
 }
 
 /// # Safety

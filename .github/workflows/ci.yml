@@ -191,6 +191,7 @@ jobs:
             exit 1
           fi
           echo "TRON_NGSPICE=$(cygpath --windows "$dll")" >> "$GITHUB_ENV"
+          cygpath --windows "$(dirname "$dll")" >> "$GITHUB_PATH"
 
       - name: Test
         if: ${{ !cancelled() && steps.icons.outcome == 'success' && steps.ngspice.outcome == 'success' }}
