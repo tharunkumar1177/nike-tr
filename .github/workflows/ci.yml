@@ -21,7 +21,7 @@ env:
   NGSPICE_COPYING_URL: https://sourceforge.net/p/ngspice/ngspice/ci/ngspice-46/tree/COPYING?format=raw
   NGSPICE_COPYING_SHA256: 53e838832e7c00598bb86602a99f9644ba2060e19be209b52e60adb2c8eb6f77
   LIBOMP_LICENSE_URL: https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-15.0.7/openmp/LICENSE.TXT
-  LIBOMP_LICENSE_SHA256: ""
+  LIBOMP_LICENSE_SHA256: fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4
 
 jobs:
   lockfiles:
