@@ -8,7 +8,7 @@ The user runs DC operating point, transient, and AC analyses on their schematic 
 
 **Status:** Partial
 
-Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. Slice 5b is green in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376): `crates/sim` loads the pinned ngspice 46 DLL and runs `.op` and `.tran` against it. There is no session, IPC, or UI yet (5c and 5d).
+Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. Slice 5b is green in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376): `crates/sim` loads the pinned ngspice 46 DLL and runs `.op` and `.tran` against it. Slice 5c is green in [CI 38595951934](https://github.com/tharunkumar1177/tron/actions/runs/38595951934), including the Windows installer. It adds cancellable background runs with progress, min-max waveform decimation, the analysis settings in `tron.json`, and the simulation IPC commands. There is no UI and no bundled ngspice yet (5d).
 
 ## Architecture dependencies
 
@@ -56,7 +56,10 @@ When a run fails to converge, `sim` retries with gmin stepping and then source s
 - `crates/sim/src/value.rs` — parses SI values and writes exact round-trip numbers for SPICE. Implemented.
 - `crates/sim/src/analysis.rs` — the `.op` and `.tran` directives and their range checks. Implemented.
 - `crates/core/src/kicad.rs` `Schematic::symbol_flag` — reads `(exclude_from_sim yes)` on a placed symbol.
-- `crates/sim/src/ngspice.rs` — the `libloading` wrapper around the ngspice shared API. The library is loaded and initialized once per process, and `Engine::lock` serializes runs through a static mutex. Each run resets ngspice (`destroy all`, `remcirc`), loads the deck, runs it in the foreground, and collects every real vector of the current plot. Errors come from ngspice's stderr lines and its exit callback. A second library path in the same process is rejected. Implemented.
+- `crates/sim/src/ngspice.rs` — the `libloading` wrapper around the ngspice shared API. The library is loaded and initialized once per process, and `Engine::lock` serializes runs through a static mutex. Each run resets ngspice (`destroy all`, `remcirc`), loads the deck, and sends `bg_run`. The caller then waits on a condition variable that the background-thread and exit callbacks signal, and collects every real vector of the current plot. The time vector becomes the plot's `scale`. `Engine::halt` sends `bg_halt` without the engine lock, and `run_cancellable` also takes a cancel flag, so a cancel that arrives before the background thread starts is still honored. `SendStat` percentages go to the run's progress callback. Errors come from ngspice's stderr lines and its exit callback. A second library path in the same process is rejected. Implemented.
+- `crates/sim/src/waveform.rs` — `decimate` and `Plot::waveform`: min-max reduction per x span, the nearest neighbor outside each end of the range, NaN samples dropped, and runs of equal sample count when x decreases. Implemented.
+- `crates/core/src/manifest.rs` `AnalysisSettings` and `Session::edit_analysis` — the optional `simulation.analysis` key in `tron.json`, kept with unknown sibling keys, edited as the undoable "Simulation Settings" command. Implemented.
+- `src-tauri/src/sim.rs` — `start_simulation` (async: checks the schematic, runs on a blocking worker, emits `simulation-progress`, and resolves with `SimulationFinished`), `cancel_simulation`, and `fetch_waveform` (capped at 20,000 samples). Results are dropped on any document change, open, or close, and a run that overlapped a change returns `simCancelled`. ngspice is found through `TRON_NGSPICE`, then the resource `ngspice/ngspice.dll`. `src-tauri/src/ipc.rs` adds `get_analysis_settings` and `edit_analysis_settings`. `src-tauri/src/error.rs` maps each pre-flight and engine error to its own `AppErrorKind`. Implemented.
 - Tests: unit tests in each `crates/sim/src` module, and `crates/sim/tests/deck.rs`, which builds KiCad-format divider and RC schematics and checks the exact deck text and every pre-flight error. `crates/sim/tests/ngspice.rs` runs real ngspice from `TRON_NGSPICE`, which CI sets after downloading and checking the pinned archive.
 
 ## Slice 5 plan (approved 2026-10-14)
@@ -85,12 +88,15 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
 - [x] (5a) The SPICE deck for a divider and an RC circuit is exact text, and each pre-flight error is reported with the symbol or setting involved. Verified by `crates/sim/tests/deck.rs`.
 - [x] (5b) An RC low-pass transient matches the analytic response within 1% in a CI test using real ngspice. Verified by `crates/sim/tests/ngspice.rs` in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376).
 - [x] (5b) A voltage divider `.op` matches the analytic value exactly to 6 significant figures. Verified by the same test file and run, which also checks that a rejected deck reports the ngspice error and that the engine recovers afterward.
+- [x] (5c) A long transient reports progress midway through the run and can be cancelled while it runs, after which the engine runs the next deck normally. The waveform fetch respects its budget and keeps peaks. The analysis settings are an undoable edit that survives a save and reopen, and each pre-flight error has its own error kind. Verified by `crates/sim/src/ngspice.rs` and `crates/sim/tests/ngspice.rs` (real ngspice), `crates/sim/src/waveform.rs`, `crates/core/src/session.rs`, `crates/core/src/manifest.rs`, and `src-tauri/src/error.rs` in [CI 38595951934](https://github.com/tharunkumar1177/tron/actions/runs/38595951934).
 - [ ] The `.ac` −3 dB point of an RC filter matches 1/(2πRC) within 1%.
 - [ ] Probing a wire or pin plots its signal, and plots support zoom, cursors, and measurement readouts.
 
 ## Remaining gaps and unknowns
 
 - Encrypted vendor models (PSpice) are not supported.
+- **Progress on very long transients (unexplained):** a 0.1 s transient with a 0.1 µs maximum step reports progress midway. A 2 s transient with the same step reported none in its first 10 s on the CI runner ([CI 38594420004](https://github.com/tharunkumar1177/tron/actions/runs/38594420004)). The cause is unknown, so the 5d UI must not treat a run without progress as stuck, and should show elapsed time as well.
+- The `start_simulation`, `cancel_simulation`, and `fetch_waveform` commands have no test through Tauri itself. The engine, decimation, settings, and error mapping beneath them are tested.
 
 ### Slice 5 research (2026-10-14, unverified until CI confirms)
 
