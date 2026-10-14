@@ -11,11 +11,14 @@ use std::time::{Duration, Instant};
 use common::{divider, low_pass, low_pass_transient};
 use tron_sim::{Analysis, Deck, Engine, EngineError, EngineGuard, Plot, Transient, deck};
 
-fn engine() -> EngineGuard {
-    let path = std::env::var_os("TRON_NGSPICE")
+fn library() -> PathBuf {
+    std::env::var_os("TRON_NGSPICE")
         .map(PathBuf::from)
-        .expect("TRON_NGSPICE must name the ngspice shared library");
-    match Engine::lock(&path) {
+        .expect("TRON_NGSPICE must name the ngspice shared library")
+}
+
+fn engine() -> EngineGuard {
+    match Engine::lock(&library()) {
         Ok(engine) => engine,
         Err(error) => panic!("{error}"),
     }
@@ -84,6 +87,41 @@ fn the_low_pass_step_response_matches_the_analytic_curve() {
     let last = samples.last().unwrap();
     let expected = 1.0 - (-5.0f64).exp();
     assert!((last.y - expected).abs() < 0.01, "{last:?}");
+}
+
+#[test]
+fn code_models_load_from_an_absolute_path_without_spinit() {
+    // The archive keeps the code models in `lib/ngspice`, beside `dll-vs`.
+    let library = library();
+    let models = library
+        .parent()
+        .and_then(|dir| dir.parent())
+        .expect("the library is inside the archive layout")
+        .join("lib")
+        .join("ngspice");
+    let mut engine = engine();
+    for _ in 0..2 {
+        if let Err(error) = engine.load_code_models(&models) {
+            panic!("{error}");
+        }
+    }
+    let lines = [
+        "* Tron simulation",
+        "V1 in 0 DC 2",
+        "A1 in out amp",
+        ".model amp gain(gain=2.5)",
+        "R1 out 0 1e3",
+        ".op",
+        ".end",
+    ];
+    let gain = Deck {
+        lines: Vec::from(lines.map(str::to_owned)),
+        nodes: Default::default(),
+        devices: Default::default(),
+    };
+    let plot = run(&mut engine, &gain);
+    let out = plot.vector("out").expect("the plot has out")[0];
+    assert!(relative_error(out, 5.0) < 1e-9, "{out}");
 }
 
 #[test]

@@ -18,6 +18,10 @@ env:
   CARGO_TERM_COLOR: always
   NGSPICE_URL: https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/old-releases/46/ngspice-46_dll_64.7z
   NGSPICE_SHA256: 5c03f25709d6ea7d1e58a82ebe7c1e6eb5177f266787466bf0c716791ba26e4c
+  NGSPICE_COPYING_URL: https://sourceforge.net/p/ngspice/ngspice/ci/ngspice-46/tree/COPYING?format=raw
+  NGSPICE_COPYING_SHA256: ""
+  LIBOMP_LICENSE_URL: https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-15.0.7/openmp/LICENSE.TXT
+  LIBOMP_LICENSE_SHA256: ""
 
 jobs:
   lockfiles:
@@ -269,8 +273,43 @@ jobs:
       - name: Generate app icons
         run: npx tauri icon app-icon.svg
 
+      - name: Stage ngspice resources
+        shell: bash
+        run: |
+          fetch() {
+            curl --fail --location --silent --show-error --retry 5 --retry-all-errors --output "$2" "$1"
+            actual="$(sha256sum < "$2" | cut -d ' ' -f 1)"
+            echo "SHA-256 of $1: $actual"
+            if [ "$actual" != "$3" ]; then
+              echo "::error::$1 has SHA-256 $actual, not the pinned $4."
+              exit 1
+            fi
+          }
+          fetch "$NGSPICE_URL" "$RUNNER_TEMP/ngspice.7z" "$NGSPICE_SHA256" NGSPICE_SHA256
+          fetch "$NGSPICE_COPYING_URL" "$RUNNER_TEMP/COPYING" "$NGSPICE_COPYING_SHA256" NGSPICE_COPYING_SHA256
+          fetch "$LIBOMP_LICENSE_URL" "$RUNNER_TEMP/LICENSE-libomp.txt" "$LIBOMP_LICENSE_SHA256" LIBOMP_LICENSE_SHA256
+          7z x -y -o"$RUNNER_TEMP/ngspice" "$RUNNER_TEMP/ngspice.7z" > /dev/null
+          archive="$RUNNER_TEMP/ngspice/Spice64_dll"
+          staged=src-tauri/resources/ngspice
+          mkdir -p "$staged/codemodels"
+          cp "$archive/dll-vs/ngspice.dll" "$archive/dll-vs/libomp140.x86_64.dll" "$staged/"
+          cp "$archive"/lib/ngspice/*.cm "$staged/codemodels/"
+          cp "$RUNNER_TEMP/COPYING" "$RUNNER_TEMP/LICENSE-libomp.txt" "$staged/"
+          find "$staged" -type f
+
       - name: Build installers
-        run: npx tauri build --ci -- --locked
+        run: npx tauri build --ci --config src-tauri/tauri.bundle.conf.json -- --locked
+
+      - name: Check bundled ngspice
+        shell: bash
+        run: |
+          for file in ngspice.dll libomp140.x86_64.dll COPYING LICENSE-libomp.txt codemodels/analog.cm; do
+            if [ ! -f "target/release/ngspice/$file" ]; then
+              find target/release -maxdepth 3 -path '*ngspice*'
+              echo "::error::The build did not place ngspice/$file beside the app."
+              exit 1
+            fi
+          done
 
       - name: Upload Windows installers
         uses: actions/upload-artifact@v7

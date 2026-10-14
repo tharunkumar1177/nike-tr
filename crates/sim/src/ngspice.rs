@@ -54,6 +54,7 @@ type CommandFn = unsafe extern "C" fn(*const c_char) -> c_int;
 type VecInfoFn = unsafe extern "C" fn(*const c_char) -> *const VectorInfo;
 type CurPlotFn = unsafe extern "C" fn() -> *const c_char;
 type AllVecsFn = unsafe extern "C" fn(*const c_char) -> *const *const c_char;
+type NoSpinitFn = unsafe extern "C" fn() -> c_int;
 
 /// Lines ngspice printed since the last run started, with its `stdout ` or `stderr ` prefix.
 static OUTPUT: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -263,6 +264,8 @@ pub struct Engine {
     vec_info: VecInfoFn,
     cur_plot: CurPlotFn,
     all_vecs: AllVecsFn,
+    /// Folders whose code models are loaded. ngspice keeps them for the life of the process.
+    code_models: Vec<PathBuf>,
     /// Kept loaded for the life of the process; the function pointers above point into it.
     _library: Library,
 }
@@ -330,6 +333,13 @@ impl Engine {
             cur_plot.map_err(failed)?,
             all_vecs.map_err(failed)?,
         );
+        // SAFETY: the type matches the prototype in ngspice's `sharedspice.h`.
+        let no_spinit = unsafe { symbol::<NoSpinitFn>(&library, b"ngSpice_nospinit\0") };
+        let no_spinit = no_spinit.map_err(failed)?;
+        // ngspice would look for `spinit` relative to the working directory, and the code
+        // models it names relative to that too, so Tron skips it and loads them itself.
+        // SAFETY: takes no arguments and only sets a flag read by `ngSpice_Init`.
+        unsafe { no_spinit() };
         // SAFETY: the callbacks are `extern "C"` functions that never unwind, and they
         // reach only process-wide statics, so no user data pointer is needed.
         let status = unsafe {
@@ -355,8 +365,47 @@ impl Engine {
             vec_info,
             cur_plot,
             all_vecs,
+            code_models: Vec::new(),
             _library: library,
         })
+    }
+
+    /// Loads every XSPICE code model (`*.cm`) in `dir`. A folder already loaded is
+    /// skipped, since ngspice keeps code models until the process ends.
+    pub fn load_code_models(&mut self, dir: &Path) -> Result<(), EngineError> {
+        if self.code_models.iter().any(|loaded| loaded == dir) {
+            return Ok(());
+        }
+        let failed = |message: String| EngineError::Load {
+            path: dir.to_owned(),
+            message,
+        };
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => return Err(failed(error.to_string())),
+        };
+        let mut models: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| is_code_model(path))
+            .collect();
+        if models.is_empty() {
+            return Err(failed("the folder has no code models (*.cm).".to_owned()));
+        }
+        models.sort();
+        take_errors();
+        for model in &models {
+            // ngspice's command parser treats a backslash as an escape, and Windows
+            // accepts forward slashes.
+            let path = model.display().to_string().replace('\\', "/");
+            let status = self.command(&format!("codemodel \"{path}\""))?;
+            let errors = take_errors();
+            if status != 0 || !errors.is_empty() {
+                return Err(failed(format!("{path}: {}", errors.join(" "))));
+            }
+        }
+        self.code_models.push(dir.to_owned());
+        Ok(())
     }
 
     /// Loads `deck`, runs its analysis to completion, and returns the results.
@@ -485,7 +534,7 @@ impl Engine {
         if EXITED.load(Ordering::SeqCst) {
             return Err(EngineError::Exited);
         }
-        let command = CString::new(command).expect("commands are fixed ASCII text");
+        let command = CString::new(command).expect("commands and file paths contain no NUL");
         // SAFETY: a NUL-terminated command string that outlives the call.
         let status = unsafe { (self.command)(command.as_ptr()) };
         if EXITED.load(Ordering::SeqCst) {
@@ -526,6 +575,11 @@ impl Engine {
             vectors,
         })
     }
+}
+
+fn is_code_model(path: &Path) -> bool {
+    let extension = path.extension().and_then(|ext| ext.to_str());
+    extension.is_some_and(|ext| ext.eq_ignore_ascii_case("cm"))
 }
 
 fn send_halt() {

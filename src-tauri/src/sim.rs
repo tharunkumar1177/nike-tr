@@ -1,7 +1,7 @@
 //! Simulation commands. One ngspice run at a time goes to a blocking worker, its results
 //! stay here, and the UI fetches each waveform reduced to what its plot can show.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -21,6 +21,8 @@ pub const MAX_WAVEFORM_POINTS: u32 = 20_000;
 /// Names the ngspice library to load instead of the bundled one.
 const NGSPICE_ENV: &str = "TRON_NGSPICE";
 const NGSPICE_RESOURCE: &str = "ngspice/ngspice.dll";
+/// Where the installer puts the code models, beside the library.
+const CODE_MODELS_DIR: &str = "codemodels";
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -108,6 +110,29 @@ fn ngspice_path(app: &AppHandle) -> Result<PathBuf, AppError> {
     ))
 }
 
+/// The XSPICE code models for the library at `library`: the installer's `codemodels`
+/// folder beside it, or `lib/ngspice` in the layout of ngspice's own archive.
+fn code_model_dir(library: &Path) -> Result<PathBuf, AppError> {
+    let beside = library.parent().map(|dir| dir.join(CODE_MODELS_DIR));
+    let archive = library
+        .parent()
+        .and_then(Path::parent)
+        .map(|dir| dir.join("lib").join("ngspice"));
+    let candidates: Vec<PathBuf> = beside.into_iter().chain(archive).collect();
+    if let Some(dir) = candidates.iter().find(|dir| dir.is_dir()) {
+        return Ok(dir.clone());
+    }
+    let checked: Vec<String> = candidates
+        .iter()
+        .map(|dir| dir.display().to_string())
+        .collect();
+    Err(AppError::new(
+        AppErrorKind::SimEngineLoad,
+        "The ngspice code models were not found.",
+        Some(format!("Looked in {}.", checked.join(" and "))),
+    ))
+}
+
 fn unexpected(message: &str, error: impl ToString) -> AppError {
     AppError::new(
         AppErrorKind::SimAnalysisFailed,
@@ -121,6 +146,7 @@ fn unexpected(message: &str, error: impl ToString) -> AppError {
 #[tauri::command]
 pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppError> {
     let path = ngspice_path(&app)?;
+    let code_models = code_model_dir(&path)?;
     let state = app.state::<AppState>();
     let (deck, cancel, generation) = state.with_session(|session| {
         let project = session.project();
@@ -143,6 +169,7 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
     let emitter = app.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let mut engine = Engine::lock(&path)?;
+        engine.load_code_models(&code_models)?;
         engine.run_cancellable(&deck, &cancel, move |percentage| {
             let progress = SimulationProgress { percentage };
             if let Err(error) = emitter.emit(SIMULATION_PROGRESS_EVENT, progress) {
@@ -242,6 +269,25 @@ pub fn fetch_waveform(
 mod tests {
     use super::*;
     use tron_sim::Vector;
+
+    #[test]
+    fn code_models_are_found_beside_the_library_or_in_the_archive_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let installed = root.path().join("ngspice");
+        std::fs::create_dir_all(installed.join(CODE_MODELS_DIR)).unwrap();
+        let found = code_model_dir(&installed.join("ngspice.dll")).unwrap();
+        assert_eq!(found, installed.join(CODE_MODELS_DIR));
+
+        let archive = root.path().join("Spice64_dll");
+        let models = archive.join("lib").join("ngspice");
+        std::fs::create_dir_all(&models).unwrap();
+        let library = archive.join("dll-vs").join("ngspice.dll");
+        assert_eq!(code_model_dir(&library).unwrap(), models);
+
+        let missing = root.path().join("empty").join("ngspice.dll");
+        let error = code_model_dir(&missing).unwrap_err();
+        assert_eq!(error.kind, AppErrorKind::SimEngineLoad);
+    }
 
     #[test]
     fn a_document_change_discards_the_results() {

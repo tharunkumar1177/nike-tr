@@ -81,6 +81,40 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
      - Any published document change drops the stored results.
      - ngspice is found through `TRON_NGSPICE`, then the resource `ngspice/ngspice.dll`.
    - **Errors.** One `AppErrorKind` per pre-flight problem (`SimNoAnalysis`, `SimInvalidAnalysis`, `SimNoGround`, `SimNoModel`, `SimUnannotated`, `SimDuplicateReference`, `SimNetlist`, `SimEmpty`), plus `SimEngineLoad`, `SimCircuitRejected`, `SimAnalysisFailed`, `SimRunning`, `SimCancelled`, and `SimNotFound`.
+   **5d split (architect, 2026-10-14).**
+   - **5d-1:** bundled ngspice, the analysis settings editor, run and cancel controls with progress and elapsed time, and `.op` annotations on the schematic.
+   - **5d-2:** the probe tool and the base waveform viewer.
+   - **5d-3:** zoom and pan, two cursors with a delta readout, and the measurement table.
+
+   **5d-1 runtime and bundling.**
+   - ngspice.dll loaded through `LoadLibrary` finds `spinit` through `SPICE_SCRIPTS` or the process working directory, not its own location, and the `codemodel` lines inside it are relative to the working directory too. So `crates/sim` calls `ngSpice_nospinit()` before `ngSpice_Init`.
+   - `Engine::load_code_models(dir)` sends a quoted absolute `codemodel` command for each `*.cm` file.
+   - `spinit` is not shipped. Without it, `.op` and `.tran` on R, C, L, V, and I behave the same.
+   - Only the bundle job gets the ngspice files. It downloads the pinned archive, ngspice's `COPYING` from the `ngspice-46` tag, and the LLVM OpenMP `LICENSE.TXT` (for `libomp140.x86_64.dll`, Apache-2.0 with the LLVM exception), each checked against a pinned SHA-256, into `src-tauri/resources/ngspice/{ngspice.dll, libomp140.x86_64.dll, codemodels/*.cm, COPYING, LICENSE-libomp.txt}`.
+   - It builds with `--config src-tauri/tauri.bundle.conf.json`. `tauri-build` checks `bundle.resources` at compile time, so the resources can't go in `tauri.conf.json` without breaking the rust job.
+   - The `.osdi` and `ivlng` files are not shipped.
+   - `ProjectSnapshot` gains `simulationSettings` and `DocumentDiff` gains `simulationSettingsChanged`.
+   **5d-1 is built in two PRs.**
+   - **5d-1a:** the runtime and bundling above.
+   - **5d-1b:** the three UI surfaces below, the snapshot and diff fields, and an op-point anchor mapping over IPC.
+
+   **5d-1 design decisions (designer, 2026-10-14; the full plans are in the session transcript).**
+   - **Settings dialog** (`SimulationSettingsDialog.tsx`, `ui/src/utils/si.ts`).
+     - It opens from a toolbar gear, a menu item, and `Ctrl+Alt+S`.
+     - An "Analysis type" select offers "Operating Point (.op)" and "Transient (.tran)". The transient fields are "Time step", "Final time", "Initial time", "Maximum time step" (placeholder "Optional"), and "Start from initial conditions (UIC)".
+     - Fields hold the raw SI text. Each field shows its own error ("Invalid SI number.", "Must be greater than 0.", "Must be greater than or equal to 0.", "Must be less than final time.", "Must not exceed final time minus initial time."), and OK is disabled while any error shows.
+     - With no analysis set, it defaults to a transient of 1u / 1m / 0. OK and Cancel only, so one dialog session is one undo step.
+   - **Run panel** (`SimPanel.tsx`, modeled on `ErcPanel`, plus toolbar Run, Cancel, and Settings buttons).
+     - F5 runs and Esc cancels.
+     - The progress bar is indeterminate until a percentage arrives, alongside "Elapsed: N.N s".
+     - The panel shows success ("Simulation complete in {time} s."), "Simulation cancelled.", and an "Out of date" badge after an edit.
+     - Pre-flight errors appear as rows like the ERC panel's. Errors that name a symbol jump to it, and analysis errors open the settings dialog.
+     - An `aria-live` region announces start, finish, and errors.
+   - **Op annotations** (drawn in `schematicDraw.ts`, with hidden hitboxes and a screen-reader list in `SchematicCanvas.tsx`, and an eye toggle in the toolbar).
+     - Each voltage sits at its net label, or else at the middle of the net's longest wire. Each current sits at its device's first pin. Ground is hidden.
+     - Values show 3 significant digits with an SI prefix and unit, such as `3.30 V` or `-1.25 mA`.
+     - Annotations clear on any edit. A tooltip shows the exact value.
+     - It needs, per vector: `vector`, `kind` (voltage or current), `label`, and an `anchorNm`.
 4. **5d. Bundling and UI.** Ship `ngspice.dll`, `spinit`, the code models, and `COPYING` as Tauri resources. Add the probe tool, `.op` annotations, and a waveform viewer with zoom, two cursors with a delta readout, and measurements (min, max, average, RMS, peak-to-peak). This needs a designer plan first.
 
 ## Acceptance or verification criteria
