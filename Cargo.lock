@@ -4145,6 +4145,7 @@ dependencies = [
  "tokio-util",
  "tron-core",
  "tron-library",
+ "tron-sim",
  "ts-rs",
  "uuid",
 ]

@@ -140,7 +140,10 @@ mod tests {
         assert!(samples.len() <= 200, "{}", samples.len());
         assert!(samples.len() >= 100, "{}", samples.len());
         assert!(samples.contains(&Sample { x: 4321.0, y: 50.0 }));
-        assert!(samples.contains(&Sample { x: 8765.0, y: -50.0 }));
+        assert!(samples.contains(&Sample {
+            x: 8765.0,
+            y: -50.0
+        }));
         assert!(samples.windows(2).all(|pair| pair[0].x < pair[1].x));
     }
 

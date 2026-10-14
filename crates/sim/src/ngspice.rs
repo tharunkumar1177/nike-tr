@@ -98,6 +98,10 @@ type Progress = Box<dyn Fn(f64) + Send>;
 
 static PROGRESS: Mutex<Option<Progress>> = Mutex::new(None);
 
+/// Every status line ngspice sent, so a test can show them when progress is missing.
+#[cfg(test)]
+static STATUS_LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 fn run_state() -> MutexGuard<'static, RunState> {
     RUN.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -127,6 +131,11 @@ extern "C" fn send_stat(text: *const c_char, _id: c_int, _user: *mut c_void) -> 
     }
     // SAFETY: ngspice passes a NUL-terminated string that lives for this call.
     let status = unsafe { CStr::from_ptr(text) }.to_string_lossy();
+    #[cfg(test)]
+    STATUS_LINES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(status.to_string());
     if let Some(percent) = parse_percent(&status) {
         let progress = PROGRESS.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(progress) = progress.as_ref() {
@@ -139,7 +148,7 @@ extern "C" fn send_stat(text: *const c_char, _id: c_int, _user: *mut c_void) -> 
 /// The percentage in an ngspice status line such as `tran: 45.3%`, or `None` for lines
 /// without one, such as `--ready--`.
 fn parse_percent(status: &str) -> Option<f64> {
-    let number = status.trim().strip_suffix('%')?;
+    let number = status.trim().strip_suffix('%')?.trim_end();
     let start = number
         .char_indices()
         .rev()
@@ -646,7 +655,44 @@ mod tests {
         assert_eq!(parse_percent("tran: 45.3%"), Some(45.3));
         assert_eq!(parse_percent("Transient analysis 100%"), Some(100.0));
         assert_eq!(parse_percent("tran 120.0%"), Some(100.0));
+        assert_eq!(parse_percent("tran 7.5 %"), Some(7.5));
         assert_eq!(parse_percent("--ready--"), None);
         assert_eq!(parse_percent("%"), None);
+    }
+
+    #[test]
+    fn a_transient_reports_its_progress() {
+        let path = std::env::var_os("TRON_NGSPICE")
+            .map(PathBuf::from)
+            .expect("TRON_NGSPICE must name the ngspice shared library");
+        let lines = [
+            "* progress",
+            "V1 a 0 DC 1",
+            "R1 a b 1e3",
+            "C1 b 0 1e-6",
+            ".tran 1e-5 5e-2 0 1e-7 uic",
+            ".end",
+        ];
+        let deck = Deck {
+            lines: Vec::from(lines.map(str::to_owned)),
+            nodes: Default::default(),
+            devices: Default::default(),
+        };
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&seen);
+        let mut engine = match Engine::lock(&path) {
+            Ok(engine) => engine,
+            Err(error) => panic!("{error}"),
+        };
+        let cancel = AtomicBool::new(false);
+        let result = engine.run_cancellable(&deck, &cancel, move |percent| {
+            sink.lock().unwrap().push(percent);
+        });
+        let statuses = STATUS_LINES.lock().unwrap().clone();
+        if let Err(error) = result {
+            panic!("{error}; status lines: {statuses:?}");
+        }
+        let seen = seen.lock().unwrap();
+        assert!(!seen.is_empty(), "no progress; status lines: {statuses:?}");
     }
 }

@@ -8,9 +8,9 @@ use tron_core::kicad::Schematic;
 use tron_core::kicad_value::text_arg;
 use tron_core::sexpr::SExpr;
 use tron_core::{
-    AnalysisSettings, Changes, ERC_RULES, FieldEdit, Junction, Label, LabelKind, LabelShape, Mirror, Nm, NoConnect,
-    PlacedSymbol, Placement, Point, Project, RuleSeverities, RuleSeverity, Session, Severity,
-    SymbolPreview, TITLE_BLOCK_COMMENTS, TitleBlock, Violation, Wire, Xy,
+    AnalysisSettings, Changes, ERC_RULES, FieldEdit, Junction, Label, LabelKind, LabelShape,
+    Mirror, Nm, NoConnect, PlacedSymbol, Placement, Point, Project, RuleSeverities, RuleSeverity,
+    Session, Severity, SymbolPreview, TITLE_BLOCK_COMMENTS, TitleBlock, Violation, Wire, Xy,
 };
 use ts_rs::TS;
 use uuid::Uuid;
