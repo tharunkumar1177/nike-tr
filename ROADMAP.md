@@ -22,7 +22,7 @@ Tron is a local-first desktop app (Tauri 2, Rust, React) for schematic capture, 
 - Slice 4c split into four PRs, 4c-1 to 4c-4 (approved 2026-10-13). No-connect flags, annotation, and exclusions stay in scope. Tron writes the ERC section of `.kicad_pro`, and severity and exclusion changes are undoable (see [File format](architecture.md#file-format)).
 - 4c-4 narrowed to rule severities, and exclusions moved to a new 4c-5 (decided 2026-10-14). No public project has saved exclusions to confirm their entry format against, so 4c-5 waits for a KiCad-written `.kicad_pro` with exclusions.
 
-- Slice 5 split into 5a to 5d (approved 2026-10-14). 4c-5 stays blocked, so slice 5 goes ahead of it. Analysis settings are saved in `tron.json`, which KiCad does not read. Waveforms stay in Rust and are fetched decimated for each viewport. Simulation pre-flight failures get their own error kinds. ngspice is loaded through a custom `libloading` wrapper. The official ngspice 47 Windows DLL is Modified BSD and ships with its `COPYING` notice.
+- Slice 5 split into 5a to 5d (approved 2026-10-14). 4c-5 stays blocked, so slice 5 goes ahead of it. Analysis settings are saved in `tron.json`, which KiCad does not read. Waveforms stay in Rust and are fetched decimated for each viewport. Simulation pre-flight failures get their own error kinds. ngspice is loaded through a custom `libloading` wrapper. The official ngspice Windows DLL is Modified BSD and ships with its `COPYING` notice. ngspice 46 is pinned instead of 47 because the 47 DLL needs libsndfile and libsamplerate, which its archive omits (decided 2026-10-14).
 
 ## Slices
 
@@ -40,7 +40,7 @@ Tron is a local-first desktop app (Tauri 2, Rust, React) for schematic capture, 
 - [x] **4c-4. ERC rule severities** (UI) — change each rule to Error, Warning, or Ignore, saved in `erc.rule_severities` of `.kicad_pro` through the undo stack. Blueprint: [schematic-capture](blueprints/schematic-capture.md)
 - [ ] **4c-5. ERC exclusions** (UI) — exclude violations with an optional comment, saved in `erc.erc_exclusions`. Waits for a KiCad-written `.kicad_pro` with exclusions to verify the format. Blueprint: [schematic-capture](blueprints/schematic-capture.md)
 - [x] **5a. SPICE deck export** — `crates/sim` maps symbols to SPICE devices and runs the pre-flight checks. Blueprint: [circuit-simulation](blueprints/circuit-simulation.md)
-- [ ] **5b. ngspice in CI** — the `libloading` FFI wrapper, the pinned ngspice 47 download, and real-ngspice `.op` and `.tran` tests. Blueprint: [circuit-simulation](blueprints/circuit-simulation.md)
+- [ ] **5b. ngspice in CI** — the `libloading` FFI wrapper, the pinned ngspice 46 download, and real-ngspice `.op` and `.tran` tests. Blueprint: [circuit-simulation](blueprints/circuit-simulation.md)
 - [ ] **5c. Simulation session and IPC** — a serialized, cancellable worker, decimated waveform fetch, and analysis settings in `tron.json`. Blueprint: [circuit-simulation](blueprints/circuit-simulation.md)
 - [ ] **5d. Simulation UI** (UI) — bundled ngspice, the probe tool, `.op` annotations, and a waveform viewer with zoom, cursors, and measurements. Blueprint: [circuit-simulation](blueprints/circuit-simulation.md)
 - [ ] **6. AC sweep and convergence** (UI) — `.ac` with a Bode plot, gmin and source stepping, and readable convergence errors. Blueprint: [circuit-simulation](blueprints/circuit-simulation.md)

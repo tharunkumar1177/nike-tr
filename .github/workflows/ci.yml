@@ -16,8 +16,8 @@ permissions:
 env:
   NODE_VERSION: "24.21.0"
   CARGO_TERM_COLOR: always
-  NGSPICE_URL: https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/47/ngspice-47_dll_64.7z
-  NGSPICE_SHA256: 5bf5eec7db989f74849cdb32f7df62693f4f149cceeebcbd222eb35c2bb821eb
+  NGSPICE_URL: https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/old-releases/46/ngspice-46_dll_64.7z
+  NGSPICE_SHA256: 5c03f25709d6ea7d1e58a82ebe7c1e6eb5177f266787466bf0c716791ba26e4c
 
 jobs:
   lockfiles:
@@ -193,7 +193,7 @@ jobs:
           vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
           dumpbin="$("$vswhere" -latest -find 'VC/Tools/MSVC/**/bin/Hostx64/x64/dumpbin.exe' | head -n 1 | tr -d '\r')"
           missing=""
-          for module in "$dll" "$(dirname "$dll")"/*.dll; do
+          for module in "$(dirname "$dll")"/*.dll; do
             echo "Imports of $(basename "$module"):"
             imports="$(MSYS_NO_PATHCONV=1 "$dumpbin" /nologo /dependents "$(cygpath --windows "$module")" \
               | tr -d '\r' | grep -iE '^ +[^ ]+\.dll$' | tr -d ' ')"
