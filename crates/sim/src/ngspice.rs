@@ -54,8 +54,6 @@ type CommandFn = unsafe extern "C" fn(*const c_char) -> c_int;
 type VecInfoFn = unsafe extern "C" fn(*const c_char) -> *const VectorInfo;
 type CurPlotFn = unsafe extern "C" fn() -> *const c_char;
 type AllVecsFn = unsafe extern "C" fn(*const c_char) -> *const *const c_char;
-type NoSpinitFn = unsafe extern "C" fn() -> c_int;
-
 /// Lines ngspice printed since the last run started, with its `stdout ` or `stderr ` prefix.
 static OUTPUT: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
@@ -312,6 +310,10 @@ impl Engine {
             path: path.to_owned(),
             message,
         };
+        // ngspice would run a `spinit` from its default folders, whose code model paths are
+        // relative to the working directory, so Tron points it at the library's folder,
+        // which has none, and loads the code models itself.
+        skip_spinit(path.parent().unwrap_or(path)).map_err(failed)?;
         // SAFETY: loading ngspice runs no initializers that depend on Tron's state.
         let library = unsafe { open(path) }.map_err(|error| failed(with_sources(&error)))?;
         // SAFETY: each type matches the prototype in ngspice's `sharedspice.h`.
@@ -333,13 +335,6 @@ impl Engine {
             cur_plot.map_err(failed)?,
             all_vecs.map_err(failed)?,
         );
-        // SAFETY: the type matches the prototype in ngspice's `sharedspice.h`.
-        let no_spinit = unsafe { symbol::<NoSpinitFn>(&library, b"ngSpice_nospinit\0") };
-        let no_spinit = no_spinit.map_err(failed)?;
-        // ngspice would look for `spinit` relative to the working directory, and the code
-        // models it names relative to that too, so Tron skips it and loads them itself.
-        // SAFETY: takes no arguments and only sets a flag read by `ngSpice_Init`.
-        unsafe { no_spinit() };
         // SAFETY: the callbacks are `extern "C"` functions that never unwind, and they
         // reach only process-wide statics, so no user data pointer is needed.
         let status = unsafe {
@@ -618,6 +613,32 @@ fn with_sources(error: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     text
+}
+
+/// Makes ngspice look for `spinit` only in `dir`. `ngSpice_nospinit` can't be used: in
+/// ngspice 46 it dereferences simulator state that only `ngSpice_Init` creates.
+#[cfg(windows)]
+fn skip_spinit(dir: &Path) -> Result<(), String> {
+    unsafe extern "C" {
+        fn _putenv_s(name: *const c_char, value: *const c_char) -> c_int;
+    }
+    // ngspice reads the C runtime's copy of the environment, which `std::env::set_var`
+    // does not update. `_putenv_s` updates both.
+    let value = CString::new(dir.display().to_string());
+    let value = value.map_err(|error| error.to_string())?;
+    // SAFETY: both arguments are NUL-terminated strings that the C runtime copies.
+    let status = unsafe { _putenv_s(c"SPICE_SCRIPTS".as_ptr(), value.as_ptr()) };
+    if status != 0 {
+        return Err(format!("SPICE_SCRIPTS could not be set (error {status})."));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn skip_spinit(dir: &Path) -> Result<(), String> {
+    // SAFETY: called once, under the engine lock, before ngspice starts its threads.
+    unsafe { std::env::set_var("SPICE_SCRIPTS", dir) };
+    Ok(())
 }
 
 #[cfg(windows)]
