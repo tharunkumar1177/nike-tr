@@ -8,7 +8,7 @@ The user runs DC operating point, transient, and AC analyses on their schematic 
 
 **Status:** Partial
 
-Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. ngspice is not integrated yet (5b), and there is no session, IPC, or UI (5c and 5d).
+Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. Slice 5b is green in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376): `crates/sim` loads the pinned ngspice 46 DLL and runs `.op` and `.tran` against it. There is no session, IPC, or UI yet (5c and 5d).
 
 ## Architecture dependencies
 
@@ -56,22 +56,23 @@ When a run fails to converge, `sim` retries with gmin stepping and then source s
 - `crates/sim/src/value.rs` — parses SI values and writes exact round-trip numbers for SPICE. Implemented.
 - `crates/sim/src/analysis.rs` — the `.op` and `.tran` directives and their range checks. Implemented.
 - `crates/core/src/kicad.rs` `Schematic::symbol_flag` — reads `(exclude_from_sim yes)` on a placed symbol.
-- Tests: unit tests in each `crates/sim/src` module, and `crates/sim/tests/deck.rs`, which builds KiCad-format divider and RC schematics and checks the exact deck text and every pre-flight error.
+- `crates/sim/src/ngspice.rs` — the `libloading` wrapper around the ngspice shared API. The library is loaded and initialized once per process, and `Engine::lock` serializes runs through a static mutex. Each run resets ngspice (`destroy all`, `remcirc`), loads the deck, runs it in the foreground, and collects every real vector of the current plot. Errors come from ngspice's stderr lines and its exit callback. A second library path in the same process is rejected. Implemented.
+- Tests: unit tests in each `crates/sim/src` module, and `crates/sim/tests/deck.rs`, which builds KiCad-format divider and RC schematics and checks the exact deck text and every pre-flight error. `crates/sim/tests/ngspice.rs` runs real ngspice from `TRON_NGSPICE`, which CI sets after downloading and checking the pinned archive.
 
 ## Slice 5 plan (approved 2026-10-14)
 
 Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
 
 1. **5a. SPICE deck export and pre-flight checks.** Add `crates/sim`, which depends on `tron-core`. Map each symbol to a SPICE device from its `Sim.*` fields, or else from its reference prefix (R, C, L, V, I) and `Value`. Parse values with SI suffixes, `Meg`, and the `4k7` form. Ground nets become node `0`. Pre-flight checks report a missing ground, a symbol with no simulation model, and a missing analysis. Unit tests cover the deck text and every pre-flight error.
-2. **5b. ngspice FFI and CI integration.** Write a custom `libloading` wrapper for `ngSpice_Init`, `ngSpice_Circ`, `ngSpice_Command`, `ngSpice_CurPlot`, `ngSpice_AllVecs`, and `ngGet_Vec_Info`. CI downloads the pinned ngspice 47 archive, checks its SHA-256, and extracts it. Integration tests run real ngspice: a divider `.op` matches to 6 significant figures, and an RC low-pass `.tran` matches the analytic response within 1%.
+2. **5b. ngspice FFI and CI integration.** Write a custom `libloading` wrapper for `ngSpice_Init`, `ngSpice_Circ`, `ngSpice_Command`, `ngSpice_CurPlot`, `ngSpice_AllVecs`, and `ngGet_Vec_Info`. CI downloads the pinned ngspice 46 archive, checks its SHA-256, and extracts it. Integration tests run real ngspice: a divider `.op` matches to 6 significant figures, and an RC low-pass `.tran` matches the analytic response within 1%.
 3. **5c. Session and IPC.** One serialized worker runs each simulation and can be cancelled with `bg_halt`. Add the commands `start_simulation`, `cancel_simulation`, and `fetch_waveform` (min-max decimation), a progress event, the pre-flight `AppErrorKind`s, and analysis settings in `tron.json` through the undo stack.
 4. **5d. Bundling and UI.** Ship `ngspice.dll`, `spinit`, the code models, and `COPYING` as Tauri resources. Add the probe tool, `.op` annotations, and a waveform viewer with zoom, two cursors with a delta readout, and measurements (min, max, average, RMS, peak-to-peak). This needs a designer plan first.
 
 ## Acceptance or verification criteria
 
 - [x] (5a) The SPICE deck for a divider and an RC circuit is exact text, and each pre-flight error is reported with the symbol or setting involved. Verified by `crates/sim/tests/deck.rs`.
-- [ ] An RC low-pass transient matches the analytic response within 1% in a CI test using real ngspice.
-- [ ] A voltage divider `.op` matches the analytic value exactly to 6 significant figures.
+- [x] (5b) An RC low-pass transient matches the analytic response within 1% in a CI test using real ngspice. Verified by `crates/sim/tests/ngspice.rs` in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376).
+- [x] (5b) A voltage divider `.op` matches the analytic value exactly to 6 significant figures. Verified by the same test file and run, which also checks that a rejected deck reports the ngspice error and that the engine recovers afterward.
 - [ ] The `.ac` −3 dB point of an RC filter matches 1/(2πRC) within 1%.
 - [ ] Probing a wire or pin plots its signal, and plots support zoom, cursors, and measurement readouts.
 
@@ -85,4 +86,6 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
 - **Distribution:** ngspice 47 is the latest stable release. The archive is `https://sourceforge.net/projects/ngspice/files/ng-spice-rework/47/ngspice-47_dll_64.7z/download`, a 7z file holding `ngspice.dll`, `spinit`, and the `*.cm` code models. No SHA-256 is published, so CI computes it on the first fetch and the value is then pinned. The DLL's path inside the archive must be confirmed in the first CI run.
 - **API:** `sharedspice.h` provides `ngSpice_Init` (with the `SendChar`, `SendStat`, `ControlledExit`, `SendData`, `SendInitData`, and `BGThreadRunning` callbacks), `ngSpice_Circ`, `ngSpice_Command` (`bg_run`, `bg_halt`), `ngGet_Vec_Info`, `ngSpice_CurPlot`, and `ngSpice_AllVecs`. ngspice keeps global state, so only one instance can run per process, and runs must be serialized. The callbacks fire on ngspice's background thread. ngspice must be able to find `spinit` and the code models, either through `SPICE_LIB_DIR` or through `ngSpice_nospinit` and `ngCM_Input_Path`. Convergence failures are reported only as text through `SendChar`.
 - **KiCad conventions:** the `Sim.Device`, `Sim.Type`, `Sim.Params`, `Sim.Pins`, `Sim.Library`, and `Sim.Name` fields map a symbol to SPICE. Without them, the device is inferred from the reference prefix (R, C, L, V, I) and the `Value`. Values accept SI suffixes, `Meg` for 10^6 (SPICE `m` means milli), and the `4k7` form for 4.7k. Ground is node `0`, and named nets get a `/` prefix (for example `/OUT`). The `.tran` analysis takes step, stop, start, max step, and UIC. The probe tool plots `V(net)` for a wire and `I(device)` for a pin, and probed signals persist across runs. `.op` results are annotated on the schematic.
+- **Why ngspice 46, not 47 (decided 2026-10-14):** the ngspice 47 `ngspice.dll` imports `sndfile.dll` (libsndfile, LGPL-2.1) and `samplerate.dll` (libsamplerate, BSD-2) for its new audio-file commands, and its DLL archive ships neither, so loading fails with OS error 126 ([CI 38583326976](https://github.com/tharunkumar1177/tron/actions/runs/38583326976)). The user chose ngspice 46, the newest DLL build without those imports. It loses only the audio commands, which Tron does not use, and keeps LGPL binaries out of the installer. The CI import check fails the build if a future pin needs a DLL the archive lacks.
+- **Archive contents:** the pinned archive is `https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/old-releases/46/ngspice-46_dll_64.7z` with SHA-256 `5c03f25709d6ea7d1e58a82ebe7c1e6eb5177f266787466bf0c716791ba26e4c`, pinned in `ci.yml`. The single top-level folder is `Spice64_dll`. It holds `dll-vs/ngspice.dll` beside its OpenMP runtime `dll-vs/libomp140.x86_64.dll`, `share/ngspice/scripts/spinit`, and the code models in `lib/ngspice/*.cm`. The archive has no `COPYING` or other license file, so 5d must ship the notice from a pinned copy of the ngspice source tree.
 - **Known weaknesses in KiCad's simulator:** "timestep too small" usually hides a floating node or a missing model, so pre-flight checks matter. Users ask for a dual-cursor delta readout and a measurement table (min, max, average, RMS, peak-to-peak).

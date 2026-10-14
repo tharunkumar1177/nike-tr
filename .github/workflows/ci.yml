@@ -16,6 +16,8 @@ permissions:
 env:
   NODE_VERSION: "24.21.0"
   CARGO_TERM_COLOR: always
+  NGSPICE_URL: https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/old-releases/46/ngspice-46_dll_64.7z
+  NGSPICE_SHA256: 5c03f25709d6ea7d1e58a82ebe7c1e6eb5177f266787466bf0c716791ba26e4c
 
 jobs:
   lockfiles:
@@ -167,8 +169,51 @@ jobs:
         if: ${{ !cancelled() && steps.icons.outcome == 'success' }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Download ngspice
+        id: ngspice
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors \
+            --output "$RUNNER_TEMP/ngspice.7z" "$NGSPICE_URL"
+          actual="$(sha256sum < "$RUNNER_TEMP/ngspice.7z" | cut -d ' ' -f 1)"
+          echo "ngspice archive SHA-256: $actual"
+          if [ "$actual" != "$NGSPICE_SHA256" ]; then
+            7z l "$RUNNER_TEMP/ngspice.7z"
+            echo "::error::The ngspice archive's SHA-256 is $actual, not the pinned NGSPICE_SHA256."
+            exit 1
+          fi
+          7z x -y -o"$RUNNER_TEMP/ngspice" "$RUNNER_TEMP/ngspice.7z" > /dev/null
+          dll="$RUNNER_TEMP/ngspice/Spice64_dll/dll-vs/ngspice.dll"
+          if [ ! -f "$dll" ]; then
+            find "$RUNNER_TEMP/ngspice" -maxdepth 3
+            echo "::error::ngspice.dll is not at Spice64_dll/dll-vs in the archive."
+            exit 1
+          fi
+          vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+          dumpbin="$("$vswhere" -latest -find 'VC/Tools/MSVC/**/bin/Hostx64/x64/dumpbin.exe' | head -n 1 | tr -d '\r')"
+          missing=""
+          for module in "$(dirname "$dll")"/*.dll; do
+            echo "Imports of $(basename "$module"):"
+            imports="$(MSYS_NO_PATHCONV=1 "$dumpbin" /nologo /dependents "$(cygpath --windows "$module")" \
+              | tr -d '\r' | grep -iE '^ +[^ ]+\.dll$' | tr -d ' ')"
+            echo "$imports"
+            for import in $imports; do
+              case "${import,,}" in api-ms-win-*|ext-ms-*) continue ;; esac
+              if [ ! -f "$(dirname "$dll")/$import" ] && [ ! -f "/c/Windows/System32/$import" ]; then
+                missing="$missing $import"
+              fi
+            done
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::ngspice needs DLLs this runner lacks:$missing"
+            exit 1
+          fi
+          echo "TRON_NGSPICE=$(cygpath --windows "$dll")" >> "$GITHUB_ENV"
+          cygpath --windows "$(dirname "$dll")" >> "$GITHUB_PATH"
+
       - name: Test
-        if: ${{ !cancelled() && steps.icons.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.icons.outcome == 'success' && steps.ngspice.outcome == 'success' }}
         run: cargo test --workspace --locked --no-fail-fast
 
       - name: Check generated IPC bindings
