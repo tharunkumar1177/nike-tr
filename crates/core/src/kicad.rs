@@ -312,6 +312,15 @@ impl Schematic {
         })
     }
 
+    /// Whether the placed symbol with `uuid` sets the flag `head`, such as
+    /// `(exclude_from_sim yes)`.
+    pub fn symbol_flag(&self, uuid: Uuid, head: &str) -> bool {
+        self.root
+            .args()
+            .iter()
+            .any(|item| placed_uuid(item) == Some(uuid) && flag(item, head))
+    }
+
     /// The `(symbol "<lib_id>" ...)` embedded in `(lib_symbols)`, if present.
     pub fn lib_symbol(&self, lib_id: &str) -> Option<&SExpr> {
         let node = self.root.child("lib_symbols")?;

@@ -55,7 +55,7 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 
 ### File format
 
-- Projects are saved as KiCad-compatible S-expression files: `.kicad_sch` for the schematic and `.kicad_pcb` for the board. A `tron.json` project manifest records Tron-only settings.
+- Projects are saved as KiCad-compatible S-expression files: `.kicad_sch` for the schematic and `.kicad_pcb` for the board. A `tron.json` project manifest records Tron-only settings, including the simulation analysis settings (`.op` and `.tran` parameters). Changing an analysis setting is an undoable command that marks the project unsaved. KiCad does not see these settings.
 - Tron reads and writes the ERC section of the KiCad `.kicad_pro` JSON (rule severities and violation exclusions). Every other key is kept and written back unchanged. Changing a severity or an exclusion is an undoable command that marks the project unsaved, like any document edit.
 - Every write is atomic: write to a temporary file in the same directory, flush it, then rename it over the target.
 - Unknown S-expression nodes are kept and written back unchanged, so a round trip never loses data Tron doesn't understand.
@@ -65,6 +65,7 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 - The UI calls named Tauri commands that take typed request payloads and return `Result<T, AppError>`.
 - Document changes reach the UI as batched **diff events** with a monotonically increasing document revision. The UI drops any diff whose base revision doesn't match its own and asks for a fresh snapshot.
 - Large reads are scoped to the viewport. Full-document serialization over IPC is forbidden in edit loops.
+- Simulation result vectors stay in Rust. The UI fetches only the signals and the x range it shows, capped at a point budget, and Rust reduces the data by min-max decimation so peaks survive.
 - Request and response types are defined in Rust and exported to TypeScript, so the two sides cannot drift.
 
 ### Connectivity and netlist
@@ -79,6 +80,7 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 
 - All fallible operations return `AppError { kind, message, detail }`. `kind` is a stable machine-readable enum that the UI maps to user-facing copy.
 - No silent failure: every error is either shown to the user or handled with a documented fallback.
+- A simulation is checked before ngspice runs. A missing ground, a symbol with no simulation model, and a missing analysis are each their own error kind, and each names the symbol or setting involved.
 - A crash or failed write leaves the last saved file intact, as the atomic write guarantees.
 - External processes and engines (ngspice, LLM calls, freerouting) run off the UI thread and can be cancelled.
 
