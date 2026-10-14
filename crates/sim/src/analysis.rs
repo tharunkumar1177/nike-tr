@@ -1,5 +1,7 @@
 //! The analyses a simulation runs.
 
+use tron_core::AnalysisSettings;
+
 use crate::value::spice_number;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -29,6 +31,27 @@ impl Analysis {
         match self {
             Analysis::OperatingPoint => Ok(".op".to_owned()),
             Analysis::Transient(transient) => transient.directive(),
+        }
+    }
+}
+
+impl From<AnalysisSettings> for Analysis {
+    fn from(settings: AnalysisSettings) -> Analysis {
+        match settings {
+            AnalysisSettings::OperatingPoint => Analysis::OperatingPoint,
+            AnalysisSettings::Transient {
+                step,
+                stop,
+                start,
+                max_step,
+                initial_conditions,
+            } => Analysis::Transient(Transient {
+                step,
+                stop,
+                start,
+                max_step,
+                initial_conditions,
+            }),
         }
     }
 }

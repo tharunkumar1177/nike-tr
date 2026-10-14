@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use ts_rs::TS;
 
 use crate::units::Nm;
 
@@ -11,16 +12,55 @@ pub const DEFAULT_GRID: Nm = Nm(1_270_000);
 pub const MIN_GRID: Nm = Nm(10_000);
 pub const MAX_GRID: Nm = Nm(25_400_000);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
     pub format_version: u32,
     pub name: String,
     #[serde(default)]
     pub schematic: SchematicSettings,
+    #[serde(default, skip_serializing_if = "SimulationSettings::is_empty")]
+    pub simulation: SimulationSettings,
     /// Keys written by newer versions of Tron, kept so a save doesn't drop them.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulationSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<AnalysisSettings>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl SimulationSettings {
+    fn is_empty(&self) -> bool {
+        self.analysis.is_none() && self.extra.is_empty()
+    }
+}
+
+/// The analysis a simulation runs. Times are in seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(export)]
+pub enum AnalysisSettings {
+    /// `.op`: the DC operating point.
+    OperatingPoint,
+    /// `.tran`: the response over time.
+    Transient {
+        step: f64,
+        stop: f64,
+        /// Results before this time are computed but not kept.
+        start: f64,
+        /// The largest internal time step, or `null` to let ngspice choose.
+        #[serde(default, rename = "maxStep")]
+        max_step: Option<f64>,
+        /// Start from the components' initial conditions instead of the operating point.
+        #[serde(default, rename = "initialConditions")]
+        initial_conditions: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +97,7 @@ impl Manifest {
             format_version: MANIFEST_FORMAT_VERSION,
             name: name.to_owned(),
             schematic: SchematicSettings::default(),
+            simulation: SimulationSettings::default(),
             extra: Map::new(),
         }
     }
@@ -129,6 +170,35 @@ mod tests {
     fn defaults_missing_schematic_settings() {
         let manifest = Manifest::parse(r#"{"formatVersion":1,"name":"amp"}"#).unwrap();
         assert_eq!(manifest.schematic, SchematicSettings::default());
+    }
+
+    #[test]
+    fn stores_the_simulation_analysis() {
+        let mut manifest = Manifest::new("amp");
+        manifest.simulation.analysis = Some(AnalysisSettings::Transient {
+            step: 1e-6,
+            stop: 1e-3,
+            start: 0.0,
+            max_step: None,
+            initial_conditions: true,
+        });
+        let written = manifest.to_file_string();
+        assert!(written.contains("\"kind\": \"transient\""), "{written}");
+        assert!(written.contains("\"initialConditions\": true"), "{written}");
+        assert_eq!(Manifest::parse(&written), Ok(manifest));
+
+        let source = r#"{"formatVersion":1,"name":"amp","simulation":{"analysis":{"kind":"operatingPoint"},"probes":[]}}"#;
+        let manifest = Manifest::parse(source).unwrap();
+        let analysis = manifest.simulation.analysis;
+        assert_eq!(analysis, Some(AnalysisSettings::OperatingPoint));
+        assert!(manifest.to_file_string().contains("\"probes\": []"));
+    }
+
+    #[test]
+    fn defaults_missing_simulation_settings() {
+        let manifest = Manifest::parse(r#"{"formatVersion":1,"name":"amp"}"#).unwrap();
+        assert_eq!(manifest.simulation, SimulationSettings::default());
+        assert!(!manifest.to_file_string().contains("simulation"));
     }
 
     #[test]

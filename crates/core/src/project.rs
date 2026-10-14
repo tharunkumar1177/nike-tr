@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::erc::RuleSeverities;
 use crate::error::CoreError;
 use crate::kicad::{Board, FileError, PageSize, Schematic, TitleBlock};
-use crate::manifest::{Manifest, ManifestError};
+use crate::manifest::{AnalysisSettings, Manifest, ManifestError};
 use crate::project_file::ProjectFile;
 use crate::units::Nm;
 
@@ -61,7 +61,7 @@ pub fn validate_name(name: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Project {
     dir: PathBuf,
     manifest: Manifest,
@@ -293,6 +293,15 @@ impl Project {
 
     pub(crate) fn set_grid_size(&mut self, grid: Nm) {
         self.manifest.schematic.grid_size_nm = grid.0;
+    }
+
+    /// The analysis a simulation runs, or `None` before one is chosen.
+    pub fn analysis(&self) -> Option<AnalysisSettings> {
+        self.manifest.simulation.analysis
+    }
+
+    pub(crate) fn set_analysis(&mut self, analysis: Option<AnalysisSettings>) {
+        self.manifest.simulation.analysis = analysis;
     }
 }
 

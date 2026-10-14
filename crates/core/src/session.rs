@@ -14,7 +14,7 @@ use crate::kicad::{
     MANDATORY_FIELDS, Mirror, PlacedSymbol, Placement, Schematic, SymbolProperty, TitleBlock,
 };
 use crate::kicad_value::text_arg;
-use crate::manifest::{MAX_GRID, MIN_GRID};
+use crate::manifest::{AnalysisSettings, MAX_GRID, MIN_GRID};
 use crate::project::Project;
 use crate::project_file::ProjectFile;
 use crate::sexpr::SExpr;
@@ -31,10 +31,11 @@ pub const PROPERTIES_LABEL: &str = "Project Properties";
 pub const ANNOTATE_LABEL: &str = "Annotate Schematic";
 pub const EDIT_FIELDS_LABEL: &str = "Edit Symbol Properties";
 pub const ERC_SEVERITIES_LABEL: &str = "Edit ERC Severities";
+pub const ANALYSIS_LABEL: &str = "Simulation Settings";
 /// The longest field value, such as a datasheet URL.
 pub const MAX_FIELD_VALUE_CHARS: usize = 4096;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     SetTitleBlock {
         before: Box<TitleBlock>,
@@ -43,6 +44,11 @@ pub enum Command {
     SetGridSize {
         before: Nm,
         after: Nm,
+    },
+    /// The simulation analysis in `tron.json` was replaced.
+    SetAnalysis {
+        before: Option<AnalysisSettings>,
+        after: Option<AnalysisSettings>,
     },
     /// Symbols were placed; each definition was embedded on first use. The indices are the
     /// child positions the nodes are inserted at, in ascending order.
@@ -108,6 +114,7 @@ impl Command {
         match self {
             Command::SetTitleBlock { .. } => "Title Block",
             Command::SetGridSize { .. } => "Grid Size",
+            Command::SetAnalysis { .. } => ANALYSIS_LABEL,
             Command::PlaceSymbols { .. } => "Place Symbol",
             Command::DeleteSymbols { .. } => "Delete Symbol",
             Command::MoveSymbols { .. } => "Move Symbol",
@@ -124,6 +131,10 @@ impl Command {
                 after: before.clone(),
             },
             Command::SetGridSize { before, after } => Command::SetGridSize {
+                before: *after,
+                after: *before,
+            },
+            Command::SetAnalysis { before, after } => Command::SetAnalysis {
                 before: *after,
                 after: *before,
             },
@@ -185,6 +196,10 @@ impl Command {
             Command::SetGridSize { after, .. } => {
                 project.set_grid_size(*after);
                 changes.grid_size = true;
+            }
+            Command::SetAnalysis { after, .. } => {
+                project.set_analysis(*after);
+                changes.analysis = true;
             }
             Command::PlaceSymbols {
                 symbols,
@@ -280,6 +295,8 @@ pub struct Changes {
     pub wiring: bool,
     /// The ERC rule severities in `.kicad_pro` changed.
     pub erc_settings: bool,
+    /// The simulation analysis in `tron.json` changed.
+    pub analysis: bool,
 }
 
 impl Changes {
@@ -290,6 +307,7 @@ impl Changes {
             || self.definitions
             || self.wiring
             || self.erc_settings
+            || self.analysis
     }
 }
 
@@ -833,6 +851,38 @@ impl Session {
         }))
     }
 
+    /// Replaces the simulation analysis as one undo step. `None` clears it. An edit that
+    /// changes nothing records nothing. The parameter ranges are checked when a
+    /// simulation starts, so a partly entered analysis can still be saved.
+    pub fn edit_analysis(
+        &mut self,
+        analysis: Option<AnalysisSettings>,
+    ) -> Result<Changes, CoreError> {
+        if let Some(AnalysisSettings::Transient {
+            step,
+            stop,
+            start,
+            max_step,
+            ..
+        }) = analysis
+        {
+            let values = [step, stop, start, max_step.unwrap_or(0.0)];
+            if !values.iter().all(|value| value.is_finite()) {
+                return Err(CoreError::InvalidEdit(
+                    "The transient times must be finite numbers.".to_owned(),
+                ));
+            }
+        }
+        let before = self.project.analysis();
+        if before == analysis {
+            return Ok(Changes::default());
+        }
+        Ok(self.execute(Command::SetAnalysis {
+            before,
+            after: analysis,
+        }))
+    }
+
     fn unwritable_settings(&self, reason: &str) -> CoreError {
         CoreError::InvalidEdit(format!(
             "{}.kicad_pro can't be read, so its ERC settings can't be changed: {reason}",
@@ -1223,6 +1273,49 @@ mod tests {
     }
 
     #[test]
+    fn the_analysis_is_an_undoable_edit_saved_in_the_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::create(dir.path(), "rc", Uuid::nil()).unwrap();
+        let mut session = Session::new(project);
+        let transient = AnalysisSettings::Transient {
+            step: 1e-6,
+            stop: 1e-3,
+            start: 0.0,
+            max_step: Some(1e-7),
+            initial_conditions: false,
+        };
+        let changes = session.edit_analysis(Some(transient)).unwrap();
+        assert!(changes.analysis);
+        assert!(session.is_dirty());
+        assert_eq!(session.undo_label(), Some(ANALYSIS_LABEL));
+        assert_eq!(session.project().analysis(), Some(transient));
+        let unchanged = session.edit_analysis(Some(transient)).unwrap();
+        assert_eq!(unchanged, Changes::default());
+
+        session.undo().unwrap();
+        assert_eq!(session.project().analysis(), None);
+        session.redo().unwrap();
+        session.save().unwrap();
+        let reopened = Project::load(&dir.path().join("rc")).unwrap();
+        assert_eq!(reopened.analysis(), Some(transient));
+    }
+
+    #[test]
+    fn analyses_with_non_finite_times_are_rejected() {
+        let mut session = session();
+        let analysis = AnalysisSettings::Transient {
+            step: f64::INFINITY,
+            stop: 1e-3,
+            start: 0.0,
+            max_step: None,
+            initial_conditions: false,
+        };
+        let error = session.edit_analysis(Some(analysis)).unwrap_err();
+        assert!(matches!(error, CoreError::InvalidEdit(_)));
+        assert!(!session.is_dirty());
+    }
+
+    #[test]
     fn undo_restores_the_exact_previous_project() {
         let mut session = session();
         let original = session.project().clone();
@@ -1238,6 +1331,7 @@ mod tests {
                 definitions: false,
                 wiring: false,
                 erc_settings: false,
+                analysis: false,
             }
         );
         let edited = session.project().clone();
@@ -1400,6 +1494,7 @@ mod tests {
                 definitions: true,
                 wiring: false,
                 erc_settings: false,
+                analysis: false,
             }
         );
         let schematic = session.project().schematic();

@@ -3,9 +3,13 @@
 mod common;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use common::{divider, low_pass, low_pass_transient};
-use tron_sim::{Analysis, Deck, Engine, EngineError, EngineGuard, Plot, deck};
+use tron_sim::{Analysis, Deck, Engine, EngineError, EngineGuard, Plot, Transient, deck};
 
 fn engine() -> EngineGuard {
     let path = std::env::var_os("TRON_NGSPICE")
@@ -37,6 +41,7 @@ fn relative_error(actual: f64, expected: f64) -> f64 {
 fn the_divider_operating_point_matches_the_analytic_value() {
     let plot = run(&mut engine(), &divider_deck());
     assert!(plot.name.starts_with("op"), "{}", plot.name);
+    assert_eq!(plot.scale, None);
 
     let out = plot.vector("/OUT").expect("the plot has /out")[0];
     let expected = 5.0 * 4.7e3 / (10e3 + 4.7e3);
@@ -57,6 +62,7 @@ fn the_low_pass_step_response_matches_the_analytic_curve() {
     let deck = deck(&low_pass().schematic(), Some(&analysis)).unwrap();
     let plot = run(&mut engine(), &deck);
     assert!(plot.name.starts_with("tran"), "{}", plot.name);
+    assert_eq!(plot.scale.as_deref(), Some("time"));
 
     let time = plot.vector("time").expect("the plot has time");
     let out = plot.vector("/OUT").expect("the plot has /out");
@@ -72,6 +78,50 @@ fn the_low_pass_step_response_matches_the_analytic_curve() {
         worst = worst.max((v - expected).abs());
     }
     assert!(worst < 0.01, "largest error {worst} V");
+
+    let samples = plot.waveform("/OUT", 0.0, 5e-3, 100).unwrap();
+    assert!(samples.len() <= 100, "{} samples", samples.len());
+    let last = samples.last().unwrap();
+    let expected = 1.0 - (-5.0f64).exp();
+    assert!((last.y - expected).abs() < 0.01, "{last:?}");
+}
+
+#[test]
+fn a_long_transient_reports_progress_and_can_be_cancelled() {
+    let analysis = Analysis::Transient(Transient {
+        step: 1e-5,
+        stop: 2.0,
+        start: 0.0,
+        max_step: Some(1e-7),
+        initial_conditions: true,
+    });
+    let deck = deck(&low_pass().schematic(), Some(&analysis)).unwrap();
+    let mut engine = engine();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (sender, progress) = mpsc::channel();
+    let canceller = {
+        let cancel = Arc::clone(&cancel);
+        thread::spawn(move || {
+            let first = progress.recv_timeout(Duration::from_secs(10)).ok();
+            cancel.store(true, Ordering::SeqCst);
+            Engine::halt();
+            first
+        })
+    };
+    let started = Instant::now();
+    let result = engine.run_cancellable(&deck, &cancel, move |percent| {
+        let _ = sender.send(percent);
+    });
+    let elapsed = started.elapsed();
+    // Joined while this test still holds the engine, so the halt can't reach another run.
+    let first = canceller.join().unwrap();
+    assert_eq!(result.unwrap_err(), EngineError::Cancelled);
+    assert!(elapsed < Duration::from_secs(30), "took {elapsed:?}");
+    let first = first.expect("ngspice reported progress");
+    assert!((0.0..100.0).contains(&first), "{first}");
+
+    let plot = run(&mut engine, &divider_deck());
+    assert!(plot.vector("/OUT").is_some());
 }
 
 #[test]

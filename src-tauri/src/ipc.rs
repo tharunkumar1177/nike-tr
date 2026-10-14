@@ -3,12 +3,12 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, PackageInfo, State, Window};
+use tauri::{AppHandle, Emitter, Manager, PackageInfo, State, Window};
 use tron_core::kicad::Schematic;
 use tron_core::kicad_value::text_arg;
 use tron_core::sexpr::SExpr;
 use tron_core::{
-    Changes, ERC_RULES, FieldEdit, Junction, Label, LabelKind, LabelShape, Mirror, Nm, NoConnect,
+    AnalysisSettings, Changes, ERC_RULES, FieldEdit, Junction, Label, LabelKind, LabelShape, Mirror, Nm, NoConnect,
     PlacedSymbol, Placement, Point, Project, RuleSeverities, RuleSeverity, Session, Severity,
     SymbolPreview, TITLE_BLOCK_COMMENTS, TitleBlock, Violation, Wire, Xy,
 };
@@ -19,6 +19,7 @@ use crate::error::{AppError, AppErrorKind};
 use crate::library::{LibraryState, read_index};
 use crate::settings::{self, Settings};
 use crate::shell;
+use crate::sim::SimState;
 
 pub const DOCUMENT_CHANGED_EVENT: &str = "document-changed";
 
@@ -711,6 +712,13 @@ impl AppState {
     pub fn is_dirty(&self) -> bool {
         self.lock().session.as_ref().is_some_and(Session::is_dirty)
     }
+
+    /// Runs `read` on the open project. Edits can't happen until it returns.
+    pub(crate) fn with_session<R>(&self, read: impl FnOnce(&Session) -> R) -> Result<R, AppError> {
+        let inner = self.lock();
+        let session = inner.session.as_ref().ok_or_else(AppError::no_project)?;
+        Ok(read(session))
+    }
 }
 
 impl Inner {
@@ -720,6 +728,9 @@ impl Inner {
 
     /// Bumps the revision and tells the UI what changed.
     fn publish(&mut self, app: &AppHandle, changes: Changes) -> Result<(), AppError> {
+        if changes.any() {
+            app.state::<SimState>().invalidate();
+        }
         let base_revision = self.revision;
         self.revision = self.revision.wrapping_add(1);
         let session = self.session.as_ref().ok_or_else(AppError::no_project)?;
@@ -731,6 +742,7 @@ impl Inner {
 
     /// Makes `session` the open project and returns its first snapshot.
     fn open(&mut self, app: &AppHandle, session: Session) -> Result<ProjectSnapshot, AppError> {
+        app.state::<SimState>().invalidate();
         self.revision = self.revision.wrapping_add(1);
         let snapshot = ProjectSnapshot::new(&session, self.revision);
         self.session = Some(session);
@@ -848,6 +860,7 @@ pub fn save_project_as(
 #[tauri::command]
 pub fn close_project(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> {
     let mut inner = state.lock();
+    app.state::<SimState>().invalidate();
     inner.session = None;
     inner.revision = inner.revision.wrapping_add(1);
     shell::sync_session(&app, None).map_err(AppError::window)
@@ -1135,6 +1148,29 @@ pub fn edit_erc_severities(
         .collect();
     let mut inner = state.lock();
     let changes = inner.session_mut()?.edit_erc_severities(&severities)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// The analysis a simulation runs, or `null` before one is chosen.
+#[tauri::command]
+pub fn get_analysis_settings(
+    state: State<'_, AppState>,
+) -> Result<Option<AnalysisSettings>, AppError> {
+    state.with_session(|session| session.project().analysis())
+}
+
+/// Replaces the simulation analysis in `tron.json` as one undo step. `null` clears it.
+#[tauri::command]
+pub fn edit_analysis_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    analysis: Option<AnalysisSettings>,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let changes = inner.session_mut()?.edit_analysis(analysis)?;
     if changes.any() {
         inner.publish(&app, changes)?;
     }

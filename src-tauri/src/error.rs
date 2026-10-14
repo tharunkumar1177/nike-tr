@@ -2,6 +2,7 @@ use std::path::Path;
 
 use serde::Serialize;
 use tron_core::CoreError;
+use tron_sim::{EngineError, PreflightError};
 use ts_rs::TS;
 
 /// A stable, machine-readable error category the UI maps to its own copy.
@@ -30,6 +31,34 @@ pub enum AppErrorKind {
     LibraryNotReady,
     /// The cached component library could not be read.
     Library,
+    /// No simulation analysis is set.
+    SimNoAnalysis,
+    /// The analysis parameters are out of range; the message names the parameter.
+    SimInvalidAnalysis,
+    /// The circuit has no ground net.
+    SimNoGround,
+    /// A symbol has no usable simulation model; the detail names the symbol.
+    SimNoModel,
+    /// A simulated symbol is not annotated; the detail names its reference.
+    SimUnannotated,
+    /// Two simulated symbols share a reference; the detail names it.
+    SimDuplicateReference,
+    /// The schematic's connectivity could not be derived.
+    SimNetlist,
+    /// No symbol takes part in the simulation.
+    SimEmpty,
+    /// The ngspice simulator could not be found or loaded.
+    SimEngineLoad,
+    /// ngspice rejected the circuit; the detail is what it reported.
+    SimCircuitRejected,
+    /// The analysis failed, or ngspice stopped; the detail is what it reported.
+    SimAnalysisFailed,
+    /// A simulation is already running.
+    SimRunning,
+    /// The simulation was cancelled, or the schematic changed while it ran.
+    SimCancelled,
+    /// The requested results or signal no longer exist.
+    SimNotFound,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -132,10 +161,73 @@ impl From<CoreError> for AppError {
     }
 }
 
+impl From<PreflightError> for AppError {
+    fn from(error: PreflightError) -> AppError {
+        use AppErrorKind as Kind;
+        let message = error.to_string();
+        let (kind, detail) = match error {
+            PreflightError::NoAnalysis => (Kind::SimNoAnalysis, None),
+            PreflightError::InvalidAnalysis(_) => (Kind::SimInvalidAnalysis, None),
+            PreflightError::NoGround => (Kind::SimNoGround, None),
+            PreflightError::NoModel { reference, .. } => (Kind::SimNoModel, Some(reference)),
+            PreflightError::Unannotated(reference) => (Kind::SimUnannotated, Some(reference)),
+            PreflightError::DuplicateReference(reference) => {
+                (Kind::SimDuplicateReference, Some(reference))
+            }
+            PreflightError::Netlist(_) => (Kind::SimNetlist, None),
+            PreflightError::Empty => (Kind::SimEmpty, None),
+        };
+        AppError::new(kind, message, detail)
+    }
+}
+
+impl From<EngineError> for AppError {
+    fn from(error: EngineError) -> AppError {
+        use AppErrorKind as Kind;
+        match error {
+            EngineError::Load { .. } | EngineError::AlreadyLoaded { .. } => AppError::new(
+                Kind::SimEngineLoad,
+                "The ngspice simulator could not be loaded.",
+                Some(error.to_string()),
+            ),
+            EngineError::Circuit(lines) => AppError::new(
+                Kind::SimCircuitRejected,
+                "ngspice rejected the circuit.",
+                Some(lines.join("\n")),
+            ),
+            EngineError::Analysis(lines) => AppError::new(
+                Kind::SimAnalysisFailed,
+                "The simulation failed.",
+                Some(lines.join("\n")),
+            ),
+            EngineError::Exited => AppError::new(Kind::SimAnalysisFailed, error.to_string(), None),
+            EngineError::Cancelled => {
+                AppError::new(Kind::SimCancelled, "The simulation was cancelled.", None)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn preflight_errors_keep_their_kind_and_name_the_symbol() {
+        let error = AppError::from(PreflightError::NoModel {
+            reference: "D1".to_owned(),
+            reason: "no SPICE model".to_owned(),
+        });
+        assert_eq!(error.kind, AppErrorKind::SimNoModel);
+        assert_eq!(error.message, "D1: no SPICE model");
+        assert_eq!(error.detail.as_deref(), Some("D1"));
+        let no_ground = AppError::from(PreflightError::NoGround);
+        let json = serde_json::to_value(no_ground).unwrap();
+        assert_eq!(json["kind"], "simNoGround");
+        let cancelled = AppError::from(EngineError::Cancelled);
+        assert_eq!(cancelled.kind, AppErrorKind::SimCancelled);
+    }
 
     #[test]
     fn parse_errors_name_the_file_line_and_column() {

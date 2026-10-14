@@ -3,6 +3,7 @@ mod ipc;
 mod library;
 mod settings;
 mod shell;
+mod sim;
 
 use tauri::{Emitter, Manager, WindowEvent};
 
@@ -10,6 +11,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(ipc::AppState::default())
+        .manage(sim::SimState::default())
         .setup(|app| {
             let handle = app.handle();
             let (menu, handles) = shell::build_menu(handle)?;
@@ -63,6 +65,8 @@ pub fn run() {
             ipc::run_erc,
             ipc::get_erc_rules,
             ipc::edit_erc_severities,
+            ipc::get_analysis_settings,
+            ipc::edit_analysis_settings,
             ipc::get_symbol_fields,
             ipc::edit_symbol_fields,
             ipc::set_symbol_field,
@@ -76,6 +80,9 @@ pub fn run() {
             library::search_library,
             library::get_library_symbol,
             library::get_library_footprint,
+            sim::start_simulation,
+            sim::cancel_simulation,
+            sim::fetch_waveform,
         ])
         .run(tauri::generate_context!())
         .expect("the Tron desktop runtime failed to start");
