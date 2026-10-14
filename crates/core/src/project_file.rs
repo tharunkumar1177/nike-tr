@@ -240,7 +240,10 @@ mod tests {
         };
         let expected = json!({"rule_severities": {"unannotated": "ignore"}});
         assert_eq!(value["erc"], expected);
-        assert_eq!(edited.rule_severities()["unannotated"], RuleSeverity::Ignore);
+        assert_eq!(
+            edited.rule_severities()["unannotated"],
+            RuleSeverity::Ignore
+        );
     }
 
     #[test]

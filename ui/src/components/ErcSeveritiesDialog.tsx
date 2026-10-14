@@ -136,7 +136,9 @@ export function ErcSeveritiesDialog({
   if (load.status === "loading") {
     content = (
       <>
-        <p className="modal__message" role="status">Loading settings...</p>
+        <p className="modal__message" role="status">
+          Loading settings...
+        </p>
         <div className="modal__actions">
           <button type="button" className="button" onClick={onCancel}>
             Cancel
@@ -197,7 +199,11 @@ export function ErcSeveritiesDialog({
             );
           })}
         </div>
-        {error && <p className="form__error" role="alert">{error.message}</p>}
+        {error && (
+          <p className="form__error" role="alert">
+            {error.message}
+          </p>
+        )}
         <div className="modal__actions">
           <button
             type="button"
