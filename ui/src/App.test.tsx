@@ -12,6 +12,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { DocumentDiff } from "./bindings/DocumentDiff";
+import type { ErcViolation } from "./bindings/ErcViolation";
 import type { LibraryHit } from "./bindings/LibraryHit";
 import type { LibraryStatus } from "./bindings/LibraryStatus";
 import type { LibrarySymbol } from "./bindings/LibrarySymbol";
@@ -1320,5 +1321,145 @@ describe("Wiring", () => {
     );
     expect(done.length).toBeGreaterThan(0);
     expect(argsOf(calls, "annotate_schematic")).toHaveLength(2);
+  });
+
+  function violation(overrides: Partial<ErcViolation> = {}): ErcViolation {
+    return {
+      id: "pin_not_connected:symbol-1:2",
+      rule: "pin_not_connected",
+      severity: "error",
+      message: "Pin not connected",
+      position: [100_000_000, 53_810_000],
+      uuids: ["symbol-1"],
+      items: ["R? pin 2 [Passive]"],
+      ...overrides,
+    };
+  }
+
+  function ercPanel(): Promise<HTMLElement> {
+    return screen.findByRole("region", { name: "Electrical Rules Checker" });
+  }
+
+  it("runs ERC from the Tools menu and lists violations by severity", async () => {
+    const snapshot = wiredSnapshot();
+    const { calls, canvas } = await openSheet(
+      {
+        run_erc: () => [
+          violation(),
+          violation({
+            id: "unannotated:symbol-1",
+            rule: "unannotated",
+            message: "Symbol is not annotated",
+            position: [100_000_000, 50_000_000],
+            items: ["Symbol R? [R]"],
+          }),
+          violation({
+            id: "isolated_pin_label:label-1",
+            rule: "isolated_pin_label",
+            severity: "warning",
+            message: "Label connected to only one pin",
+            position: [63_500_000, 50_800_000],
+            uuids: ["label-1"],
+            items: ["Label OUT"],
+          }),
+        ],
+      },
+      snapshot,
+    );
+
+    await emitFromCore("menu-action", "electrical-rules-checker");
+    const panel = await ercPanel();
+    expect(
+      within(panel).getByText(
+        "Run ERC to check for electrical rules violations.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Run ERC" }));
+
+    const list = await within(panel).findByRole("listbox", {
+      name: "Violations",
+    });
+    expect(
+      within(list).getByRole("group", { name: "Errors (2)" }),
+    ).toBeTruthy();
+    expect(
+      within(list).getByRole("group", { name: "Warnings (1)" }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText("ERC complete: 2 errors, 1 warning"),
+    ).toBeTruthy();
+    const options = within(list).getAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Pin not connectedR? pin 2 [Passive]",
+      "Symbol is not annotatedSymbol R? [R]",
+      "Label connected to only one pinLabel OUT",
+    ]);
+    const selected = () =>
+      options.map((option) => option.getAttribute("aria-selected"));
+
+    clickAt(canvas, [100_000_000, 53_810_000]);
+    expect(selected()).toEqual(["true", "false", "false"]);
+    expect(screen.queryByText("Symbol selected")).toBeNull();
+    fireEvent.keyDown(list, { key: "ArrowDown" });
+    expect(selected()).toEqual(["false", "true", "false"]);
+    fireEvent.click(options[2]!);
+    expect(selected()).toEqual(["false", "false", "true"]);
+    expect(argsOf(calls, "run_erc")).toHaveLength(1);
+
+    await emitFromCore("document-changed", {
+      baseRevision: snapshot.revision,
+      revision: snapshot.revision + 1,
+      titleBlock: null,
+      gridSizeNm: null,
+      definitions: null,
+      instances: null,
+      wires: null,
+      junctions: null,
+      labels: null,
+      noConnects: null,
+      history: { ...snapshot.history, dirty: true },
+    });
+    expect(await within(panel).findByText("Out of date")).toBeTruthy();
+  });
+
+  it("shows a clean result and core errors in the ERC panel", async () => {
+    let failure: string | null = null;
+    await openSheet({
+      run_erc: () => {
+        if (failure !== null) {
+          throw new Error(failure);
+        }
+        return [];
+      },
+    });
+
+    await emitFromCore("menu-action", "electrical-rules-checker");
+    const panel = await ercPanel();
+    fireEvent.click(within(panel).getByRole("button", { name: "Run ERC" }));
+    expect(await within(panel).findByText("No violations found.")).toBeTruthy();
+    expect(screen.getByText("ERC complete: No violations found")).toBeTruthy();
+
+    failure = "R1 uses Device:R, which is not embedded in the schematic.";
+    fireEvent.click(within(panel).getByRole("button", { name: "Run ERC" }));
+    expect((await within(panel).findByRole("alert")).textContent).toBe(failure);
+
+    fireEvent.click(
+      within(panel).getByRole("button", {
+        name: "Close Electrical Rules Checker",
+      }),
+    );
+    expect(
+      screen.queryByRole("region", { name: "Electrical Rules Checker" }),
+    ).toBeNull();
+
+    const toggle = screen.getByRole("button", {
+      name: "Electrical Rules Checker",
+    });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    expect(within(await ercPanel()).getByRole("alert").textContent).toBe(
+      failure,
+    );
   });
 });

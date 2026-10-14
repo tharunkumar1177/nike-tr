@@ -38,17 +38,17 @@ enum Priority {
 }
 
 #[derive(Default)]
-struct DisjointSet {
+pub(crate) struct DisjointSet {
     parent: Vec<usize>,
 }
 
 impl DisjointSet {
-    fn add(&mut self) -> usize {
+    pub(crate) fn add(&mut self) -> usize {
         self.parent.push(self.parent.len());
         self.parent.len() - 1
     }
 
-    fn find(&mut self, mut element: usize) -> usize {
+    pub(crate) fn find(&mut self, mut element: usize) -> usize {
         while self.parent[element] != element {
             let grandparent = self.parent[self.parent[element]];
             self.parent[element] = grandparent;
@@ -57,7 +57,7 @@ impl DisjointSet {
         element
     }
 
-    fn union(&mut self, a: usize, b: usize) {
+    pub(crate) fn union(&mut self, a: usize, b: usize) {
         let (a, b) = (self.find(a), self.find(b));
         if a != b {
             self.parent[b] = a;
@@ -127,7 +127,7 @@ impl Builder {
         for (pin, name_has_duplicates) in pins.into_iter().zip(duplicates) {
             let element = self.point(pin.position);
             self.items[element] += 1;
-            if power {
+            if power && pin.electrical == "power_in" {
                 let name = value.to_owned();
                 self.drive(element, global_key(&name), Priority::Power, name);
                 continue;

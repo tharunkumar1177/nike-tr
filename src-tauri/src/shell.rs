@@ -94,6 +94,13 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         None,
         false,
     )?;
+    let electrical_rules = item(
+        app,
+        "electrical-rules-checker",
+        "&Electrical Rules Checker",
+        None,
+        false,
+    )?;
 
     let file = SubmenuBuilder::new(app, "&File")
         .item(&new_project)
@@ -121,6 +128,7 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         .build()?;
     let tools = SubmenuBuilder::new(app, "&Tools")
         .item(&annotate_schematic)
+        .item(&electrical_rules)
         .build()?;
     let menu = MenuBuilder::new(app)
         .item(&file)
@@ -140,6 +148,7 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
             zoom_fit,
             zoom_actual,
             annotate_schematic,
+            electrical_rules,
         ],
         undo,
         redo,

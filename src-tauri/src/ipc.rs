@@ -9,8 +9,8 @@ use tron_core::kicad_value::text_arg;
 use tron_core::sexpr::SExpr;
 use tron_core::{
     Changes, FieldEdit, Junction, Label, LabelKind, LabelShape, Mirror, Nm, NoConnect,
-    PlacedSymbol, Placement, Point, Project, Session, SymbolPreview, TITLE_BLOCK_COMMENTS,
-    TitleBlock, Wire, Xy,
+    PlacedSymbol, Placement, Point, Project, Session, Severity, SymbolPreview,
+    TITLE_BLOCK_COMMENTS, TitleBlock, Violation, Wire, Xy,
 };
 use ts_rs::TS;
 use uuid::Uuid;
@@ -448,6 +448,51 @@ impl From<&NoConnect> for NoConnectFlag {
         NoConnectFlag {
             uuid: flag.uuid,
             position: Xy::from(flag.position),
+        }
+    }
+}
+
+/// How serious an electrical rules violation is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ErcSeverity {
+    Error,
+    Warning,
+}
+
+/// One electrical rules violation, located on the sheet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ErcViolation {
+    /// Stable across runs: the rule key and the items involved.
+    pub id: String,
+    /// KiCad's rule key, such as `pin_not_connected`.
+    pub rule: String,
+    pub severity: ErcSeverity,
+    pub message: String,
+    pub position: Xy,
+    /// The symbols, wires, labels, and flags involved.
+    pub uuids: Vec<Uuid>,
+    /// One description per item, such as `R3 pin 2 [Passive]`.
+    pub items: Vec<String>,
+}
+
+impl From<Violation> for ErcViolation {
+    fn from(violation: Violation) -> ErcViolation {
+        let severity = match violation.severity {
+            Severity::Error => ErcSeverity::Error,
+            Severity::Warning => ErcSeverity::Warning,
+        };
+        ErcViolation {
+            id: violation.id,
+            rule: violation.rule.to_owned(),
+            severity,
+            message: violation.message.to_owned(),
+            position: Xy::from(violation.position),
+            uuids: violation.uuids,
+            items: violation.items,
         }
     }
 }
@@ -1001,6 +1046,14 @@ pub fn place_no_connect(
     Ok(())
 }
 
+/// Runs the electrical rules check and returns the violations, errors first.
+#[tauri::command]
+pub fn run_erc(state: State<'_, AppState>) -> Result<Vec<ErcViolation>, AppError> {
+    let mut inner = state.lock();
+    let violations = inner.session_mut()?.erc()?;
+    Ok(violations.into_iter().map(ErcViolation::from).collect())
+}
+
 /// Numbers every unannotated symbol as one undo step and returns how many changed.
 #[tauri::command]
 pub fn annotate_schematic(app: AppHandle, state: State<'_, AppState>) -> Result<u32, AppError> {
@@ -1296,6 +1349,25 @@ mod tests {
         assert_eq!(json["wires"], serde_json::json!([]));
         assert_eq!(json["labels"], serde_json::json!([]));
         assert_eq!(json["noConnects"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn erc_violations_serialize_for_the_ui() {
+        let violation = Violation {
+            id: "pin_not_connected:x:2".to_owned(),
+            rule: "pin_not_connected",
+            severity: Severity::Warning,
+            message: "Pin not connected",
+            position: Point::new(Nm(1_270_000), Nm(2_540_000)),
+            uuids: vec![Uuid::nil()],
+            items: vec!["R3 pin 2 [Passive]".to_owned()],
+        };
+        let json = serde_json::to_value(ErcViolation::from(violation)).unwrap();
+        assert_eq!(json["severity"], "warning");
+        assert_eq!(json["rule"], "pin_not_connected");
+        assert_eq!(json["position"], serde_json::json!([1_270_000, 2_540_000]));
+        assert_eq!(json["uuids"][0], Uuid::nil().to_string());
+        assert_eq!(json["items"][0], "R3 pin 2 [Passive]");
     }
 
     #[test]

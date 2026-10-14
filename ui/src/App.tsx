@@ -80,6 +80,7 @@ export function App() {
   const [library, adoptLibraryStatus] = useLibraryStatus();
   const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
   const [annotateTicket, setAnnotateTicket] = useState(0);
+  const [ercTicket, setErcTicket] = useState(0);
   const libraryOffered = useRef(false);
   const closeLibraryDialog = useCallback(() => setLibraryDialogOpen(false), []);
 
@@ -387,6 +388,9 @@ export function App() {
       case "annotate-schematic":
         setAnnotateTicket((ticket) => ticket + 1);
         return;
+      case "electrical-rules-checker":
+        setErcTicket((ticket) => ticket + 1);
+        return;
     }
   }
 
@@ -518,6 +522,7 @@ export function App() {
         controlsDisabled={modal !== null || busy !== null || libraryDialogOpen}
         library={library}
         annotateTicket={annotateTicket}
+        ercTicket={ercTicket}
         onViewportChange={updateViewport}
         onCanvasResize={setCanvasSize}
         onUndo={() => void runHistory(undo, "Couldn't undo")}

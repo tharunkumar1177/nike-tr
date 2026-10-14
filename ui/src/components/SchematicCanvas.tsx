@@ -25,6 +25,7 @@ import type { SymbolField } from "../bindings/SymbolField";
 import type { SymbolInstance } from "../bindings/SymbolInstance";
 import type { SymbolPreview } from "../bindings/SymbolPreview";
 import type { WireSegment } from "../bindings/WireSegment";
+import type { Xy } from "../bindings/Xy";
 import {
   annotateSchematic,
   deleteSymbols,
@@ -44,8 +45,10 @@ import {
   transformSymbols,
 } from "../ipc";
 import {
+  type ErcMarker,
   type GhostState,
   type LabelAppearance,
+  MARKER_PX,
   drawSchematicScene,
 } from "../schematicDraw";
 import {
@@ -60,6 +63,7 @@ import {
   type SheetDimensions,
   type Size,
   type Viewport,
+  panBy,
   pxPerNm,
   screenToWorld,
   worldToScreen,
@@ -201,6 +205,14 @@ interface SchematicCanvasProps {
   /** The symbol being dragged from the library browser, if any. */
   symbolDrag: LibraryHit | null;
   onSymbolDrop: (hit: LibraryHit, at: ScreenPoint) => void;
+  /** Violations from the last ERC run, drawn while the ERC panel is open. */
+  ercMarkers: ErcMarker[];
+  ercStale: boolean;
+  selectedMarkerId: string | null;
+  onSelectMarker: (id: string | null) => void;
+  /** A world point to center the view on, such as a chosen violation. */
+  focusRequest: Xy | null;
+  onFocusRequestConsumed: () => void;
   onHintChange: (hint: StatusHint | null) => void;
   onViewportChange: (update: (viewport: Viewport) => Viewport) => void;
   onResize: (size: Size) => void;
@@ -231,6 +243,12 @@ export function SchematicCanvas({
   onPlacementRequestConsumed,
   symbolDrag,
   onSymbolDrop,
+  ercMarkers,
+  ercStale,
+  selectedMarkerId,
+  onSelectMarker,
+  focusRequest,
+  onFocusRequestConsumed,
   onHintChange,
   onViewportChange,
   onResize,
@@ -314,6 +332,19 @@ export function SchematicCanvas({
       (error: unknown) => setCommandError(describeIpcError(error)),
     );
   }, [annotateTicket]);
+
+  useEffect(() => {
+    if (!focusRequest) {
+      return;
+    }
+    onFocusRequestConsumed();
+    const { width, height } = sizeRef.current;
+    const [x, y] = focusRequest;
+    onViewportChange((current) => {
+      const at = worldToScreen(current, x, y);
+      return panBy(current, width / 2 - at.x, height / 2 - at.y);
+    });
+  }, [focusRequest, onFocusRequestConsumed, onViewportChange]);
 
   /** Leaves wire mode for another tool without the mode change clearing it. */
   const leaveWireMode = useCallback(() => {
@@ -616,6 +647,25 @@ export function SchematicCanvas({
     }
   };
 
+  /** The ERC marker under `world`, the nearest one when they overlap. */
+  const findMarkerAt = (world: ScreenPoint): ErcMarker | null => {
+    if (!viewport) {
+      return null;
+    }
+    const radius = MARKER_PX / 2 / pxPerNm(viewport.zoom);
+    let best: ErcMarker | null = null;
+    let bestDistance = radius;
+    for (const marker of ercMarkers) {
+      const dx = Math.abs(marker.position[0] - world.x);
+      const dy = Math.abs(marker.position[1] - world.y);
+      if (dx + dy <= bestDistance) {
+        best = marker;
+        bestDistance = dx + dy;
+      }
+    }
+    return best;
+  };
+
   const hitTest = (world: ScreenPoint): Selection | null => {
     const tolerance = viewport ? WIRE_HIT_PX / pxPerNm(viewport.zoom) : 0;
     const flagHit = findNoConnectAt(noConnects, world, tolerance);
@@ -669,6 +719,15 @@ export function SchematicCanvas({
     if (wireMode) {
       handleWirePointerDown(world);
       return;
+    }
+    const marker = findMarkerAt(world);
+    if (marker) {
+      setSelection(null);
+      onSelectMarker(marker.id);
+      return;
+    }
+    if (selectedMarkerId !== null) {
+      onSelectMarker(null);
     }
     const hit = hitTest(world);
     if (hit) {
@@ -1048,10 +1107,16 @@ export function SchematicCanvas({
         snap: wireCursor ?? flagCursor,
         labelGhost,
         noConnectGhost: flagCursor?.point ?? null,
+        markers: ercMarkers,
+        selectedMarkerId,
+        markersStale: ercStale,
         gridSizeNm,
       });
     },
     [
+      ercMarkers,
+      selectedMarkerId,
+      ercStale,
       definitions,
       instances,
       wires,

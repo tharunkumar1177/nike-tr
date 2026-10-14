@@ -8,6 +8,7 @@ use std::path::Path;
 
 use uuid::Uuid;
 
+use crate::erc::Violation;
 use crate::error::CoreError;
 use crate::kicad::{
     MANDATORY_FIELDS, Mirror, PlacedSymbol, Placement, Schematic, SymbolProperty, TitleBlock,
@@ -759,6 +760,11 @@ impl Session {
     /// The fields of the symbol `uuid` as the properties dialog shows them: the mandatory
     /// fields first, in KiCad's order (an empty one stands in for any the file lacks),
     /// then the others in file order.
+    /// Runs the electrical rules check on the current schematic.
+    pub fn erc(&self) -> Result<Vec<Violation>, CoreError> {
+        crate::erc::check(self.project.schematic()).map_err(CoreError::InvalidEdit)
+    }
+
     pub fn symbol_fields(&self, uuid: Uuid) -> Result<Vec<FieldEdit>, CoreError> {
         let symbol = self
             .project
