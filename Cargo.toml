@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/library", "src-tauri"]
+members = ["crates/core", "crates/library", "crates/sim", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,3 +25,4 @@ ts-rs = "12.0.1"
 uuid = "1.28.0"
 tron-core = { path = "crates/core" }
 tron-library = { path = "crates/library" }
+tron-sim = { path = "crates/sim" }
