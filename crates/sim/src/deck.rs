@@ -39,7 +39,9 @@ impl Deck {
 /// left out.
 pub fn deck(schematic: &Schematic, analysis: Option<&Analysis>) -> Result<Deck, PreflightError> {
     let analysis = analysis.ok_or(PreflightError::NoAnalysis)?;
-    let directive = analysis.directive().map_err(PreflightError::InvalidAnalysis)?;
+    let directive = analysis
+        .directive()
+        .map_err(PreflightError::InvalidAnalysis)?;
     let nets = netlist(schematic).map_err(PreflightError::Netlist)?;
     let node_names = node_names(&nets);
     let mut pin_nets: HashMap<&str, HashMap<&str, (&str, &str)>> = HashMap::new();
@@ -79,7 +81,9 @@ pub fn deck(schematic: &Schematic, analysis: Option<&Analysis>) -> Result<Deck, 
         }
         let mut line = name.clone();
         for pin in &device.pins {
-            let found = pin_nets.get(reference).and_then(|pins| pins.get(pin.as_str()));
+            let found = pin_nets
+                .get(reference)
+                .and_then(|pins| pins.get(pin.as_str()));
             let Some(&(node, net)) = found else {
                 return Err(PreflightError::Netlist(format!(
                     "{reference} pin {pin} is not on any net."

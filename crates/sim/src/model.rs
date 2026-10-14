@@ -90,7 +90,10 @@ pub(crate) fn device(symbol: &PlacedSymbol, pin_numbers: &[String]) -> Result<De
     let element = match field("Sim.Device") {
         Some(name) => {
             let mut letters = name.chars();
-            match (letters.next().and_then(Element::from_letter), letters.next()) {
+            match (
+                letters.next().and_then(Element::from_letter),
+                letters.next(),
+            ) {
                 (Some(element), None) => element,
                 _ => {
                     return Err(format!(
@@ -143,10 +146,7 @@ fn source_value(
     let kind = kind.unwrap_or("DC").to_ascii_uppercase();
     let (keys, required): (&[&str], &[&str]) = match kind.as_str() {
         "DC" => (&["dc"], &[]),
-        "SIN" => (
-            &["dc", "ampl", "f", "td", "theta", "phase"],
-            &["ampl", "f"],
-        ),
+        "SIN" => (&["dc", "ampl", "f", "td", "theta", "phase"], &["ampl", "f"]),
         "PULSE" => (
             &["y1", "y2", "td", "tr", "tf", "tw", "per", "np"],
             &["y1", "y2"],
@@ -162,7 +162,9 @@ fn source_value(
     allowed.push("ac");
     reject_unknown(params, &allowed)?;
     if let Some(missing) = required.iter().find(|key| lookup(params, key).is_none()) {
-        return Err(format!("A {kind} source needs {missing} in its Sim.Params."));
+        return Err(format!(
+            "A {kind} source needs {missing} in its Sim.Params."
+        ));
     }
     let mut text = if kind == "DC" {
         let level = match lookup(params, "dc") {
@@ -179,7 +181,10 @@ fn source_value(
             let text = lookup(params, key);
             values.push(text.map(|text| parse_param(key, text)).transpose()?);
         }
-        let used = values.iter().rposition(Option::is_some).map_or(0, |last| last + 1);
+        let used = values
+            .iter()
+            .rposition(Option::is_some)
+            .map_or(0, |last| last + 1);
         let arguments: Vec<String> = values[..used]
             .iter()
             .map(|value| spice_number(value.unwrap_or(0.0)))
@@ -217,7 +222,10 @@ fn parse_param(key: &str, text: &str) -> Result<f64, String> {
 }
 
 fn reject_unknown(params: &[(String, String)], allowed: &[&str]) -> Result<(), String> {
-    match params.iter().find(|(key, _)| !allowed.contains(&key.as_str())) {
+    match params
+        .iter()
+        .find(|(key, _)| !allowed.contains(&key.as_str()))
+    {
         Some((key, _)) => Err(format!(
             "Its Sim.Params \"{key}\" is not supported for this device."
         )),
@@ -283,7 +291,9 @@ fn pin_map(field: Option<&str>, pin_numbers: &[String]) -> Result<[String; 2], S
             .position(|name| *name == model_pin)
             .ok_or_else(malformed)?;
         if !has_pin(pin) {
-            return Err(format!("Its Sim.Pins names pin {pin}, which the symbol does not have."));
+            return Err(format!(
+                "Its Sim.Pins names pin {pin}, which the symbol does not have."
+            ));
         }
         if mapped[slot].replace(pin.to_owned()).is_some() {
             return Err(malformed());
@@ -325,6 +335,11 @@ mod tests {
             pins: Vec::new(),
         }
     }
+
+    type Fields = &'static [(&'static str, &'static str)];
+
+    /// Reference, value, extra fields, and a phrase the error must contain.
+    type Case = (&'static str, &'static str, Fields, &'static str);
 
     fn two_pins() -> Vec<String> {
         vec!["1".to_owned(), "2".to_owned()]
@@ -373,7 +388,10 @@ mod tests {
             ("Sim.Type", "PULSE"),
             ("Sim.Params", "y1=0 y2=5 tr=\"1u\" per=1m"),
         ];
-        assert_eq!(line("V3", "", &pulse), "PULSE(0e0 5e0 0e0 1e-6 0e0 0e0 1e-3)");
+        assert_eq!(
+            line("V3", "", &pulse),
+            "PULSE(0e0 5e0 0e0 1e-6 0e0 0e0 1e-3)"
+        );
     }
 
     #[test]
@@ -385,15 +403,40 @@ mod tests {
 
     #[test]
     fn unusable_models_explain_what_to_change() {
-        let cases: [(&str, &str, &[(&str, &str)], &str); 12] = [
+        let cases: [Case; 12] = [
             ("U1", "LM358", &[], "no simulation model"),
             ("R1", "R", &[], "\"R\" is not a valid value"),
-            ("Q1", "2N3904", &[("Sim.Device", "NPN")], "\"NPN\" is not supported"),
-            ("D1", "1N4148", &[("Sim.Library", "diodes.lib")], "diodes.lib"),
-            ("R1", "1k", &[("Sim.Type", "POT")], "\"POT\" is not supported"),
+            (
+                "Q1",
+                "2N3904",
+                &[("Sim.Device", "NPN")],
+                "\"NPN\" is not supported",
+            ),
+            (
+                "D1",
+                "1N4148",
+                &[("Sim.Library", "diodes.lib")],
+                "diodes.lib",
+            ),
+            (
+                "R1",
+                "1k",
+                &[("Sim.Type", "POT")],
+                "\"POT\" is not supported",
+            ),
             ("V1", "", &[("Sim.Type", "EXP")], "\"EXP\" is not supported"),
-            ("V1", "", &[("Sim.Type", "SIN"), ("Sim.Params", "ampl=1")], "needs f"),
-            ("R1", "1k", &[("Sim.Params", "tc1=0.1")], "\"tc1\" is not supported"),
+            (
+                "V1",
+                "",
+                &[("Sim.Type", "SIN"), ("Sim.Params", "ampl=1")],
+                "needs f",
+            ),
+            (
+                "R1",
+                "1k",
+                &[("Sim.Params", "tc1=0.1")],
+                "\"tc1\" is not supported",
+            ),
             ("R1", "1k", &[("Sim.Params", "r=1k r=2k")], "more than once"),
             ("R1", "1k", &[("Sim.Params", "r 1k")], "name=value"),
             ("R1", "1k", &[("Sim.Pins", "1=+ 3=-")], "pin 3"),

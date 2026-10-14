@@ -31,7 +31,9 @@ pub fn parse_value(text: &str) -> Result<f64, String> {
     let trimmed = text.trim();
     let (mantissa, rest) = split_number(trimmed).ok_or_else(invalid)?;
     let has_exponent = mantissa.contains(['e', 'E']);
-    let plain_integer = mantissa.chars().all(|c| c.is_ascii_digit() || c == '-' || c == '+');
+    let plain_integer = mantissa
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '-' || c == '+');
     let (exponent, rest) = match PREFIXES.iter().find(|(prefix, _)| rest.starts_with(prefix)) {
         Some(_) if has_exponent => return Err(invalid()),
         Some((prefix, exponent)) => (*exponent, &rest[prefix.len()..]),
