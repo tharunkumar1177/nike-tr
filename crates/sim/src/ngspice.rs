@@ -390,10 +390,15 @@ impl Engine {
         models.sort();
         take_errors();
         for model in &models {
-            // ngspice's command parser treats a backslash as an escape, and Windows
-            // accepts forward slashes.
+            // ngspice's lexer keeps a path in single quotes as one word and strips the
+            // quotes, but passes double quotes through to the file name. Windows accepts
+            // forward slashes.
             let path = model.display().to_string().replace('\\', "/");
-            let status = self.command(&format!("codemodel \"{path}\""))?;
+            if path.contains('\'') {
+                let message = format!("{path}: ngspice can't load a path containing '.");
+                return Err(failed(message));
+            }
+            let status = self.command(&format!("codemodel '{path}'"))?;
             let errors = take_errors();
             if status != 0 || !errors.is_empty() {
                 return Err(failed(format!("{path}: {}", errors.join(" "))));

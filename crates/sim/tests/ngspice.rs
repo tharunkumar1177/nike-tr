@@ -91,14 +91,20 @@ fn the_low_pass_step_response_matches_the_analytic_curve() {
 
 #[test]
 fn code_models_load_from_an_absolute_path_without_spinit() {
-    // The archive keeps the code models in `lib/ngspice`, beside `dll-vs`.
+    // The archive keeps the code models in `lib/ngspice`, beside `dll-vs`. The copy goes
+    // to a folder with a space, as under `Program Files`.
     let library = library();
-    let models = library
+    let analog = library
         .parent()
         .and_then(|dir| dir.parent())
         .expect("the library is inside the archive layout")
         .join("lib")
-        .join("ngspice");
+        .join("ngspice")
+        .join("analog.cm");
+    let folder = format!("tron code models {}", std::process::id());
+    let models = std::env::temp_dir().join(folder);
+    std::fs::create_dir_all(&models).unwrap();
+    std::fs::copy(&analog, models.join("analog.cm")).unwrap();
     let mut engine = engine();
     for _ in 0..2 {
         if let Err(error) = engine.load_code_models(&models) {
