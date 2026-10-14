@@ -8,7 +8,7 @@ The user runs DC operating point, transient, and AC analyses on their schematic 
 
 **Status:** Partial
 
-Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. ngspice is not integrated yet (5b), and there is no session, IPC, or UI (5c and 5d).
+Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. Slice 5b is green in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376): `crates/sim` loads the pinned ngspice 46 DLL and runs `.op` and `.tran` against it. There is no session, IPC, or UI yet (5c and 5d).
 
 ## Architecture dependencies
 
@@ -56,7 +56,8 @@ When a run fails to converge, `sim` retries with gmin stepping and then source s
 - `crates/sim/src/value.rs` — parses SI values and writes exact round-trip numbers for SPICE. Implemented.
 - `crates/sim/src/analysis.rs` — the `.op` and `.tran` directives and their range checks. Implemented.
 - `crates/core/src/kicad.rs` `Schematic::symbol_flag` — reads `(exclude_from_sim yes)` on a placed symbol.
-- Tests: unit tests in each `crates/sim/src` module, and `crates/sim/tests/deck.rs`, which builds KiCad-format divider and RC schematics and checks the exact deck text and every pre-flight error.
+- `crates/sim/src/ngspice.rs` — the `libloading` wrapper around the ngspice shared API. The library is loaded and initialized once per process, and `Engine::lock` serializes runs through a static mutex. Each run resets ngspice (`destroy all`, `remcirc`), loads the deck, runs it in the foreground, and collects every real vector of the current plot. Errors come from ngspice's stderr lines and its exit callback. A second library path in the same process is rejected. Implemented.
+- Tests: unit tests in each `crates/sim/src` module, and `crates/sim/tests/deck.rs`, which builds KiCad-format divider and RC schematics and checks the exact deck text and every pre-flight error. `crates/sim/tests/ngspice.rs` runs real ngspice from `TRON_NGSPICE`, which CI sets after downloading and checking the pinned archive.
 
 ## Slice 5 plan (approved 2026-10-14)
 
@@ -70,8 +71,8 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
 ## Acceptance or verification criteria
 
 - [x] (5a) The SPICE deck for a divider and an RC circuit is exact text, and each pre-flight error is reported with the symbol or setting involved. Verified by `crates/sim/tests/deck.rs`.
-- [ ] An RC low-pass transient matches the analytic response within 1% in a CI test using real ngspice.
-- [ ] A voltage divider `.op` matches the analytic value exactly to 6 significant figures.
+- [x] (5b) An RC low-pass transient matches the analytic response within 1% in a CI test using real ngspice. Verified by `crates/sim/tests/ngspice.rs` in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376).
+- [x] (5b) A voltage divider `.op` matches the analytic value exactly to 6 significant figures. Verified by the same test file and run, which also checks that a rejected deck reports the ngspice error and that the engine recovers afterward.
 - [ ] The `.ac` −3 dB point of an RC filter matches 1/(2πRC) within 1%.
 - [ ] Probing a wire or pin plots its signal, and plots support zoom, cursors, and measurement readouts.
 
