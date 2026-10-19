@@ -97,11 +97,7 @@ import { SymbolPropertiesDialog } from "./SymbolPropertiesDialog";
 
 /** A canvas tool the toolbar can start. `noConnect` and `probe` toggle their mode. */
 export type CanvasTool =
-  | "localLabel"
-  | "globalLabel"
-  | "power"
-  | "noConnect"
-  | "probe";
+  "localLabel" | "globalLabel" | "power" | "noConnect" | "probe";
 
 /** A request from the library browser to start placing a symbol. */
 export interface PlacementRequest {
