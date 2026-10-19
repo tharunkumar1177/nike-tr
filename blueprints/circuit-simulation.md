@@ -8,7 +8,7 @@ The user runs DC operating point, transient, and AC analyses on their schematic 
 
 **Status:** Partial
 
-Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. Slice 5b is green in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376): `crates/sim` loads the pinned ngspice 46 DLL and runs `.op` and `.tran` against it. Slice 5c is green in [CI 38595951934](https://github.com/tharunkumar1177/tron/actions/runs/38595951934), including the Windows installer. It adds cancellable background runs with progress, min-max waveform decimation, the analysis settings in `tron.json`, and the simulation IPC commands. Slice 5d-1a is green in [CI 38636022839](https://github.com/tharunkumar1177/tron/actions/runs/38636022839). The Windows installer now bundles ngspice 46, its OpenMP runtime, the seven XSPICE code models, and both license notices. The engine skips `spinit` and loads the code models from an absolute path at startup. There is no simulation UI yet (5d-1b onward).
+Slice 5a is built and green in [CI 38576288344](https://github.com/tharunkumar1177/tron/actions/runs/38576288344). `crates/sim` builds the SPICE deck from the core netlist and runs the pre-flight checks. Slice 5b is green in [CI 38585943376](https://github.com/tharunkumar1177/tron/actions/runs/38585943376): `crates/sim` loads the pinned ngspice 46 DLL and runs `.op` and `.tran` against it. Slice 5c is green in [CI 38595951934](https://github.com/tharunkumar1177/tron/actions/runs/38595951934), including the Windows installer. It adds cancellable background runs with progress, min-max waveform decimation, the analysis settings in `tron.json`, and the simulation IPC commands. Slice 5d-1a is green in [CI 38636022839](https://github.com/tharunkumar1177/tron/actions/runs/38636022839). The Windows installer now bundles ngspice 46, its OpenMP runtime, the seven XSPICE code models, and both license notices. The engine skips `spinit` and loads the code models from an absolute path at startup. The 5d-1b backend is green in [CI 39227045078](https://github.com/tharunkumar1177/tron/actions/runs/39227045078). It adds `fetch_op_annotations` with anchors from `crates/sim/src/op.rs`, `ProjectSnapshot.simulationSettings`, and `DocumentDiff.simulationSettingsChanged`. There is no simulation UI yet. The 5d-1b UI comes next.
 
 ## Architecture dependencies
 
@@ -97,7 +97,17 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
    - `ProjectSnapshot` gains `simulationSettings` and `DocumentDiff` gains `simulationSettingsChanged`.
    **5d-1 is built in two PRs.**
    - **5d-1a:** the runtime and bundling above.
-   - **5d-1b:** the three UI surfaces below, the snapshot and diff fields, and an op-point anchor mapping over IPC.
+   - **5d-1b:** the three UI surfaces below, the snapshot and diff fields, and an op-point anchor mapping over IPC. It is built as two PRs (architect, 2026-10-19):
+     - **5d-1b backend.**
+       - `ProjectSnapshot.simulationSettings: AnalysisSettings | null`. `ProjectSnapshot` drops `Eq`.
+       - `DocumentDiff.simulationSettingsChanged: boolean`. The UI's `applyDiff` returns `null` when it is set, so the UI fetches a fresh snapshot.
+       - `crates/sim/src/op.rs` `op_anchors(schematic, deck) -> OpAnchors` and `OpAnchors::values(plot) -> Vec<OpValue>`. Lookups are keyed by lower-case SPICE name, and `<device>#branch` vectors map to device currents.
+       - `start_simulation` computes the anchors from the same schematic the deck came from and stores them with the plot.
+       - `fetch_op_annotations(runId) -> OpAnnotation[]`, where `OpAnnotation` is `{ vector, kind: "voltage" | "current", label, value, position: Xy }`. It returns nothing for a transient. Values are formatted in the UI.
+     - **5d-1b UI.**
+       - The settings dialog, the run panel, and the annotations, per the design decisions below. `ui/src/utils/si.ts` parses and formats SI values.
+       - The menu items "&Run Simulation" (`F5`), "&Cancel Simulation", and "Simulation Se&ttings..." (`CmdOrCtrl+Alt+S`) go under Tools, with IDs `run-simulation`, `cancel-simulation`, and `simulation-settings`. They ship only with the UI that handles them. Esc cancels in the UI while a run is active, but it is not a menu accelerator.
+       - `App.tsx` owns the run state: idle, running, finished, cancelled, or failed, plus progress, elapsed time, and staleness. Any `document-changed` event marks the results out of date and clears the annotations.
 
    **5d-1 design decisions (designer, 2026-10-14; the full plans are in the session transcript).**
    - **Settings dialog** (`SimulationSettingsDialog.tsx`, `ui/src/utils/si.ts`).
@@ -125,6 +135,7 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
 - [x] (5b) A voltage divider `.op` matches the analytic value exactly to 6 significant figures. Verified by the same test file and run, which also checks that a rejected deck reports the ngspice error and that the engine recovers afterward.
 - [x] (5c) A long transient reports progress midway through the run and can be cancelled while it runs, after which the engine runs the next deck normally. The waveform fetch respects its budget and keeps peaks. The analysis settings are an undoable edit that survives a save and reopen, and each pre-flight error has its own error kind. Verified by `crates/sim/src/ngspice.rs` and `crates/sim/tests/ngspice.rs` (real ngspice), `crates/sim/src/waveform.rs`, `crates/core/src/session.rs`, `crates/core/src/manifest.rs`, and `src-tauri/src/error.rs` in [CI 38595951934](https://github.com/tharunkumar1177/tron/actions/runs/38595951934).
 - [x] (5d-1a) Running an XSPICE `gain` model loaded from a folder whose path contains a space gives the expected `.op` value. The installer build places `ngspice.dll`, `libomp140.x86_64.dll`, `COPYING`, `LICENSE-libomp.txt`, and `codemodels/*.cm` under `ngspice/` beside the app. Every download is checked against a pinned SHA-256. Verified by `crates/sim/tests/ngspice.rs`, `src-tauri/src/sim.rs`, and the bundle job's "Check bundled ngspice" step in [CI 38636022839](https://github.com/tharunkumar1177/tron/actions/runs/38636022839).
+- [x] (5d-1b backend) For the divider, each `.op` voltage is placed at its net label (`VIN`, `/OUT`) and the source current at the source's first pin. An unlabelled net uses the middle of its longest wire, and ground, unknown vectors, and transients get no annotation. The snapshot carries the analysis settings, and the diff flags their changes. Verified by `crates/sim/tests/op.rs`, `src-tauri/src/sim.rs`, `src-tauri/src/ipc.rs`, and `ui/src/documentDiff.test.ts` in [CI 39227045078](https://github.com/tharunkumar1177/tron/actions/runs/39227045078).
 - [ ] The `.ac` −3 dB point of an RC filter matches 1/(2πRC) within 1%.
 - [ ] Probing a wire or pin plots its signal, and plots support zoom, cursors, and measurement readouts.
 

@@ -201,6 +201,7 @@ describe("App", () => {
       labels: null,
       noConnects: null,
       ercSettings: false,
+      simulationSettingsChanged: false,
       history: {
         dirty: true,
         canUndo: true,
@@ -809,6 +810,7 @@ describe("Symbol placement", () => {
       labels: null,
       noConnects: null,
       ercSettings: false,
+      simulationSettingsChanged: false,
       history: {
         ...snapshot.history,
         dirty: true,
@@ -1422,6 +1424,7 @@ describe("Wiring", () => {
       labels: null,
       noConnects: null,
       ercSettings: false,
+      simulationSettingsChanged: false,
       history: { ...snapshot.history, dirty: true },
     });
     expect(await within(panel).findByText("Out of date")).toBeTruthy();
@@ -1549,6 +1552,7 @@ describe("Wiring", () => {
       labels: null,
       noConnects: null,
       ercSettings: true,
+      simulationSettingsChanged: false,
       history: { ...snapshot.history, dirty: true, canUndo: true },
     });
     await waitFor(() => expect(argsOf(calls, "run_erc")).toHaveLength(2));

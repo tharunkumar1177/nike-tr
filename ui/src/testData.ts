@@ -25,6 +25,7 @@ export function projectSnapshot(
     junctions: [],
     labels: [],
     noConnects: [],
+    simulationSettings: null,
     history: {
       dirty: false,
       canUndo: false,

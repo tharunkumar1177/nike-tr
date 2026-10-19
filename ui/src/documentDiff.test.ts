@@ -18,6 +18,7 @@ describe("applyDiff", () => {
       labels: null,
       noConnects: null,
       ercSettings: false,
+      simulationSettingsChanged: false,
       history: { ...project.history, dirty: true, canUndo: true },
     };
     const next = applyDiff(project, diff);
@@ -43,6 +44,7 @@ describe("applyDiff", () => {
       labels: null,
       noConnects: null,
       ercSettings: false,
+      simulationSettingsChanged: false,
       history: project.history,
     };
     const next = applyDiff(project, diff);
@@ -65,6 +67,7 @@ describe("applyDiff", () => {
       labels: [],
       noConnects: [{ uuid: "flag-1", position: [2_540_000, 0] }],
       ercSettings: false,
+      simulationSettingsChanged: false,
       history: project.history,
     };
     const next = applyDiff(project, diff);
@@ -90,6 +93,27 @@ describe("applyDiff", () => {
       labels: null,
       noConnects: null,
       ercSettings: false,
+      simulationSettingsChanged: false,
+      history: project.history,
+    };
+    expect(applyDiff(project, diff)).toBeNull();
+  });
+
+  it("asks for a fresh snapshot when the simulation settings changed", () => {
+    const project = projectSnapshot({ revision: 4 });
+    const diff: DocumentDiff = {
+      baseRevision: 4,
+      revision: 5,
+      titleBlock: null,
+      gridSizeNm: null,
+      definitions: null,
+      instances: null,
+      wires: null,
+      junctions: null,
+      labels: null,
+      noConnects: null,
+      ercSettings: false,
+      simulationSettingsChanged: true,
       history: project.history,
     };
     expect(applyDiff(project, diff)).toBeNull();
