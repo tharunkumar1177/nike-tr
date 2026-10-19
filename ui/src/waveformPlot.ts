@@ -61,7 +61,8 @@ export function niceAxis(min: number, max: number, count = TICK_COUNT): Axis {
     low -= pad;
     high += pad;
   }
-  const raw = (high - low) / (count - 1);
+  // Just under the exact step, so rounding error can't push it past a round factor.
+  const raw = ((high - low) / (count - 1)) * (1 - 1e-9);
   const power = 10 ** Math.floor(Math.log10(raw));
   const factor = [1, 2, 2.5, 5].find((item) => item * power >= raw) ?? 10;
   const step = factor * power;
@@ -151,9 +152,7 @@ export function logTicks(view: XRange, decadePx: number): XTick[] {
     ticks.forEach((tick, index) => {
       const x = (tick.at - view.min) * decadePx;
       const wanted = major ? tick.major : !tick.major && labelMinors;
-      const free = placed.every(
-        (other) => Math.abs(other - x) >= LABEL_GAP_PX,
-      );
+      const free = placed.every((other) => Math.abs(other - x) >= LABEL_GAP_PX);
       if (wanted && free) {
         placed.push(x);
         labels.set(index, frequencyLabel(tick.hertz));

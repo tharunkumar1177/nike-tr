@@ -127,21 +127,21 @@ pub fn unwrap_degrees(phase: &mut [f64]) {
 }
 
 impl Series<'_> {
-    fn to_x(&self, at: f64) -> f64 {
+    fn axis_x(&self, at: f64) -> f64 {
         if self.log_x { log_bound(at) } else { at }
     }
 
-    fn from_x(&self, x: f64) -> f64 {
+    fn scale_x(&self, x: f64) -> f64 {
         if self.log_x { 10f64.powf(x) } else { x }
     }
 
     /// The series reduced with [`decimate`] between `min_x` and `max_x`.
     pub fn decimate(&self, min_x: f64, max_x: f64, budget: usize) -> Vec<Sample> {
-        let (min_x, max_x) = (self.to_x(min_x), self.to_x(max_x));
+        let (min_x, max_x) = (self.axis_x(min_x), self.axis_x(max_x));
         let mut samples = decimate(&self.x, &self.y, min_x, max_x, budget);
         if self.log_x {
             for sample in &mut samples {
-                sample.x = self.from_x(sample.x);
+                sample.x = self.scale_x(sample.x);
             }
         }
         samples
@@ -150,10 +150,10 @@ impl Series<'_> {
     /// See [`measure`]. On a log axis, the span and the straight lines between samples are
     /// taken on log frequency, so the average and RMS are over log frequency too.
     pub fn measure(&self, from: f64, to: f64) -> Option<Measurements> {
-        let measured = measure(&self.x, &self.y, self.to_x(from), self.to_x(to))?;
+        let measured = measure(&self.x, &self.y, self.axis_x(from), self.axis_x(to))?;
         Some(Measurements {
-            from: self.from_x(measured.from),
-            to: self.from_x(measured.to),
+            from: self.scale_x(measured.from),
+            to: self.scale_x(measured.to),
             ..measured
         })
     }
@@ -161,7 +161,7 @@ impl Series<'_> {
     /// See [`value_at`]. On a log axis, samples are joined by straight lines in log
     /// frequency.
     pub fn value_at(&self, at: f64) -> Option<f64> {
-        value_at(&self.x, &self.y, self.to_x(at))
+        value_at(&self.x, &self.y, self.axis_x(at))
     }
 }
 
@@ -572,7 +572,10 @@ mod tests {
         let magnitude = plot.ac_series("/out", AcQuantity::MagnitudeDb).unwrap();
         assert!(magnitude.log_x);
         let at_cutoff = magnitude.value_at(1e3).unwrap();
-        assert!((at_cutoff + 10.0 * 2f64.log10()).abs() < 1e-9, "{at_cutoff}");
+        assert!(
+            (at_cutoff + 10.0 * 2f64.log10()).abs() < 1e-9,
+            "{at_cutoff}"
+        );
         let between = magnitude.value_at(10f64.powf(0.05)).unwrap();
         let expected = (magnitude.y[0] + magnitude.y[1]) / 2.0;
         close(between, expected);
@@ -595,7 +598,10 @@ mod tests {
         assert!((zoomed[0].x.log10() - 1.9).abs() < 1e-9);
         assert!((zoomed[22].x.log10() - 4.1).abs() < 1e-9);
 
-        assert!(plot.ac_series("frequency", AcQuantity::MagnitudeDb).is_none());
+        assert!(
+            plot.ac_series("frequency", AcQuantity::MagnitudeDb)
+                .is_none()
+        );
         assert!(plot.ac_series("/in", AcQuantity::PhaseDeg).is_none());
     }
 

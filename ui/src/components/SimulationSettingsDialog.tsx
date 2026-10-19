@@ -239,7 +239,7 @@ interface TextFieldProps {
   label: string;
   value: string;
   message: string | undefined;
-  placeholder?: string;
+  placeholder?: string | undefined;
   onChange: (value: string) => void;
 }
 

@@ -151,7 +151,9 @@ fn the_low_pass_cutoff_matches_the_analytic_value() {
     let phase = plot.ac_series("/OUT", AcQuantity::PhaseDeg).unwrap();
     let at_cutoff = phase.value_at(expected).unwrap();
     assert!((at_cutoff + 45.0).abs() < 0.5, "{at_cutoff}");
-    let high = phase.value_at(1e6).unwrap();
+    let last = *frequency.last().unwrap();
+    assert!(relative_error(last, 1e6) < 1e-6, "the sweep ends at {last}");
+    let high = phase.value_at(last).unwrap();
     assert!((high + 90.0).abs() < 0.1, "{high}° at 1 MHz");
 }
 
