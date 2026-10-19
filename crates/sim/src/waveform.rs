@@ -1,4 +1,7 @@
-//! Reducing a result vector to the samples a plot of a given width can show.
+//! Reducing a result vector to the samples a plot of a given width can show, and measuring
+//! it exactly between two points.
+
+use std::borrow::Cow;
 
 use crate::ngspice::Plot;
 
@@ -9,10 +12,42 @@ pub struct Sample {
     pub y: f64,
 }
 
+/// A vector against the plot's scale.
+#[derive(Debug, Clone)]
+pub struct Series<'a> {
+    pub x: Cow<'a, [f64]>,
+    pub y: &'a [f64],
+}
+
+/// The statistics of a waveform over a span of x, in the units of its vector.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Measurements {
+    /// The span measured, clipped to the samples the waveform has.
+    pub from: f64,
+    pub to: f64,
+    pub min: f64,
+    pub max: f64,
+    /// The mean over x, so uneven steps are weighted by their width.
+    pub average: f64,
+    pub rms: f64,
+    pub peak_to_peak: f64,
+}
+
 impl Plot {
-    /// The vector `name` against the plot's scale, reduced with [`decimate`]. Without a
-    /// scale, as for an operating point, x is the sample index. `None` when the plot has
-    /// no vector of that name.
+    /// The vector `name` against the plot's scale. Without a scale, as for an operating
+    /// point, x is the sample index. `None` when the plot has no vector of that name.
+    pub fn series(&self, name: &str) -> Option<Series<'_>> {
+        let y = self.vector(name)?;
+        let scale = self.scale.as_deref().and_then(|scale| self.vector(scale));
+        let x = match scale {
+            Some(x) => Cow::Borrowed(x),
+            None => Cow::Owned((0..y.len()).map(|index| index as f64).collect()),
+        };
+        Some(Series { x, y })
+    }
+
+    /// The vector `name` reduced with [`decimate`]. `None` when the plot has no vector of
+    /// that name.
     pub fn waveform(
         &self,
         name: &str,
@@ -20,17 +55,124 @@ impl Plot {
         max_x: f64,
         budget: usize,
     ) -> Option<Vec<Sample>> {
-        let y = self.vector(name)?;
-        let scale = self.scale.as_deref().and_then(|scale| self.vector(scale));
-        let samples = match scale {
-            Some(x) => decimate(x, y, min_x, max_x, budget),
-            None => {
-                let x: Vec<f64> = (0..y.len()).map(|index| index as f64).collect();
-                decimate(&x, y, min_x, max_x, budget)
-            }
-        };
-        Some(samples)
+        let series = self.series(name)?;
+        Some(decimate(&series.x, series.y, min_x, max_x, budget))
     }
+}
+
+impl Series<'_> {
+    /// See [`measure`].
+    pub fn measure(&self, from: f64, to: f64) -> Option<Measurements> {
+        measure(&self.x, self.y, from, to)
+    }
+
+    /// See [`value_at`].
+    pub fn value_at(&self, at: f64) -> Option<f64> {
+        value_at(&self.x, self.y, at)
+    }
+}
+
+/// The samples of `y` against `x` without NaN coordinates, or `None` unless some remain
+/// and `x` never decreases.
+fn increasing_samples(x: &[f64], y: &[f64]) -> Option<Vec<Sample>> {
+    let samples: Vec<Sample> = x
+        .iter()
+        .zip(y)
+        .filter(|(x, y)| !x.is_nan() && !y.is_nan())
+        .map(|(&x, &y)| Sample { x, y })
+        .collect();
+    let increasing = samples.windows(2).all(|pair| pair[0].x <= pair[1].x);
+    (!samples.is_empty() && increasing).then_some(samples)
+}
+
+/// The value at `at` of the line through `samples`, which must be in x order and include
+/// `at`. Where x repeats, the last sample at that x wins.
+fn interpolate(samples: &[Sample], at: f64) -> f64 {
+    let after = samples.partition_point(|sample| sample.x <= at);
+    if after == 0 {
+        return samples[0].y;
+    }
+    let before = samples[after - 1];
+    match samples.get(after) {
+        Some(next) if before.x < at => {
+            let fraction = (at - before.x) / (next.x - before.x);
+            before.y + (next.y - before.y) * fraction
+        }
+        _ => before.y,
+    }
+}
+
+/// The value of `y` at `x = at`, joining samples with straight lines as the plot does.
+/// `None` when `at` is outside the samples, when no sample is left once NaN samples are
+/// dropped, or when `x` ever decreases.
+pub fn value_at(x: &[f64], y: &[f64], at: f64) -> Option<f64> {
+    let samples = increasing_samples(x, y)?;
+    let first = samples[0].x;
+    let last = samples[samples.len() - 1].x;
+    (at >= first && at <= last).then(|| interpolate(&samples, at))
+}
+
+/// The minimum, maximum, average, RMS, and peak-to-peak value of `y` between `x = from`
+/// and `x = to`, treating the waveform as straight lines between samples, so the average
+/// and RMS are exact for that line whatever the step sizes. The span is clipped to the
+/// samples. A span of zero width measures the single value there.
+///
+/// `None` when the span is reversed or NaN, misses the samples entirely, no sample is left
+/// once NaN samples are dropped, or `x` ever decreases.
+pub fn measure(x: &[f64], y: &[f64], from: f64, to: f64) -> Option<Measurements> {
+    if from.is_nan() || to.is_nan() || from > to {
+        return None;
+    }
+    let samples = increasing_samples(x, y)?;
+    let first = samples[0].x;
+    let last = samples[samples.len() - 1].x;
+    if to < first || from > last {
+        return None;
+    }
+    let from = from.max(first);
+    let to = to.min(last);
+    let start = interpolate(&samples, from);
+    if to == from {
+        return Some(Measurements {
+            from,
+            to,
+            min: start,
+            max: start,
+            average: start,
+            rms: start.abs(),
+            peak_to_peak: 0.0,
+        });
+    }
+    let inside = samples
+        .iter()
+        .filter(|sample| sample.x > from && sample.x < to)
+        .copied();
+    let end = Sample {
+        x: to,
+        y: interpolate(&samples, to),
+    };
+    let mut previous = Sample { x: from, y: start };
+    let (mut min, mut max) = (start, start);
+    let (mut area, mut square_area) = (0.0, 0.0);
+    for sample in inside.chain(std::iter::once(end)) {
+        let width = sample.x - previous.x;
+        let (a, b) = (previous.y, sample.y);
+        area += width * (a + b) / 2.0;
+        square_area += width * (a * a + a * b + b * b) / 3.0;
+        min = min.min(b);
+        max = max.max(b);
+        previous = sample;
+    }
+    let span = to - from;
+    Some(Measurements {
+        from,
+        to,
+        min,
+        max,
+        average: area / span,
+        rms: (square_area / span).max(0.0).sqrt(),
+        peak_to_peak: max - min,
+    })
 }
 
 /// The samples of `y` against `x` to draw between `min_x` and `max_x`, at most `budget`
@@ -180,5 +322,112 @@ mod tests {
         assert_eq!(samples.len(), 20);
         assert_eq!(samples[0].y, 0.0);
         assert_eq!(samples[19].y, 999.0);
+    }
+
+    fn close(actual: f64, expected: f64) {
+        let tolerance = 1e-12 * expected.abs().max(1.0);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "{actual} is not {expected}"
+        );
+    }
+
+    #[test]
+    fn uneven_steps_are_weighted_by_their_width() {
+        // In milliseconds: 0 V for 1 ms, then a ramp to 2 V over 1 ms in one step, then
+        // 2 V for 2 ms sampled densely.
+        let x = [0.0, 0.25, 0.5, 1.0, 2.0, 2.5, 3.0, 3.5, 4.0];
+        let y = [0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0, 2.0, 2.0];
+        let measured = measure(&x, &y, 0.0, 4.0).unwrap();
+        assert_eq!((measured.from, measured.to), (0.0, 4.0));
+        assert_eq!((measured.min, measured.max), (0.0, 2.0));
+        assert_eq!(measured.peak_to_peak, 2.0);
+        // Area: 1 ms of the ramp at 1 V on average, then 2 ms at 2 V.
+        close(measured.average, 5.0 / 4.0);
+        // Square area: the ramp gives 4/3 V² ms, and the flat part 8 V² ms.
+        close(measured.rms, ((4.0 / 3.0 + 8.0) / 4.0_f64).sqrt());
+    }
+
+    #[test]
+    fn a_span_between_samples_is_cut_by_interpolation() {
+        let x = [0.0, 1.0, 2.0];
+        let y = [0.0, 10.0, 0.0];
+        let measured = measure(&x, &y, 0.5, 1.5).unwrap();
+        assert_eq!((measured.min, measured.max), (5.0, 10.0));
+        close(measured.average, 7.5);
+        let peak = measure(&x, &y, 0.8, 0.9).unwrap();
+        close(peak.min, 8.0);
+        close(peak.max, 9.0);
+        close(peak.average, 8.5);
+    }
+
+    #[test]
+    fn a_sine_over_whole_periods_has_zero_mean_and_its_known_rms() {
+        let count = 10_001;
+        let x: Vec<f64> = (0..count)
+            .map(|index| index as f64 / (count - 1) as f64)
+            .collect();
+        let tau = std::f64::consts::TAU;
+        let y: Vec<f64> = x.iter().map(|x| 3.0 * (tau * 5.0 * x).sin()).collect();
+        let measured = measure(&x, &y, f64::NEG_INFINITY, f64::INFINITY).unwrap();
+        assert_eq!((measured.from, measured.to), (0.0, 1.0));
+        assert!(measured.average.abs() < 1e-9, "{}", measured.average);
+        let rms = 3.0 / 2.0_f64.sqrt();
+        assert!((measured.rms - rms).abs() < 1e-4, "{}", measured.rms);
+        assert!((measured.peak_to_peak - 6.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn spans_are_clipped_and_degenerate_spans_have_defined_results() {
+        let x = [1.0, 2.0, 3.0];
+        let y = [-4.0, 4.0, 4.0];
+        let clipped = measure(&x, &y, 0.0, 2.0).unwrap();
+        assert_eq!((clipped.from, clipped.to), (1.0, 2.0));
+        close(clipped.average, 0.0);
+        let point = measure(&x, &y, 1.5, 1.5).unwrap();
+        assert_eq!((point.min, point.max, point.average), (0.0, 0.0, 0.0));
+        assert_eq!(point.peak_to_peak, 0.0);
+        let negative = measure(&x, &y, 1.0, 1.0).unwrap();
+        assert_eq!((negative.average, negative.rms), (-4.0, 4.0));
+        assert!(measure(&x, &y, 2.0, 1.0).is_none());
+        assert!(measure(&x, &y, f64::NAN, 1.0).is_none());
+        assert!(measure(&x, &y, 4.0, 5.0).is_none());
+        assert!(measure(&[], &[], 0.0, 1.0).is_none());
+        assert!(measure(&[2.0, 1.0], &[0.0, 0.0], 0.0, 3.0).is_none());
+    }
+
+    #[test]
+    fn values_are_interpolated_between_samples_and_missing_outside_them() {
+        let x = [0.0, 1.0, 1.0, 3.0];
+        let y = [0.0, 2.0, 6.0, 2.0];
+        assert_eq!(value_at(&x, &y, 0.0), Some(0.0));
+        assert_eq!(value_at(&x, &y, 0.25), Some(0.5));
+        // At a repeated x, the later sample wins, as at a step in a transient.
+        assert_eq!(value_at(&x, &y, 1.0), Some(6.0));
+        assert_eq!(value_at(&x, &y, 2.0), Some(4.0));
+        assert_eq!(value_at(&x, &y, 3.0), Some(2.0));
+        assert_eq!(value_at(&x, &y, -0.1), None);
+        assert_eq!(value_at(&x, &y, 3.1), None);
+        assert_eq!(value_at(&x, &y, f64::NAN), None);
+        let with_nan = [1.0, f64::NAN, 3.0];
+        assert_eq!(value_at(&[0.0, 1.0, 2.0], &with_nan, 1.0), Some(2.0));
+    }
+
+    #[test]
+    fn a_plot_without_a_scale_is_measured_by_sample_index() {
+        use crate::ngspice::Vector;
+        let plot = Plot {
+            name: "op1".to_owned(),
+            scale: None,
+            vectors: vec![Vector {
+                name: "/out".to_owned(),
+                values: vec![1.5],
+            }],
+        };
+        let series = plot.series("/out").unwrap();
+        assert_eq!(series.value_at(0.0), Some(1.5));
+        let measured = series.measure(0.0, 0.0).unwrap();
+        assert_eq!(measured.average, 1.5);
+        assert!(plot.series("/in").is_none());
     }
 }

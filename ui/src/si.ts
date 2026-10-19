@@ -102,7 +102,14 @@ export function formatOpValue(
   value: number,
   kind: "voltage" | "current",
 ): string {
-  const unit = kind === "voltage" ? "V" : "A";
+  return formatQuantity(value, kind === "voltage" ? "V" : "A");
+}
+
+/**
+ * `value` to 3 significant digits with an SI prefix and `unit`, such as `1.50 ms` or
+ * `-1.25 mA`.
+ */
+export function formatQuantity(value: number, unit: string): string {
   const magnitude = Math.abs(value);
   if (Number.isNaN(value)) {
     return `NaN ${unit}`;

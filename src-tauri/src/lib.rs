@@ -83,6 +83,7 @@ pub fn run() {
             sim::start_simulation,
             sim::cancel_simulation,
             sim::fetch_waveform,
+            sim::measure_trace,
             sim::fetch_op_annotations,
             sim::resolve_probe,
         ])

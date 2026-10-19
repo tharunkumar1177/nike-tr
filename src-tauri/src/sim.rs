@@ -10,8 +10,8 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tron_core::{Nm, Point, Xy};
 use tron_sim::{
-    Analysis, Engine, OpAnchors, OpKind, OpValue, Plot, Probe, ProbeMap, deck, op_anchors,
-    probe_map,
+    Analysis, Engine, Measurements, OpAnchors, OpKind, OpValue, Plot, Probe, ProbeMap, deck,
+    op_anchors, probe_map,
 };
 use ts_rs::TS;
 use uuid::Uuid;
@@ -54,6 +54,47 @@ pub struct SimulationProgress {
 pub struct WaveformPoint {
     pub x: f64,
     pub y: f64,
+}
+
+/// The statistics of a trace over a span of the run, in the units of its vector.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TraceMeasurements {
+    /// The span measured, clipped to the run.
+    pub from: f64,
+    pub to: f64,
+    pub min: f64,
+    pub max: f64,
+    /// The mean over the span, so uneven time steps are weighted by their width.
+    pub average: f64,
+    pub rms: f64,
+    pub peak_to_peak: f64,
+}
+
+impl From<Measurements> for TraceMeasurements {
+    fn from(measured: Measurements) -> TraceMeasurements {
+        TraceMeasurements {
+            from: measured.from,
+            to: measured.to,
+            min: measured.min,
+            max: measured.max,
+            average: measured.average,
+            rms: measured.rms,
+            peak_to_peak: measured.peak_to_peak,
+        }
+    }
+}
+
+/// Exact readings of one trace, from its full-resolution samples.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TraceReadout {
+    /// `null` when the span requested misses the run.
+    pub span: Option<TraceMeasurements>,
+    /// The value at each cursor requested, in order, or `null` for one outside the run.
+    pub cursors: Vec<Option<f64>>,
 }
 
 /// What an operating-point annotation measures.
@@ -248,13 +289,9 @@ impl SimInner {
         let budget = budget.min(MAX_WAVEFORM_POINTS) as usize;
         let min_x = min_x.unwrap_or(f64::NEG_INFINITY);
         let max_x = max_x.unwrap_or(f64::INFINITY);
-        let samples = plot.waveform(vector, min_x, max_x, budget).ok_or_else(|| {
-            AppError::new(
-                AppErrorKind::SimNotFound,
-                format!("The simulation has no signal named {vector}."),
-                None,
-            )
-        })?;
+        let samples = plot
+            .waveform(vector, min_x, max_x, budget)
+            .ok_or_else(|| missing_vector(vector))?;
         Ok(samples
             .into_iter()
             .map(|sample| WaveformPoint {
@@ -263,6 +300,36 @@ impl SimInner {
             })
             .collect())
     }
+
+    /// The statistics of `vector` in run `run_id` between `min_x` and `max_x`, where a
+    /// missing bound means the end of the run, and its value at each of `cursors`.
+    fn measure_trace(
+        &self,
+        run_id: Uuid,
+        vector: &str,
+        min_x: Option<f64>,
+        max_x: Option<f64>,
+        cursors: &[f64],
+    ) -> Result<TraceReadout, AppError> {
+        let plot = &self.results(run_id)?.plot;
+        let Some(series) = plot.series(vector) else {
+            return Err(missing_vector(vector));
+        };
+        let min_x = min_x.unwrap_or(f64::NEG_INFINITY);
+        let max_x = max_x.unwrap_or(f64::INFINITY);
+        Ok(TraceReadout {
+            span: series.measure(min_x, max_x).map(TraceMeasurements::from),
+            cursors: cursors.iter().map(|&at| series.value_at(at)).collect(),
+        })
+    }
+}
+
+fn missing_vector(vector: &str) -> AppError {
+    AppError::new(
+        AppErrorKind::SimNotFound,
+        format!("The simulation has no signal named {vector}."),
+        None,
+    )
 }
 
 /// The ngspice library: the one `TRON_NGSPICE` names, or else the bundled one.
@@ -427,6 +494,23 @@ pub fn fetch_waveform(
     state.lock().waveform(run_id, &vector, min_x, max_x, budget)
 }
 
+/// The exact minimum, maximum, average, RMS, and peak-to-peak value of `vector` in run
+/// `run_id` between `min_x` and `max_x`, where a missing bound means the end of the run,
+/// and its value at each of `cursors`, all from the full-resolution samples.
+#[tauri::command]
+pub fn measure_trace(
+    state: State<'_, SimState>,
+    run_id: Uuid,
+    vector: String,
+    min_x: Option<f64>,
+    max_x: Option<f64>,
+    cursors: Vec<f64>,
+) -> Result<TraceReadout, AppError> {
+    state
+        .lock()
+        .measure_trace(run_id, &vector, min_x, max_x, &cursors)
+}
+
 /// What the probed item `target` measures in run `run_id`.
 #[tauri::command]
 pub fn resolve_probe(
@@ -550,6 +634,32 @@ mod tests {
         assert_eq!(xs, vec![0.0, 1e-3, 2e-3]);
         let missing = inner.waveform(Uuid::nil(), "/in", None, None, 100);
         assert_eq!(missing.unwrap_err().kind, AppErrorKind::SimNotFound);
+    }
+
+    #[test]
+    fn a_trace_is_measured_over_its_span_with_a_value_at_each_cursor() {
+        let time: &[f64] = &[0.0, 1e-3, 2e-3];
+        let inner = transient(&[("time", time), ("/out", &[0.0, 2.0, 2.0])]);
+        let nil = Uuid::nil();
+        let readout = inner
+            .measure_trace(nil, "/out", None, None, &[1e-3, 5e-3])
+            .unwrap();
+        let span = readout.span.unwrap();
+        assert_eq!((span.from, span.to), (0.0, 2e-3));
+        assert_eq!((span.min, span.max, span.peak_to_peak), (0.0, 2.0, 2.0));
+        assert!((span.average - 1.5).abs() < 1e-12, "{}", span.average);
+        assert_eq!(readout.cursors, vec![Some(2.0), None]);
+        let json = serde_json::to_value(&readout).unwrap();
+        assert_eq!(json["span"]["peakToPeak"], 2.0);
+        assert_eq!(json["cursors"], serde_json::json!([2.0, null]));
+
+        let outside = inner.measure_trace(nil, "/out", Some(1.0), None, &[]);
+        assert_eq!(outside.unwrap().span, None);
+        let missing = inner.measure_trace(nil, "/in", None, None, &[]);
+        assert_eq!(missing.unwrap_err().kind, AppErrorKind::SimNotFound);
+        let other = Uuid::from_u128(1);
+        let stale = inner.measure_trace(other, "/out", None, None, &[]);
+        assert_eq!(stale.unwrap_err().kind, AppErrorKind::SimNotFound);
     }
 
     #[test]

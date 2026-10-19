@@ -66,6 +66,7 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 - Document changes reach the UI as batched **diff events** with a monotonically increasing document revision. The UI drops any diff whose base revision doesn't match its own and asks for a fresh snapshot.
 - Large reads are scoped to the viewport. Full-document serialization over IPC is forbidden in edit loops.
 - Simulation result vectors stay in Rust. The UI fetches only the signals and the x range it shows, capped at a point budget, and Rust reduces the data by min-max decimation so peaks survive.
+- Measurements and cursor readouts are computed in Rust over the full-resolution vectors, never from the decimated samples the UI holds.
 - Request and response types are defined in Rust and exported to TypeScript, so the two sides cannot drift.
 
 ### Connectivity and netlist
