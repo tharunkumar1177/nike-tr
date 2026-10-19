@@ -16,6 +16,7 @@ import {
   toErrorReport,
 } from "../ipc";
 import type { ErcMarker } from "../schematicDraw";
+import { formatSeconds } from "../si";
 import type { LibraryStatusState } from "../useLibraryStatus";
 import {
   type ScreenPoint,
@@ -25,7 +26,7 @@ import {
 } from "../viewport";
 import { ErcPanel } from "./ErcPanel";
 import { LibraryPanel } from "./LibraryPanel";
-import { SimPanel, type SimRun, formatSeconds } from "./SimPanel";
+import { SimPanel, type SimRun } from "./SimPanel";
 import {
   type CanvasTool,
   type PlacementRequest,

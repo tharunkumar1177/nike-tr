@@ -108,6 +108,7 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
        - The settings dialog, the run panel, and the annotations, per the design decisions below. `ui/src/si.ts` parses and formats SI values.
        - The menu items "&Run Simulation" (`F5`), "&Cancel Simulation", and "Simulation Se&ttings..." (`CmdOrCtrl+Alt+S`) go under Tools, with IDs `run-simulation`, `cancel-simulation`, and `simulation-settings`. They ship only with the UI that handles them. Esc cancels in the UI while a run is active, but it is not a menu accelerator.
        - `App.tsx` owns the run state: idle, running, finished, cancelled, or failed, plus progress, elapsed time, and staleness. Any `document-changed` event marks the results out of date and clears the annotations.
+       - As built, the run state lives in `EditorShell` next to the ERC state. App drives it with a `simulationTicket` from the Run Simulation menu item. Results go out of date when `project.revision` moves past the revision the run started on, and annotations are hidden while they are out of date. The panel styles are in `styles.css` with the other panels. F5 and `Ctrl+Alt+S` are native menu accelerators, the way the other shortcuts are, and the UI handles only Esc.
      - **5d-1b UI design plans (designer, 2026-10-19).** These refine the design decisions below, and win where they differ.
        - **Settings dialog.**
          - `SimulationSettingsDialog.tsx` takes the props `settings: AnalysisSettings | null`, `onApply(settings) => Promise<ErrorReport | null>`, and `onCancel`.

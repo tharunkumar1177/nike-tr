@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ErrorReport } from "../ipc";
+import { formatSeconds } from "../si";
 import { CheckIcon, ErrorIcon, RemoveIcon } from "./icons";
 
 /** The latest simulation run, as the panel shows it. */
@@ -10,12 +11,8 @@ export type SimRun =
   | { state: "cancelled"; elapsedMs: number }
   | { state: "failed"; error: ErrorReport };
 
-export function formatSeconds(elapsedMs: number): string {
-  return (elapsedMs / 1000).toFixed(1);
-}
-
 /** Whether fixing the error starts in the simulation settings. */
-export function isSettingsError(error: ErrorReport): boolean {
+function isSettingsError(error: ErrorReport): boolean {
   return error.kind === "simNoAnalysis" || error.kind === "simInvalidAnalysis";
 }
 

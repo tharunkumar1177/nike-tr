@@ -89,6 +89,11 @@ export function formatSi(value: number): string {
   return `${sign}${whole}${fraction ? `.${fraction}` : ""}${prefix}`;
 }
 
+/** Milliseconds as seconds to one decimal place, such as `1.3`. */
+export function formatSeconds(elapsedMs: number): string {
+  return (elapsedMs / 1000).toFixed(1);
+}
+
 /**
  * An operating-point value to 3 significant digits with an SI prefix, such as
  * `3.30 V` or `-1.25 mA`.

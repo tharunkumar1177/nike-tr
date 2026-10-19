@@ -1160,7 +1160,9 @@ export function SchematicCanvas({
 
   const refocus = () => containerRef.current?.focus();
 
-  const opOrigins = viewport ? opAnnotationOrigins(viewport, opAnnotations) : [];
+  const opOrigins = viewport
+    ? opAnnotationOrigins(viewport, opAnnotations)
+    : [];
 
   const wiringSummary = [
     countOf(wires.length, "wire"),

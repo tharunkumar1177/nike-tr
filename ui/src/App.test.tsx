@@ -1620,9 +1620,7 @@ describe("Wiring", () => {
     expect(
       await within(panel).findByText(/^Simulation complete in \d+\.\d s\.$/),
     ).toBeTruthy();
-    expect(argsOf(calls, "fetch_op_annotations")).toEqual([
-      { runId: "run-1" },
-    ]);
+    expect(argsOf(calls, "fetch_op_annotations")).toEqual([{ runId: "run-1" }]);
     const results = await screen.findByRole("list", {
       name: "Operating point results",
     });
