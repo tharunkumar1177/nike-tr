@@ -1,10 +1,22 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ErcViolation } from "../bindings/ErcViolation";
 import type { LibraryHit } from "../bindings/LibraryHit";
+import type { OpAnnotation } from "../bindings/OpAnnotation";
 import type { ProjectSnapshot } from "../bindings/ProjectSnapshot";
+import type { SimulationProgress } from "../bindings/SimulationProgress";
 import type { Xy } from "../bindings/Xy";
-import { describeIpcError, runErc } from "../ipc";
+import {
+  SIMULATION_PROGRESS_EVENT,
+  cancelSimulation,
+  describeIpcError,
+  fetchOpAnnotations,
+  runErc,
+  startSimulation,
+  subscribe,
+  toErrorReport,
+} from "../ipc";
 import type { ErcMarker } from "../schematicDraw";
+import { formatSeconds } from "../si";
 import type { LibraryStatusState } from "../useLibraryStatus";
 import {
   type ScreenPoint,
@@ -14,6 +26,7 @@ import {
 } from "../viewport";
 import { ErcPanel } from "./ErcPanel";
 import { LibraryPanel } from "./LibraryPanel";
+import { SimPanel, type SimRun } from "./SimPanel";
 import {
   type CanvasTool,
   type PlacementRequest,
@@ -29,7 +42,16 @@ interface ErcResults {
   directory: string;
 }
 
+/** The document revision a simulation ran on. */
+interface SimSource {
+  revision: number;
+  directory: string;
+}
+
 const NO_MARKERS: ErcMarker[] = [];
+const NO_ANNOTATIONS: OpAnnotation[] = [];
+const IDLE: SimRun = { state: "idle" };
+const ELAPSED_TICK_MS = 100;
 
 function countOf(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -55,6 +77,9 @@ interface EditorShellProps {
   ercTicket: number;
   /** Increases when the ERC rule severities change; an open panel re-runs. */
   ercSettingsVersion: number;
+  /** Counts Run Simulation menu requests; each increase starts one run. */
+  simulationTicket: number;
+  onOpenSimulationSettings: () => void;
   onViewportChange: (update: (viewport: Viewport) => Viewport) => void;
   onCanvasResize: (size: Size) => void;
   onUndo: () => void;
@@ -72,6 +97,8 @@ export function EditorShell({
   annotateTicket,
   ercTicket,
   ercSettingsVersion,
+  simulationTicket,
+  onOpenSimulationSettings,
   onViewportChange,
   onCanvasResize,
   onUndo,
@@ -109,13 +136,131 @@ export function EditorShell({
   const ercStale = results !== null && results.revision !== project.revision;
   const ercMarkers = ercOpen && results ? results.violations : NO_MARKERS;
 
+  const simTicketRef = useRef(simulationTicket);
+  const simStartRef = useRef(0);
+  const [simOpen, setSimOpen] = useState(false);
+  const [simRun, setSimRun] = useState<SimRun>(IDLE);
+  const [simSource, setSimSource] = useState<SimSource | null>(null);
+  const [simAnnouncement, setSimAnnouncement] = useState("");
+  const [opAnnotations, setOpAnnotations] = useState(NO_ANNOTATIONS);
+  const [annotationsVisible, setAnnotationsVisible] = useState(true);
+
+  const simCurrent =
+    simSource === null || simSource.directory === project.directory;
+  const run = simCurrent ? simRun : IDLE;
+  const simRunning = run.state === "running";
+  const simStale =
+    simCurrent && simSource !== null && simSource.revision !== project.revision;
+  const shownAnnotations =
+    simCurrent && !simStale && annotationsVisible
+      ? opAnnotations
+      : NO_ANNOTATIONS;
+
+  const toggleErc = () => {
+    setSimOpen(false);
+    setErcOpen((open) => !open);
+  };
+
   useEffect(() => {
     if (ercTicket === ercTicketRef.current) {
       return;
     }
     ercTicketRef.current = ercTicket;
+    setSimOpen(false);
     setErcOpen((open) => !open);
   }, [ercTicket]);
+
+  const elapsed = () => performance.now() - simStartRef.current;
+
+  const runSimulation = () => {
+    if (simRunning) {
+      return;
+    }
+    const { revision, directory } = project;
+    simStartRef.current = performance.now();
+    setErcOpen(false);
+    setSimOpen(true);
+    setSimSource({ revision, directory });
+    setOpAnnotations(NO_ANNOTATIONS);
+    setSimRun({ state: "running", progress: null, elapsedMs: 0 });
+    setSimAnnouncement("Simulation started.");
+    void startSimulation()
+      .then(async (finished) => {
+        const annotations =
+          finished.scale === null
+            ? await fetchOpAnnotations(finished.runId)
+            : NO_ANNOTATIONS;
+        const elapsedMs = elapsed();
+        setOpAnnotations(annotations);
+        setSimRun({ state: "finished", elapsedMs });
+        setSimAnnouncement(
+          `Simulation complete in ${formatSeconds(elapsedMs)} seconds.`,
+        );
+      })
+      .catch((error: unknown) => {
+        const report = toErrorReport(error);
+        if (report.kind === "simCancelled") {
+          setSimRun({ state: "cancelled", elapsedMs: elapsed() });
+          setSimAnnouncement("Simulation cancelled.");
+        } else {
+          setSimRun({ state: "failed", error: report });
+          setSimAnnouncement(`Simulation failed: ${report.message}`);
+        }
+      });
+  };
+
+  const cancelRun = () => {
+    cancelSimulation().catch((error: unknown) =>
+      setSimAnnouncement(
+        `Couldn't cancel the simulation: ${describeIpcError(error)}`,
+      ),
+    );
+  };
+
+  const simActionsRef = useRef({ runSimulation, cancelRun, simRunning });
+  useLayoutEffect(() => {
+    simActionsRef.current = { runSimulation, cancelRun, simRunning };
+  });
+
+  useEffect(() => {
+    if (simulationTicket === simTicketRef.current) {
+      return;
+    }
+    simTicketRef.current = simulationTicket;
+    simActionsRef.current.runSimulation();
+  }, [simulationTicket]);
+
+  useEffect(() => {
+    if (!simRunning) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      const elapsedMs = performance.now() - simStartRef.current;
+      setSimRun((current) =>
+        current.state === "running" ? { ...current, elapsedMs } : current,
+      );
+    }, ELAPSED_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [simRunning]);
+
+  useEffect(() => {
+    const onProgress = ({ percentage }: SimulationProgress) =>
+      setSimRun((current) =>
+        current.state === "running"
+          ? { ...current, progress: percentage }
+          : current,
+      );
+    return subscribe(SIMULATION_PROGRESS_EVENT, onProgress);
+  }, []);
+
+  const jumpToSymbol = (reference: string) => {
+    const instance = project.instances.find(
+      (item) => item.reference?.text === reference,
+    );
+    if (instance) {
+      setFocusRequest([instance.xNm, instance.yNm]);
+    }
+  };
 
   const runCheck = () => {
     const { revision, directory } = project;
@@ -166,6 +311,8 @@ export function EditorShell({
       ) {
         event.preventDefault();
         setLibraryOpen((open) => !open);
+      } else if (event.key === "Escape" && simActionsRef.current.simRunning) {
+        simActionsRef.current.cancelRun();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -183,13 +330,19 @@ export function EditorShell({
         onRedo={onRedo}
         onOpenProperties={onOpenProperties}
         ercOpen={ercOpen}
-        onToggleErc={() => setErcOpen((open) => !open)}
+        onToggleErc={toggleErc}
         libraryOpen={libraryOpen}
         onToggleLibrary={() => setLibraryOpen((open) => !open)}
         wireMode={wireMode}
         onToggleWireMode={() => setWireMode((active) => !active)}
         noConnectMode={noConnectMode}
         onStartTool={setToolRequest}
+        simulationRunning={simRunning}
+        onRunSimulation={runSimulation}
+        onCancelSimulation={cancelRun}
+        onOpenSimulationSettings={onOpenSimulationSettings}
+        annotationsVisible={annotationsVisible}
+        onToggleAnnotations={() => setAnnotationsVisible((shown) => !shown)}
       />
       <main className="editor__workspace">
         {libraryOpen && (
@@ -233,6 +386,7 @@ export function EditorShell({
             ercStale={ercStale}
             selectedMarkerId={ercOpen ? selectedViolation : null}
             onSelectMarker={setSelectedViolation}
+            opAnnotations={shownAnnotations}
             focusRequest={focusRequest}
             onFocusRequestConsumed={() => setFocusRequest(null)}
             onHintChange={setHint}
@@ -253,6 +407,18 @@ export function EditorShell({
               onSelect={(violation) => setSelectedViolation(violation.id)}
               onJump={jumpTo}
               onClose={() => setErcOpen(false)}
+            />
+          )}
+          {simOpen && (
+            <SimPanel
+              run={run}
+              stale={simStale}
+              announcement={simAnnouncement}
+              onRun={runSimulation}
+              onCancel={cancelRun}
+              onOpenSettings={onOpenSimulationSettings}
+              onJumpToSymbol={jumpToSymbol}
+              onClose={() => setSimOpen(false)}
             />
           )}
         </div>

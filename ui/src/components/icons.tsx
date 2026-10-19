@@ -155,3 +155,37 @@ export function CheckIcon() {
     </Icon>
   );
 }
+
+export function PlayIcon() {
+  return (
+    <Icon>
+      <path d="M7 4v16l13-8L7 4Z" />
+    </Icon>
+  );
+}
+
+export function StopIcon() {
+  return (
+    <Icon>
+      <rect x="6" y="6" width="12" height="12" rx="1" />
+    </Icon>
+  );
+}
+
+export function SettingsIcon() {
+  return (
+    <Icon>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" />
+    </Icon>
+  );
+}
+
+export function EyeIcon() {
+  return (
+    <Icon>
+      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </Icon>
+  );
+}

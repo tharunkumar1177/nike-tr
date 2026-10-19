@@ -3,13 +3,17 @@ import type { HistoryStatus } from "../bindings/HistoryStatus";
 import type { CanvasTool } from "./SchematicCanvas";
 import {
   ErcIcon,
+  EyeIcon,
   GlobalLabelIcon,
   LabelIcon,
   LibraryIcon,
   NoConnectIcon,
+  PlayIcon,
   PowerIcon,
   PropertiesIcon,
   RedoIcon,
+  SettingsIcon,
+  StopIcon,
   UndoIcon,
   WireIcon,
 } from "./icons";
@@ -62,6 +66,12 @@ interface ToolbarProps {
   noConnectMode: boolean;
   /** Starts a canvas tool; for `noConnect`, toggles the mode. */
   onStartTool: (tool: CanvasTool) => void;
+  simulationRunning: boolean;
+  onRunSimulation: () => void;
+  onCancelSimulation: () => void;
+  onOpenSimulationSettings: () => void;
+  annotationsVisible: boolean;
+  onToggleAnnotations: () => void;
 }
 
 export function Toolbar({
@@ -79,6 +89,12 @@ export function Toolbar({
   onToggleWireMode,
   noConnectMode,
   onStartTool,
+  simulationRunning,
+  onRunSimulation,
+  onCancelSimulation,
+  onOpenSimulationSettings,
+  annotationsVisible,
+  onToggleAnnotations,
 }: ToolbarProps) {
   return (
     <div className="toolbar" role="toolbar" aria-label="Editor">
@@ -167,10 +183,45 @@ export function Toolbar({
         >
           <NoConnectIcon />
         </IconButton>
+        <span className="toolbar__separator" aria-hidden="true" />
+        <IconButton
+          label="Run Simulation"
+          shortcut="F5"
+          disabled={disabled || simulationRunning}
+          onClick={onRunSimulation}
+        >
+          <PlayIcon />
+        </IconButton>
+        <IconButton
+          label="Cancel Simulation"
+          shortcut="Esc"
+          disabled={!simulationRunning}
+          onClick={onCancelSimulation}
+        >
+          <StopIcon />
+        </IconButton>
+        <IconButton
+          label="Simulation Settings"
+          shortcut="Ctrl+Alt+S"
+          disabled={disabled}
+          onClick={onOpenSimulationSettings}
+        >
+          <SettingsIcon />
+        </IconButton>
       </div>
-      <output className="toolbar__zoom" aria-label="Zoom level">
-        {zoomLabel}
-      </output>
+      <div className="toolbar__group">
+        <IconButton
+          label="Show operating point annotations"
+          pressed={annotationsVisible}
+          disabled={disabled}
+          onClick={onToggleAnnotations}
+        >
+          <EyeIcon />
+        </IconButton>
+        <output className="toolbar__zoom" aria-label="Zoom level">
+          {zoomLabel}
+        </output>
+      </div>
     </div>
   );
 }

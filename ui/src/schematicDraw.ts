@@ -11,6 +11,7 @@ import type { JunctionDot } from "./bindings/JunctionDot";
 import type { MirrorAxis } from "./bindings/MirrorAxis";
 import type { NetLabel } from "./bindings/NetLabel";
 import type { NoConnectFlag } from "./bindings/NoConnectFlag";
+import type { OpAnnotation } from "./bindings/OpAnnotation";
 import type { SymbolInstance } from "./bindings/SymbolInstance";
 import type { SymbolPreview } from "./bindings/SymbolPreview";
 import type { SymbolText } from "./bindings/SymbolText";
@@ -18,6 +19,7 @@ import type { WireSegment } from "./bindings/WireSegment";
 import type { Xy } from "./bindings/Xy";
 import { MIN_LINE_PX, drawShape } from "./drawShapes";
 import type { Bounds } from "./libraryPreview";
+import { formatOpValue } from "./si";
 import {
   type Pose,
   instanceBounds,
@@ -77,7 +79,84 @@ export interface SceneState {
   selectedMarkerId: string | null;
   /** The schematic changed since the markers were found. */
   markersStale: boolean;
+  /** Operating point results, drawn over everything but the previews. */
+  annotations: OpAnnotation[];
   gridSizeNm: number;
+}
+
+/** Font size of an operating point annotation, in screen pixels at any zoom. */
+export const OP_TEXT_PX = 14;
+const OP_OFFSET_PX = 8;
+const OP_PADDING_X_PX = 4;
+const OP_PADDING_Y_PX = 2;
+const OP_GAP_PX = 2;
+/** Height of an operating point annotation box, in screen pixels. */
+export const OP_BOX_HEIGHT_PX = OP_TEXT_PX + 2 * OP_PADDING_Y_PX;
+
+/**
+ * The screen position of each annotation box's top-left corner: up and to the
+ * right of its anchor, with boxes that share an anchor stacked downward.
+ */
+export function opAnnotationOrigins(
+  viewport: Viewport,
+  annotations: OpAnnotation[],
+): ScreenPoint[] {
+  const stacks = new Map<string, number>();
+  return annotations.map(({ position }) => {
+    const key = `${position[0]},${position[1]}`;
+    const index = stacks.get(key) ?? 0;
+    stacks.set(key, index + 1);
+    const at = worldToScreen(viewport, position[0], position[1]);
+    return {
+      x: at.x + OP_OFFSET_PX,
+      y: at.y - OP_OFFSET_PX + index * (OP_BOX_HEIGHT_PX + OP_GAP_PX),
+    };
+  });
+}
+
+export interface OpAnnotationColors {
+  fill: string;
+  text: string;
+  border: string;
+}
+
+/** Draws each operating point value in a box beside its anchor. */
+export function drawOpAnnotations(
+  context: CanvasRenderingContext2D,
+  viewport: Viewport,
+  annotations: OpAnnotation[],
+  colors: OpAnnotationColors,
+  fontFamily: string,
+) {
+  const origins = opAnnotationOrigins(viewport, annotations);
+  context.save();
+  context.font = `${OP_TEXT_PX}px ${fontFamily}`;
+  context.textBaseline = "middle";
+  context.lineWidth = 1;
+  annotations.forEach((annotation, index) => {
+    const origin = origins[index];
+    if (!origin) {
+      return;
+    }
+    const text = formatOpValue(annotation.value, annotation.kind);
+    const width = context.measureText(text).width + 2 * OP_PADDING_X_PX;
+    context.fillStyle = colors.fill;
+    context.fillRect(origin.x, origin.y, width, OP_BOX_HEIGHT_PX);
+    context.strokeStyle = colors.border;
+    context.strokeRect(
+      origin.x + 0.5,
+      origin.y + 0.5,
+      width - 1,
+      OP_BOX_HEIGHT_PX - 1,
+    );
+    context.fillStyle = colors.text;
+    context.fillText(
+      text,
+      origin.x + OP_PADDING_X_PX,
+      origin.y + OP_BOX_HEIGHT_PX / 2,
+    );
+  });
+  context.restore();
 }
 
 /** Where an ERC violation is, drawn as a diamond over the item it names. */
@@ -546,6 +625,16 @@ export function drawSchematicScene(
       drawMarker(context, viewport, marker.position, color);
     }
     context.restore();
+  }
+
+  if (scene.annotations.length > 0) {
+    drawOpAnnotations(
+      context,
+      viewport,
+      scene.annotations,
+      { fill: bodyFill, text, border: textSecondary },
+      fontFamily,
+    );
   }
 
   if (scene.wirePreview) {
