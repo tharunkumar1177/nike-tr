@@ -119,7 +119,7 @@ impl From<&Session> for HistoryStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct ProjectSnapshot {
@@ -138,6 +138,8 @@ pub struct ProjectSnapshot {
     pub junctions: Vec<JunctionDot>,
     pub labels: Vec<NetLabel>,
     pub no_connects: Vec<NoConnectFlag>,
+    /// The analysis saved in `tron.json`, or `null` when none is set.
+    pub simulation_settings: Option<AnalysisSettings>,
     pub history: HistoryStatus,
 }
 
@@ -161,6 +163,7 @@ impl ProjectSnapshot {
             junctions: junction_dots(project),
             labels: net_labels(project),
             no_connects: no_connect_flags(project),
+            simulation_settings: project.analysis(),
             history: HistoryStatus::from(session),
         }
     }
@@ -238,6 +241,8 @@ pub struct DocumentDiff {
     pub no_connects: Option<Vec<NoConnectFlag>>,
     /// The ERC rule severities changed, so earlier ERC results no longer apply.
     pub erc_settings: bool,
+    /// The analysis changed; `get_analysis_settings` returns the new one.
+    pub simulation_settings_changed: bool,
     pub history: HistoryStatus,
 }
 
@@ -263,6 +268,7 @@ fn document_diff(
         labels: changes.wiring.then(|| net_labels(project)),
         no_connects: changes.wiring.then(|| no_connect_flags(project)),
         erc_settings: changes.erc_settings,
+        simulation_settings_changed: changes.analysis,
         history: HistoryStatus::from(session),
     }
 }
@@ -1335,6 +1341,7 @@ mod tests {
         assert_eq!(json["titleBlock"]["comments"].as_array().unwrap().len(), 9);
         assert_eq!(json["definitions"], serde_json::json!({}));
         assert_eq!(json["instances"], serde_json::json!([]));
+        assert_eq!(json["simulationSettings"], serde_json::Value::Null);
         assert_eq!(
             json["history"],
             serde_json::json!({
@@ -1505,6 +1512,7 @@ mod tests {
         let changes = session.edit_erc_severities(&severities).unwrap();
         let diff = serde_json::to_value(document_diff(&session, 1, 2, changes)).unwrap();
         assert_eq!(diff["ercSettings"], true);
+        assert_eq!(diff["simulationSettingsChanged"], false);
         assert_eq!(diff["instances"], serde_json::Value::Null);
 
         let rules = erc_rule_settings(&session.erc_severities().unwrap());

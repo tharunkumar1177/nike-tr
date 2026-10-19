@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde::Serialize;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tron_sim::{Analysis, Engine, Plot, deck};
+use tron_core::Xy;
+use tron_sim::{Analysis, Engine, OpAnchors, OpKind, OpValue, Plot, deck, op_anchors};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -52,16 +53,64 @@ pub struct WaveformPoint {
     pub y: f64,
 }
 
+/// What an operating-point annotation measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum OpAnnotationKind {
+    Voltage,
+    Current,
+}
+
+/// One operating-point value and where the schematic shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct OpAnnotation {
+    /// The result vector, as `fetch_waveform` names it.
+    pub vector: String,
+    pub kind: OpAnnotationKind,
+    /// The net name of a voltage, or the symbol reference of a current.
+    pub label: String,
+    /// In volts or amperes.
+    pub value: f64,
+    pub position: Xy,
+}
+
+impl From<OpValue> for OpAnnotation {
+    fn from(value: OpValue) -> OpAnnotation {
+        let kind = match value.anchor.kind {
+            OpKind::Voltage => OpAnnotationKind::Voltage,
+            OpKind::Current => OpAnnotationKind::Current,
+        };
+        OpAnnotation {
+            vector: value.vector,
+            kind,
+            label: value.anchor.label,
+            value: value.value,
+            position: Xy::from(value.anchor.position),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct SimState {
     inner: Mutex<SimInner>,
+}
+
+/// The results of the last finished run.
+struct Results {
+    run_id: Uuid,
+    plot: Plot,
+    /// Where each operating-point value is shown, found from the schematic that ran.
+    anchors: OpAnchors,
 }
 
 #[derive(Default)]
 struct SimInner {
     /// The cancel flag of the run in progress.
     running: Option<Arc<AtomicBool>>,
-    results: Option<(Uuid, Plot)>,
+    results: Option<Results>,
     /// Increases on every document change, so a run that started before a change can't
     /// store results for the old document.
     generation: u64,
@@ -80,6 +129,29 @@ impl SimState {
         let mut inner = self.lock();
         inner.results = None;
         inner.generation = inner.generation.wrapping_add(1);
+    }
+}
+
+impl SimInner {
+    fn results(&self, run_id: Uuid) -> Result<&Results, AppError> {
+        match &self.results {
+            Some(results) if results.run_id == run_id => Ok(results),
+            _ => Err(AppError::new(
+                AppErrorKind::SimNotFound,
+                "These simulation results are no longer available. Run the simulation again.",
+                None,
+            )),
+        }
+    }
+
+    /// The operating-point values of run `run_id`. A transient has none.
+    fn op_annotations(&self, run_id: Uuid) -> Result<Vec<OpAnnotation>, AppError> {
+        let results = self.results(run_id)?;
+        if results.plot.scale.is_some() {
+            return Ok(Vec::new());
+        }
+        let values = results.anchors.values(&results.plot);
+        Ok(values.into_iter().map(OpAnnotation::from).collect())
     }
 }
 
@@ -148,10 +220,11 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
     let path = ngspice_path(&app)?;
     let code_models = code_model_dir(&path)?;
     let state = app.state::<AppState>();
-    let (deck, cancel, generation) = state.with_session(|session| {
+    let (deck, anchors, cancel, generation) = state.with_session(|session| {
         let project = session.project();
         let analysis = project.analysis().map(Analysis::from);
         let deck = deck(project.schematic(), analysis.as_ref())?;
+        let anchors = op_anchors(project.schematic(), &deck)?;
         let sim = app.state::<SimState>();
         let mut inner = sim.lock();
         if inner.running.is_some() {
@@ -163,7 +236,7 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
         }
         let cancel = Arc::new(AtomicBool::new(false));
         inner.running = Some(Arc::clone(&cancel));
-        Ok((deck, cancel, inner.generation))
+        Ok((deck, anchors, cancel, inner.generation))
     })??;
 
     let emitter = app.clone();
@@ -202,7 +275,11 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
             .map(|vector| vector.name.clone())
             .collect(),
     };
-    inner.results = Some((run_id, plot));
+    inner.results = Some(Results {
+        run_id,
+        plot,
+        anchors,
+    });
     Ok(finished)
 }
 
@@ -235,16 +312,7 @@ pub fn fetch_waveform(
     budget: u32,
 ) -> Result<Vec<WaveformPoint>, AppError> {
     let inner = state.lock();
-    let plot = match &inner.results {
-        Some((id, plot)) if *id == run_id => plot,
-        _ => {
-            return Err(AppError::new(
-                AppErrorKind::SimNotFound,
-                "These simulation results are no longer available. Run the simulation again.",
-                None,
-            ));
-        }
-    };
+    let plot = &inner.results(run_id)?.plot;
     let budget = budget.min(MAX_WAVEFORM_POINTS) as usize;
     let samples = plot
         .waveform(&vector, min_x, max_x, budget)
@@ -262,6 +330,16 @@ pub fn fetch_waveform(
             y: sample.y,
         })
         .collect())
+}
+
+/// The operating-point values of run `run_id`, each with where the schematic shows it.
+/// Empty for a transient. Ground and nodes inside device models are left out.
+#[tauri::command]
+pub fn fetch_op_annotations(
+    state: State<'_, SimState>,
+    run_id: Uuid,
+) -> Result<Vec<OpAnnotation>, AppError> {
+    state.lock().op_annotations(run_id)
 }
 
 #[cfg(test)]
@@ -299,10 +377,57 @@ mod tests {
                 values: vec![1.5],
             }],
         };
-        state.lock().results = Some((Uuid::nil(), plot));
+        state.lock().results = Some(Results {
+            run_id: Uuid::nil(),
+            plot,
+            anchors: OpAnchors::default(),
+        });
         state.invalidate();
         let inner = state.lock();
         assert!(inner.results.is_none());
         assert_eq!(inner.generation, 1);
+    }
+
+    #[test]
+    fn op_annotations_need_the_current_run_and_a_transient_has_none() {
+        let mut inner = SimInner::default();
+        let error = inner.op_annotations(Uuid::nil()).unwrap_err();
+        assert_eq!(error.kind, AppErrorKind::SimNotFound);
+
+        let transient = Plot {
+            name: "tran1".to_owned(),
+            scale: Some("time".to_owned()),
+            vectors: Vec::new(),
+        };
+        inner.results = Some(Results {
+            run_id: Uuid::nil(),
+            plot: transient,
+            anchors: OpAnchors::default(),
+        });
+        assert!(inner.op_annotations(Uuid::nil()).unwrap().is_empty());
+        let stale = inner.op_annotations(Uuid::from_u128(1)).unwrap_err();
+        assert_eq!(stale.kind, AppErrorKind::SimNotFound);
+    }
+
+    #[test]
+    fn an_op_annotation_serializes_for_the_ui() {
+        let annotation = OpAnnotation {
+            vector: "/out".to_owned(),
+            kind: OpAnnotationKind::Voltage,
+            label: "/OUT".to_owned(),
+            value: 1.5,
+            position: Xy(1_270_000, 2_540_000),
+        };
+        let json = serde_json::to_value(&annotation).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "vector": "/out",
+                "kind": "voltage",
+                "label": "/OUT",
+                "value": 1.5,
+                "position": [1_270_000, 2_540_000]
+            })
+        );
     }
 }

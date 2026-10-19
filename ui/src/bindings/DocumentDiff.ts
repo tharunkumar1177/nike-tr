@@ -29,4 +29,8 @@ wires: Array<WireSegment> | null, junctions: Array<JunctionDot> | null, labels: 
 /**
  * The ERC rule severities changed, so earlier ERC results no longer apply.
  */
-ercSettings: boolean, history: HistoryStatus, };
+ercSettings: boolean, 
+/**
+ * The analysis changed; `get_analysis_settings` returns the new one.
+ */
+simulationSettingsChanged: boolean, history: HistoryStatus, };

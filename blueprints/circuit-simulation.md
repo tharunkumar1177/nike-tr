@@ -97,7 +97,17 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
    - `ProjectSnapshot` gains `simulationSettings` and `DocumentDiff` gains `simulationSettingsChanged`.
    **5d-1 is built in two PRs.**
    - **5d-1a:** the runtime and bundling above.
-   - **5d-1b:** the three UI surfaces below, the snapshot and diff fields, and an op-point anchor mapping over IPC.
+   - **5d-1b:** the three UI surfaces below, the snapshot and diff fields, and an op-point anchor mapping over IPC. It is built as two PRs (architect, 2026-10-19):
+     - **5d-1b backend.**
+       - `ProjectSnapshot.simulationSettings: AnalysisSettings | null`. `ProjectSnapshot` drops `Eq`.
+       - `DocumentDiff.simulationSettingsChanged: boolean`. The UI's `applyDiff` returns `null` when it is set, so the UI fetches a fresh snapshot.
+       - `crates/sim/src/op.rs` `op_anchors(schematic, deck) -> OpAnchors` and `OpAnchors::values(plot) -> Vec<OpValue>`. Lookups are keyed by lower-case SPICE name, and `<device>#branch` vectors map to device currents.
+       - `start_simulation` computes the anchors from the same schematic the deck came from and stores them with the plot.
+       - `fetch_op_annotations(runId) -> OpAnnotation[]`, where `OpAnnotation` is `{ vector, kind: "voltage" | "current", label, value, position: Xy }`. It returns nothing for a transient. Values are formatted in the UI.
+     - **5d-1b UI.**
+       - The settings dialog, the run panel, and the annotations, per the design decisions below. `ui/src/utils/si.ts` parses and formats SI values.
+       - The menu items "&Run Simulation" (`F5`), "&Cancel Simulation", and "Simulation Se&ttings..." (`CmdOrCtrl+Alt+S`) go under Tools, with IDs `run-simulation`, `cancel-simulation`, and `simulation-settings`. They ship only with the UI that handles them. Esc cancels in the UI while a run is active, but it is not a menu accelerator.
+       - `App.tsx` owns the run state: idle, running, finished, cancelled, or failed, plus progress, elapsed time, and staleness. Any `document-changed` event marks the results out of date and clears the annotations.
 
    **5d-1 design decisions (designer, 2026-10-14; the full plans are in the session transcript).**
    - **Settings dialog** (`SimulationSettingsDialog.tsx`, `ui/src/utils/si.ts`).
