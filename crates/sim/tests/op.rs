@@ -38,13 +38,12 @@ fn values_for(circuit: &Circuit, plot: &Plot) -> Vec<Row> {
     let schematic = circuit.schematic();
     let deck = deck(&schematic, Some(&Analysis::OperatingPoint)).unwrap();
     let anchors = op_anchors(&schematic, &deck).unwrap();
-    let values = anchors.values(plot);
-    values
-        .into_iter()
-        .map(|OpValue { vector, anchor, value }| {
-            (vector, anchor.kind, anchor.label, anchor.position, value)
-        })
-        .collect()
+    anchors.values(plot).into_iter().map(to_row).collect()
+}
+
+fn to_row(op: OpValue) -> Row {
+    let (vector, value, anchor) = (op.vector, op.value, op.anchor);
+    (vector, anchor.kind, anchor.label, anchor.position, value)
 }
 
 #[test]
