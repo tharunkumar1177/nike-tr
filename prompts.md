@@ -177,3 +177,8 @@ Tell me whether the AGENTS.md is optimized for Agent instruction?
 
 
 How are validating that the code written by the SubAgent are contextually and logically right? and efficient?
+
+
+I'll record it in the blueprint, then checkpoint ROADMAP.md so a fresh session can pick up from the files alone.
+
+

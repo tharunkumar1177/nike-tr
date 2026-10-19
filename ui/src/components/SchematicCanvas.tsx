@@ -1,8 +1,8 @@
 /**
  * The schematic canvas: draws symbols, wires, junctions, net labels, and
  * no-connect flags, and drives symbol placement, wiring, label, power symbol,
- * and no-connect flag placement, annotation, selection, dragging, transforms,
- * and deletion on top of the generic canvas shell. Every edit is a single core
+ * and no-connect flag placement, annotation, signal probing, selection,
+ * dragging, transforms, and deletion on top of the generic canvas shell. Every edit is a single core
  * command; the document diff event is the source of truth for what is drawn.
  */
 import {
@@ -22,6 +22,7 @@ import type { MirrorAxis } from "../bindings/MirrorAxis";
 import type { NetLabel } from "../bindings/NetLabel";
 import type { NoConnectFlag } from "../bindings/NoConnectFlag";
 import type { OpAnnotation } from "../bindings/OpAnnotation";
+import type { ProbeTarget } from "../bindings/ProbeTarget";
 import type { SymbolField } from "../bindings/SymbolField";
 import type { SymbolInstance } from "../bindings/SymbolInstance";
 import type { SymbolPreview } from "../bindings/SymbolPreview";
@@ -45,6 +46,7 @@ import {
   setSymbolField,
   transformSymbols,
 } from "../ipc";
+import { type ProbeHit, findProbeAt } from "../probe";
 import {
   type ErcMarker,
   type GhostState,
@@ -86,15 +88,16 @@ import {
   snapWirePoint,
   wirePath,
 } from "../wiring";
-import { Canvas } from "./Canvas";
+import { Canvas, type SceneCursor } from "./Canvas";
 import { InlineLabelEditor } from "./InlineLabelEditor";
 import { InlinePropertyEditor } from "./InlinePropertyEditor";
 import { PowerPicker } from "./PowerPicker";
 import type { StatusHint } from "./StatusBar";
 import { SymbolPropertiesDialog } from "./SymbolPropertiesDialog";
 
-/** A canvas tool the toolbar can start. `noConnect` toggles its mode. */
-export type CanvasTool = "localLabel" | "globalLabel" | "power" | "noConnect";
+/** A canvas tool the toolbar can start. `noConnect` and `probe` toggle their mode. */
+export type CanvasTool =
+  "localLabel" | "globalLabel" | "power" | "noConnect" | "probe";
 
 /** A request from the library browser to start placing a symbol. */
 export interface PlacementRequest {
@@ -207,6 +210,9 @@ interface SchematicCanvasProps {
   wireMode: boolean;
   onWireModeChange: (active: boolean) => void;
   onNoConnectModeChange: (active: boolean) => void;
+  onProbeModeChange: (active: boolean) => void;
+  /** Plots or removes what a probe click hit, resolving to the notice to show. */
+  onProbe: (target: ProbeTarget) => Promise<string>;
   /** Each increase runs Annotate Schematic once. */
   annotateTicket: number;
   library: LibraryStatusState;
@@ -249,6 +255,8 @@ export function SchematicCanvas({
   wireMode,
   onWireModeChange,
   onNoConnectModeChange,
+  onProbeModeChange,
+  onProbe,
   annotateTicket,
   library,
   onDownloadLibrary,
@@ -292,6 +300,8 @@ export function SchematicCanvas({
   );
   const [powerPickerAt, setPowerPickerAt] = useState<ScreenPoint | null>(null);
   const [noConnectMode, setNoConnectMode] = useState(false);
+  const [probeMode, setProbeMode] = useState(false);
+  const [probeHover, setProbeHover] = useState<ProbeHit | null>(null);
   const [propertiesDialog, setPropertiesDialog] =
     useState<PropertiesDialogState | null>(null);
   const [fieldEditor, setFieldEditor] = useState<FieldEditorState | null>(null);
@@ -323,6 +333,8 @@ export function SchematicCanvas({
     setLabelPlacing(null);
     setPowerPickerAt(null);
     setNoConnectMode(false);
+    setProbeMode(false);
+    setProbeHover(null);
     setFieldEditor(null);
     setDrag(null);
   }, [exitPlacement]);
@@ -330,6 +342,10 @@ export function SchematicCanvas({
   useEffect(() => {
     onNoConnectModeChange(noConnectMode);
   }, [noConnectMode, onNoConnectModeChange]);
+
+  useEffect(() => {
+    onProbeModeChange(probeMode);
+  }, [probeMode, onProbeModeChange]);
 
   useEffect(() => {
     if (annotateTicket === annotateTicketRef.current) {
@@ -463,6 +479,11 @@ export function SchematicCanvas({
       onHintChange({ text: notice, error: false });
     } else if (noConnectMode) {
       onHintChange({ text: "Click to place flag. Esc: Cancel", error: false });
+    } else if (probeMode) {
+      onHintChange({
+        text: "Click a wire or pin for voltage, or a symbol for current. Esc: Exit",
+        error: false,
+      });
     } else if (labelPrompt) {
       onHintChange({ text: "Enter label name. Esc: Cancel", error: false });
     } else if (labelPlacing) {
@@ -491,6 +512,7 @@ export function SchematicCanvas({
     commandError,
     notice,
     noConnectMode,
+    probeMode,
     labelPrompt,
     labelPlacing,
     placing,
@@ -568,6 +590,23 @@ export function SchematicCanvas({
     containerRef.current?.focus();
   }, [noConnectMode, clearTools, leaveWireMode]);
 
+  const toggleProbe = useCallback(() => {
+    if (probeMode) {
+      setProbeMode(false);
+      setProbeHover(null);
+      setAnnouncement("Probe mode ended.");
+      return;
+    }
+    clearTools();
+    leaveWireMode();
+    setSelection(null);
+    setHover(false);
+    setCommandError(null);
+    setProbeMode(true);
+    setAnnouncement("Probe mode started.");
+    containerRef.current?.focus();
+  }, [probeMode, clearTools, leaveWireMode]);
+
   useEffect(() => {
     if (toolRequest === null) {
       return;
@@ -577,6 +616,8 @@ export function SchematicCanvas({
       openPowerPicker();
     } else if (toolRequest === "noConnect") {
       toggleNoConnect();
+    } else if (toolRequest === "probe") {
+      toggleProbe();
     } else {
       openLabelPrompt(toolRequest === "globalLabel");
     }
@@ -585,6 +626,7 @@ export function SchematicCanvas({
     onToolRequestConsumed,
     openPowerPicker,
     toggleNoConnect,
+    toggleProbe,
     openLabelPrompt,
   ]);
 
@@ -706,6 +748,29 @@ export function SchematicCanvas({
     return null;
   };
 
+  const findProbe = (world: ScreenPoint): ProbeHit | null => {
+    const tolerance = viewport ? WIRE_HIT_PX / pxPerNm(viewport.zoom) : 0;
+    return findProbeAt(
+      { instances, definitions, wires, labels },
+      world,
+      tolerance,
+    );
+  };
+
+  const probeAt = (world: ScreenPoint) => {
+    const hit = findProbe(world);
+    if (!hit) {
+      return;
+    }
+    void onProbe(hit.target).then(
+      (message) => {
+        setNotice(message);
+        setAnnouncement(message);
+      },
+      (error: unknown) => setCommandError(describeIpcError(error)),
+    );
+  };
+
   const handlePointerDown = (
     world: ScreenPoint,
     event: PointerEvent<HTMLDivElement>,
@@ -731,6 +796,10 @@ export function SchematicCanvas({
     }
     if (noConnectMode) {
       placeFlagAt(world);
+      return;
+    }
+    if (probeMode) {
+      probeAt(world);
       return;
     }
     if (wireMode) {
@@ -825,7 +894,7 @@ export function SchematicCanvas({
       }
       return;
     }
-    if (placing || labelPlacing || noConnectMode) {
+    if (placing || labelPlacing || noConnectMode || probeMode) {
       return;
     }
     const hit = findInstanceAt(instances, definitions, world);
@@ -859,7 +928,15 @@ export function SchematicCanvas({
         setDrag({ ...drag, dx: delta.x, dy: delta.y });
       }
     }
-    if (!placing && !drag && !wireMode && !labelPlacing && !noConnectMode) {
+    if (probeMode) {
+      setProbeHover(position ? findProbe(position) : null);
+    } else if (
+      !placing &&
+      !drag &&
+      !wireMode &&
+      !labelPlacing &&
+      !noConnectMode
+    ) {
       const over = position !== null && hitTest(position) !== null;
       if (over !== hover) {
         setHover(over);
@@ -894,6 +971,11 @@ export function SchematicCanvas({
       toggleNoConnect();
       return true;
     }
+    if (key === "m") {
+      event.preventDefault();
+      toggleProbe();
+      return true;
+    }
     return false;
   };
 
@@ -921,6 +1003,15 @@ export function SchematicCanvas({
         if (at) {
           placeFlagAt(at);
         }
+      } else {
+        handleToolKey(key, event);
+      }
+      return;
+    }
+    if (probeMode) {
+      if (key === "escape") {
+        event.preventDefault();
+        toggleProbe();
       } else {
         handleToolKey(key, event);
       }
@@ -1042,6 +1133,9 @@ export function SchematicCanvas({
     if (noConnectMode) {
       event.preventDefault();
       toggleNoConnect();
+    } else if (probeMode) {
+      event.preventDefault();
+      toggleProbe();
     } else if (labelPlacing) {
       event.preventDefault();
       setLabelPlacing(null);
@@ -1128,10 +1222,12 @@ export function SchematicCanvas({
         selectedMarkerId,
         markersStale: ercStale,
         annotations: opAnnotations,
+        probeHover: probeHover?.outline ?? null,
         gridSizeNm,
       });
     },
     [
+      probeHover,
       ercMarkers,
       selectedMarkerId,
       ercStale,
@@ -1153,7 +1249,14 @@ export function SchematicCanvas({
     ],
   );
 
-  const sceneCursor = drag ? "grabbing" : hover && !placing ? "pointer" : null;
+  let sceneCursor: SceneCursor | null = null;
+  if (probeMode) {
+    sceneCursor = "crosshair";
+  } else if (drag) {
+    sceneCursor = "grabbing";
+  } else if (hover && !placing) {
+    sceneCursor = "pointer";
+  }
 
   const popoverAt = (world: ScreenPoint): ScreenPoint =>
     viewport ? worldToScreen(viewport, world.x, world.y) : { x: 0, y: 0 };

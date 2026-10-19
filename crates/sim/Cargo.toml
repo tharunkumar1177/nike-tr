@@ -12,8 +12,6 @@ name = "tron_sim"
 [dependencies]
 libloading = { workspace = true }
 tron-core = { workspace = true }
-
-[dev-dependencies]
 uuid = { workspace = true }
 
 [lints.rust]

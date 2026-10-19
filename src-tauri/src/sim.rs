@@ -5,11 +5,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tron_core::Xy;
-use tron_sim::{Analysis, Engine, OpAnchors, OpKind, OpValue, Plot, deck, op_anchors};
+use tron_core::{Nm, Point, Xy};
+use tron_sim::{
+    Analysis, Engine, OpAnchors, OpKind, OpValue, Plot, Probe, ProbeMap, deck, op_anchors,
+    probe_map,
+};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -93,6 +96,39 @@ impl From<OpValue> for OpAnnotation {
     }
 }
 
+/// A schematic item the probe tool clicked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(export)]
+pub enum ProbeTarget {
+    /// A wire, label, junction, or symbol body.
+    Item { uuid: Uuid },
+    /// The pin of the symbol `symbol` that connects at `position`.
+    Pin { symbol: Uuid, position: Xy },
+}
+
+/// What a probed item measures in a run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[ts(export)]
+pub enum ProbeResult {
+    /// A result vector to plot.
+    Vector {
+        /// As `fetch_waveform` names it, such as `/out` or `v1#branch`.
+        vector: String,
+        /// The net name of a voltage, or the symbol reference of a current.
+        label: String,
+        quantity: OpAnnotationKind,
+    },
+    /// The ground net, which is always 0 V.
+    Ground,
+    /// A device whose current ngspice doesn't report, which is any but a voltage source or
+    /// an inductor.
+    NoCurrent { reference: String },
+    /// An item that isn't part of the simulated circuit.
+    NotSimulated,
+}
+
 #[derive(Default)]
 pub struct SimState {
     inner: Mutex<SimInner>,
@@ -104,6 +140,8 @@ struct Results {
     plot: Plot,
     /// Where each operating-point value is shown, found from the schematic that ran.
     anchors: OpAnchors,
+    /// What each item of the schematic that ran measures.
+    probes: ProbeMap,
 }
 
 #[derive(Default)]
@@ -152,6 +190,78 @@ impl SimInner {
         }
         let values = results.anchors.values(&results.plot);
         Ok(values.into_iter().map(OpAnnotation::from).collect())
+    }
+
+    /// What `target` measures in run `run_id`.
+    fn resolve_probe(&self, run_id: Uuid, target: ProbeTarget) -> Result<ProbeResult, AppError> {
+        let results = self.results(run_id)?;
+        let probe = match target {
+            ProbeTarget::Item { uuid } => results.probes.item(uuid),
+            ProbeTarget::Pin { symbol, position } => {
+                let at = Point {
+                    x: Nm(position.0),
+                    y: Nm(position.1),
+                };
+                results.probes.pin(symbol, at)
+            }
+        };
+        let find = |name: &str| {
+            let vectors = &results.plot.vectors;
+            let found = vectors.iter().find(|v| v.name.eq_ignore_ascii_case(name));
+            found.map(|vector| vector.name.clone())
+        };
+        Ok(match probe {
+            None => ProbeResult::NotSimulated,
+            Some(Probe::Ground) => ProbeResult::Ground,
+            Some(Probe::Node { node, net }) => match find(node) {
+                Some(vector) => ProbeResult::Vector {
+                    vector,
+                    label: net.clone(),
+                    quantity: OpAnnotationKind::Voltage,
+                },
+                None => ProbeResult::NotSimulated,
+            },
+            Some(Probe::Device { device, reference }) => match find(&format!("{device}#branch")) {
+                Some(vector) => ProbeResult::Vector {
+                    vector,
+                    label: reference.clone(),
+                    quantity: OpAnnotationKind::Current,
+                },
+                None => ProbeResult::NoCurrent {
+                    reference: reference.clone(),
+                },
+            },
+        })
+    }
+
+    /// The vector `vector` of run `run_id` between `min_x` and `max_x`, where a missing
+    /// bound means the end of the run, reduced to at most `budget` samples.
+    fn waveform(
+        &self,
+        run_id: Uuid,
+        vector: &str,
+        min_x: Option<f64>,
+        max_x: Option<f64>,
+        budget: u32,
+    ) -> Result<Vec<WaveformPoint>, AppError> {
+        let plot = &self.results(run_id)?.plot;
+        let budget = budget.min(MAX_WAVEFORM_POINTS) as usize;
+        let min_x = min_x.unwrap_or(f64::NEG_INFINITY);
+        let max_x = max_x.unwrap_or(f64::INFINITY);
+        let samples = plot.waveform(vector, min_x, max_x, budget).ok_or_else(|| {
+            AppError::new(
+                AppErrorKind::SimNotFound,
+                format!("The simulation has no signal named {vector}."),
+                None,
+            )
+        })?;
+        Ok(samples
+            .into_iter()
+            .map(|sample| WaveformPoint {
+                x: sample.x,
+                y: sample.y,
+            })
+            .collect())
     }
 }
 
@@ -220,11 +330,12 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
     let path = ngspice_path(&app)?;
     let code_models = code_model_dir(&path)?;
     let state = app.state::<AppState>();
-    let (deck, anchors, cancel, generation) = state.with_session(|session| {
+    let (deck, anchors, probes, cancel, generation) = state.with_session(|session| {
         let project = session.project();
         let analysis = project.analysis().map(Analysis::from);
         let deck = deck(project.schematic(), analysis.as_ref())?;
         let anchors = op_anchors(project.schematic(), &deck)?;
+        let probes = probe_map(project.schematic(), &deck)?;
         let sim = app.state::<SimState>();
         let mut inner = sim.lock();
         if inner.running.is_some() {
@@ -236,7 +347,7 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
         }
         let cancel = Arc::new(AtomicBool::new(false));
         inner.running = Some(Arc::clone(&cancel));
-        Ok((deck, anchors, cancel, inner.generation))
+        Ok((deck, anchors, probes, cancel, inner.generation))
     })??;
 
     let emitter = app.clone();
@@ -279,6 +390,7 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
         run_id,
         plot,
         anchors,
+        probes,
     });
     Ok(finished)
 }
@@ -300,36 +412,29 @@ pub async fn cancel_simulation(app: AppHandle) -> Result<(), AppError> {
     .map_err(|error| unexpected("The simulation could not be cancelled.", error))
 }
 
-/// The vector `vector` of run `run_id` between `min_x` and `max_x`, reduced to at most
-/// `budget` samples (capped at `MAX_WAVEFORM_POINTS`) so peaks stay visible.
+/// The vector `vector` of run `run_id` between `min_x` and `max_x`, where a missing bound
+/// means the end of the run, reduced to at most `budget` samples (capped at
+/// `MAX_WAVEFORM_POINTS`) so peaks stay visible.
 #[tauri::command]
 pub fn fetch_waveform(
     state: State<'_, SimState>,
     run_id: Uuid,
     vector: String,
-    min_x: f64,
-    max_x: f64,
+    min_x: Option<f64>,
+    max_x: Option<f64>,
     budget: u32,
 ) -> Result<Vec<WaveformPoint>, AppError> {
-    let inner = state.lock();
-    let plot = &inner.results(run_id)?.plot;
-    let budget = budget.min(MAX_WAVEFORM_POINTS) as usize;
-    let samples = plot
-        .waveform(&vector, min_x, max_x, budget)
-        .ok_or_else(|| {
-            AppError::new(
-                AppErrorKind::SimNotFound,
-                format!("The simulation has no signal named {vector}."),
-                None,
-            )
-        })?;
-    Ok(samples
-        .into_iter()
-        .map(|sample| WaveformPoint {
-            x: sample.x,
-            y: sample.y,
-        })
-        .collect())
+    state.lock().waveform(run_id, &vector, min_x, max_x, budget)
+}
+
+/// What the probed item `target` measures in run `run_id`.
+#[tauri::command]
+pub fn resolve_probe(
+    state: State<'_, SimState>,
+    run_id: Uuid,
+    target: ProbeTarget,
+) -> Result<ProbeResult, AppError> {
+    state.lock().resolve_probe(run_id, target)
 }
 
 /// The operating-point values of run `run_id`, each with where the schematic shows it.
@@ -381,6 +486,7 @@ mod tests {
             run_id: Uuid::nil(),
             plot,
             anchors: OpAnchors::default(),
+            probes: ProbeMap::default(),
         });
         state.invalidate();
         let inner = state.lock();
@@ -403,10 +509,84 @@ mod tests {
             run_id: Uuid::nil(),
             plot: transient,
             anchors: OpAnchors::default(),
+            probes: ProbeMap::default(),
         });
         assert!(inner.op_annotations(Uuid::nil()).unwrap().is_empty());
         let stale = inner.op_annotations(Uuid::from_u128(1)).unwrap_err();
         assert_eq!(stale.kind, AppErrorKind::SimNotFound);
+    }
+
+    fn transient(vectors: &[(&str, &[f64])]) -> SimInner {
+        let plot = Plot {
+            name: "tran1".to_owned(),
+            scale: Some("time".to_owned()),
+            vectors: vectors
+                .iter()
+                .map(|(name, values)| Vector {
+                    name: (*name).to_owned(),
+                    values: values.to_vec(),
+                })
+                .collect(),
+        };
+        SimInner {
+            results: Some(Results {
+                run_id: Uuid::nil(),
+                plot,
+                anchors: OpAnchors::default(),
+                probes: ProbeMap::default(),
+            }),
+            ..SimInner::default()
+        }
+    }
+
+    #[test]
+    fn a_waveform_without_bounds_covers_the_whole_run() {
+        let time: &[f64] = &[0.0, 1e-3, 2e-3];
+        let inner = transient(&[("time", time), ("/out", &[0.0, 1.0, 4.0])]);
+        let points = inner
+            .waveform(Uuid::nil(), "/out", None, None, 100)
+            .unwrap();
+        let xs: Vec<f64> = points.iter().map(|point| point.x).collect();
+        assert_eq!(xs, vec![0.0, 1e-3, 2e-3]);
+        let missing = inner.waveform(Uuid::nil(), "/in", None, None, 100);
+        assert_eq!(missing.unwrap_err().kind, AppErrorKind::SimNotFound);
+    }
+
+    #[test]
+    fn a_probe_needs_the_current_run_and_a_simulated_item() {
+        let inner = transient(&[("time", &[0.0])]);
+        let target = ProbeTarget::Item {
+            uuid: Uuid::from_u128(7),
+        };
+        let stale = inner.resolve_probe(Uuid::from_u128(1), target);
+        assert_eq!(stale.unwrap_err().kind, AppErrorKind::SimNotFound);
+        let outside = inner.resolve_probe(Uuid::nil(), target).unwrap();
+        assert_eq!(outside, ProbeResult::NotSimulated);
+    }
+
+    #[test]
+    fn probe_targets_and_results_match_the_ui_shapes() {
+        let pin: ProbeTarget = serde_json::from_value(serde_json::json!({
+            "kind": "pin",
+            "symbol": "00000000-0000-0000-0000-000000000007",
+            "position": [1_270_000, 2_540_000]
+        }))
+        .unwrap();
+        assert_eq!(
+            pin,
+            ProbeTarget::Pin {
+                symbol: Uuid::from_u128(7),
+                position: Xy(1_270_000, 2_540_000),
+            }
+        );
+        let result = ProbeResult::NoCurrent {
+            reference: "R1".to_owned(),
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "kind": "noCurrent", "reference": "R1" })
+        );
     }
 
     #[test]

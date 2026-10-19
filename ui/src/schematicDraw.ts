@@ -19,6 +19,7 @@ import type { WireSegment } from "./bindings/WireSegment";
 import type { Xy } from "./bindings/Xy";
 import { MIN_LINE_PX, drawShape } from "./drawShapes";
 import type { Bounds } from "./libraryPreview";
+import type { ProbeOutline } from "./probe";
 import { formatOpValue } from "./si";
 import {
   type Pose,
@@ -81,6 +82,8 @@ export interface SceneState {
   markersStale: boolean;
   /** Operating point results, drawn over everything but the previews. */
   annotations: OpAnnotation[];
+  /** What the probe tool would measure, while it is active. */
+  probeHover: ProbeOutline | null;
   gridSizeNm: number;
 }
 
@@ -174,6 +177,8 @@ const JUNCTION_PX = 6;
 const LABEL_ANCHOR_PX = 3;
 const SNAP_RING_PX = 8;
 const SNAP_DOT_PX = 4;
+const PROBE_OUTLINE_PX = 2;
+const PROBE_SEGMENT_ALPHA = 0.5;
 
 const GHOST_ALPHA = 0.5;
 const SELECTION_DASH = [4, 4];
@@ -282,6 +287,45 @@ function drawSelectionBox(
     bottomRight.x - topLeft.x + 2 * paddingPx,
     bottomRight.y - topLeft.y + 2 * paddingPx,
   );
+  context.restore();
+}
+
+/** Outlines what the probe tool would measure, `paddingPx` clear of it. */
+function drawProbeOutline(
+  context: CanvasRenderingContext2D,
+  viewport: Viewport,
+  outline: ProbeOutline,
+  color: string,
+  paddingPx: number,
+) {
+  context.save();
+  context.strokeStyle = color;
+  context.lineWidth = PROBE_OUTLINE_PX;
+  context.beginPath();
+  if (outline.shape === "circle") {
+    const { x, y } = outline.center;
+    const at = worldToScreen(viewport, x, y);
+    context.arc(at.x, at.y, SNAP_RING_PX / 2, 0, 2 * Math.PI);
+    context.stroke();
+  } else if (outline.shape === "segment") {
+    const start = worldToScreen(viewport, outline.start.x, outline.start.y);
+    const end = worldToScreen(viewport, outline.end.x, outline.end.y);
+    context.moveTo(start.x, start.y);
+    context.lineTo(end.x, end.y);
+    context.lineWidth = WIRE_PX + 2 * PROBE_OUTLINE_PX;
+    context.globalAlpha = PROBE_SEGMENT_ALPHA;
+    context.stroke();
+  } else {
+    const { bounds } = outline;
+    const topLeft = worldToScreen(viewport, bounds.minX, bounds.minY);
+    const bottomRight = worldToScreen(viewport, bounds.maxX, bounds.maxY);
+    context.strokeRect(
+      topLeft.x - paddingPx,
+      topLeft.y - paddingPx,
+      bottomRight.x - topLeft.x + 2 * paddingPx,
+      bottomRight.y - topLeft.y + 2 * paddingPx,
+    );
+  }
   context.restore();
 }
 
@@ -666,6 +710,16 @@ export function drawSchematicScene(
 
   if (scene.snap) {
     drawSnap(context, viewport, scene.snap, focus, textSecondary);
+  }
+
+  if (scene.probeHover) {
+    drawProbeOutline(
+      context,
+      viewport,
+      scene.probeHover,
+      focus,
+      selectionPadding,
+    );
   }
 
   const ghost = scene.ghost;

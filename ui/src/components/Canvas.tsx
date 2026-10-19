@@ -52,6 +52,8 @@ export interface CanvasInteraction {
   onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
 }
 
+export type SceneCursor = "pointer" | "grabbing" | "crosshair";
+
 interface CanvasProps {
   label: string;
   viewport: Viewport | null;
@@ -65,8 +67,8 @@ interface CanvasProps {
     size: Size,
     viewport: Viewport,
   ) => void;
-  /** Cursor while not panning: over a symbol or dragging one. */
-  sceneCursor?: "pointer" | "grabbing" | null;
+  /** Cursor while not panning: over a symbol, dragging one, or probing. */
+  sceneCursor?: SceneCursor | null;
   interaction?: CanvasInteraction | null;
   /** Accept drops from the library browser while a symbol drag is active. */
   dropActive?: boolean;

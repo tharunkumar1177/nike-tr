@@ -4,7 +4,7 @@ mod common;
 
 use common::{Circuit, divider};
 use tron_core::{Nm, Point};
-use tron_sim::{Analysis, OpKind, OpValue, Plot, Vector, deck, op_anchors};
+use tron_sim::{Analysis, OpKind, OpValue, Plot, Probe, Vector, deck, op_anchors, probe_map};
 
 fn at(x_mm: f64, y_mm: f64) -> Point {
     Point {
@@ -74,6 +74,54 @@ fn an_unlabelled_net_uses_the_middle_of_its_longest_wire() {
     // The source's top net runs 25.4 mm across the top; the divider's middle net has two
     // 3.81 mm wires, and the first in the file wins.
     assert_eq!(positions, vec![at(63.5, 53.34), at(76.2, 62.865)]);
+}
+
+fn node(node: &str, net: &str) -> Probe {
+    Probe::Node {
+        node: node.to_owned(),
+        net: net.to_owned(),
+    }
+}
+
+#[test]
+fn probes_resolve_each_item_to_its_net_or_device() {
+    let schematic = divider().schematic();
+    let deck = deck(&schematic, Some(&Analysis::OperatingPoint)).unwrap();
+    let map = probe_map(&schematic, &deck).unwrap();
+
+    let wires = schematic.wires();
+    assert!(wires.iter().all(|wire| map.item(wire.uuid).is_some()));
+    let out_end = at(76.2, 64.77);
+    let out_wire = wires
+        .iter()
+        .find(|wire| wire.start == out_end || wire.end == out_end)
+        .unwrap();
+    assert_eq!(map.item(out_wire.uuid), Some(&node("/out", "/OUT")));
+
+    let labels: Vec<Option<&Probe>> = schematic
+        .labels()
+        .iter()
+        .map(|label| map.item(label.uuid))
+        .collect();
+    let vin = node("vin", "VIN");
+    let out = node("/out", "/OUT");
+    assert_eq!(labels.len(), 2);
+    assert!(labels.contains(&Some(&vin)) && labels.contains(&Some(&out)));
+
+    let symbols = schematic.symbols();
+    let source = symbols.iter().find(|s| s.reference() == "V1").unwrap();
+    let source_device = Probe::Device {
+        device: "v1".to_owned(),
+        reference: "V1".to_owned(),
+    };
+    assert_eq!(map.item(source.uuid), Some(&source_device));
+    assert_eq!(map.pin(source.uuid, at(50.8, 58.42)), Some(&vin));
+    assert_eq!(map.pin(source.uuid, at(50.8, 68.58)), Some(&Probe::Ground));
+    let resistor = symbols.iter().find(|s| s.reference() == "R1").unwrap();
+    let Some(Probe::Device { reference, .. }) = map.item(resistor.uuid) else {
+        panic!("R1 has no device probe");
+    };
+    assert_eq!(reference, "R1");
 }
 
 #[test]

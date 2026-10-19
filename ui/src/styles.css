@@ -614,13 +614,96 @@ body,
   color: var(--color-text-secondary);
 }
 
-.sim-panel__done {
-  flex-direction: row;
-}
-
 .sim-panel__progress {
   width: 240px;
   accent-color: var(--color-primary);
+}
+
+.sim-panel--plotting {
+  height: 320px;
+}
+
+.sim-panel__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.waveform {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.waveform--stale {
+  opacity: 0.5;
+}
+
+.waveform__plot {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.waveform__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.waveform__message {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.waveform__legend {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  max-width: 60%;
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface-elevated) 80%, #0000);
+  font-size: var(--text-xs);
+  list-style: none;
+}
+
+.waveform__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.waveform__item--missing {
+  opacity: 0.5;
+}
+
+.waveform__swatch {
+  width: 12px;
+  height: 0;
+  border-top: 2px solid currentcolor;
+}
+
+.waveform__item--missing .waveform__swatch {
+  border-top-style: dashed;
 }
 
 .sim-row {
@@ -760,6 +843,10 @@ button.sim-row:focus-visible {
 
 .canvas--grabbing {
   cursor: grabbing;
+}
+
+.canvas--crosshair {
+  cursor: crosshair;
 }
 
 .canvas:focus {

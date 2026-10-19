@@ -97,6 +97,16 @@ export function NoConnectIcon() {
   );
 }
 
+export function ProbeIcon() {
+  return (
+    <Icon>
+      <path d="M14 4l6 6" />
+      <path d="M17 7l-8 8-3-3 8-8" />
+      <path d="M7.5 13.5 3 20" />
+    </Icon>
+  );
+}
+
 export function PowerIcon() {
   return (
     <Icon>
