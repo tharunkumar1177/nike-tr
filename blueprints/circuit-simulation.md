@@ -178,6 +178,56 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
 - **Bundled ngspice in an installed app (unverified):** CI checks that the files are bundled but never runs the installed app. Still unverified: an install under `Program Files`, an install path with non-ASCII characters (ngspice receives a narrow-string path), and a path that contains `'` (rejected by design).
 - **Progress on very long transients (unexplained):** a 0.1 s transient with a 0.1 µs maximum step reports progress midway. A 2 s transient with the same step reported none in its first 10 s on the CI runner ([CI 38594420004](https://github.com/tharunkumar1177/tron/actions/runs/38594420004)). The cause is unknown, so the 5d UI must not treat a run without progress as stuck, and should show elapsed time as well.
 - **F5 in the installed app (unverified):** F5 and `Ctrl+Alt+S` rely on the native menu accelerators, like the other shortcuts. CI can't confirm that WebView2 passes F5 to the menu instead of handling it itself.
+- **5d-2 contract decisions (user, 2026-10-19):**
+  - `fetch_waveform`'s `minX` and `maxX` become optional, and a missing bound means the full range.
+  - The deck does **not** add `.options savecurrents`. Only voltage sources and inductors (`<dev>#branch`) give currents, and probing any other device shows "No current available".
+  - A probe is sent as the clicked item's ID (wire, label, junction, pin, or symbol). The backend resolves it against the netlist saved with the run, never the current schematic.
+- **5d-2 plan (architect, 2026-10-19).**
+  1. **`crates/sim/src/op.rs` `ProbeMap`.** Built with `OpAnchors` from the same schematic and deck, and stored with the run. It maps net-item UUIDs (wires, labels, junctions) to their SPICE node, `(symbol uuid, pin number)` to its node, and symbol UUIDs to their device name. Test `probe_map_resolves_targets` checks that a wire on the RC's capacitor node gives that node's vector and that a resistor body gives `NoCurrent`.
+  2. **IPC.**
+     - `fetch_waveform` takes `minX` and `maxX` as optional (`fetch_waveform_handles_none_range`).
+     - `resolve_probe(runId, target: ProbeTarget) -> ProbeResult`.
+       - `ProbeTarget` is `netItem { uuid }`, `pin { symbolUuid, pin }`, or `symbol { uuid }`.
+       - `ProbeResult` is `vector { vector, label, kind }`, `ground`, or `noCurrent { reference }`.
+       - A device gives its current only if the plot has `<dev>#branch`.
+       - A missing or stale run gives `simNotFound`.
+  3. **Probe tool.** `"probe"` becomes a `CanvasTool`. A click checks pins first, then wires, labels, and junctions, then symbol bodies. `ground` and `noCurrent` show as status hints, not errors. A `vector` result is added to `probedVectors` in `EditorShell`, keyed by vector name, and it persists across runs.
+  4. **`WaveformViewer.tsx` inside `SimPanel`.** Plain canvas 2D with no new dependency. Voltages use the left axis and currents the right. The fetch budget is the canvas CSS width, capped at `MAX_WAVEFORM_POINTS`, and the viewer re-fetches when resized. Each legend item removes its trace when clicked, and a vector missing from the current run shows "No data". An `.op` run shows a fallback message instead of the viewer.
+- **5d-2 probe tool design (designer, 2026-10-19).**
+  - **Toolbar:** an IconButton "Probe signal" (shortcut `V`, `ProbeIcon`) after the no-connect flag, with `aria-pressed`.
+  - **Availability:** always enabled. Without a usable run, a click shows the stale-run notice.
+  - **Hover:** a crosshair cursor, and the target is outlined with a 2 px `--color-focus` stroke: a circle for a pin, the segment for a wire, the bounding box for a symbol.
+  - **Clicks:** clicking a plotted signal removes it. The tool stays active until Esc or another tool.
+  - **Status hint:** "Click a wire or pin for voltage, or a symbol for current. Esc: Exit". The designer's text said "a pin for current", which contradicts the plan, so it was corrected.
+  - **Notices** (status bar and `aria-live`):
+    - "Probe mode started." and "Probe mode ended." (screen reader only)
+    - "Probed voltage at {label}." and "Probed current through {reference}."
+    - "Removed probe from {label}."
+    - "Ground is always 0 V."
+    - "No current available for {reference}."
+    - "Simulation out of date or not found. Run a simulation to plot."
+- **5d-2 waveform viewer design (designer, 2026-10-19).**
+  - **Panel layout:**
+    - The run status (the completion text or progress bar) moves into `.sim-panel__header` in place of the "Simulation" title, while a run is active or finished.
+    - `.sim-panel__content` holds `WaveformViewer`.
+    - The panel is 240 px tall, or 320 px once at least one trace exists. There is no resize handle until 5d-3.
+    - Running, cancelled, and failed runs show the existing message or error row instead of the canvas.
+  - **Plot:**
+    - Time runs along the bottom. Voltage is on the left axis, shown only if a voltage trace exists, and current is on the right axis, likewise.
+    - Each axis gets 5 ticks, labelled with `formatSi(value)` plus `s`, `V`, or `A`.
+    - Gridlines use `--color-grid-line`, and the 0 V and 0 A lines use `--color-grid-line-major`. The background is `--color-canvas`.
+    - Traces are 1.5 px wide. Their colors cycle through `--color-focus`, `--color-text-warning`, `--color-text-error`, and `--color-text-primary` (`index % 4`).
+    - A `ResizeObserver` re-fetches the data with the canvas width as the budget.
+  - **Legend:**
+    - It sits absolutely positioned at the top right in a wrapping row, on `--color-surface-elevated` at 80% opacity with a `--color-border` outline and `--radius-md`.
+    - Each item has a 12×2 px color swatch, its label, and an `icon-button` with `RemoveIcon` labelled "Remove {label} from plot".
+    - A vector missing from the current run gets 0.5 opacity, a dashed swatch, and "{label} (No data)".
+  - **States:**
+    - Finished with no traces: "Simulation complete. Select the Probe tool and click a wire or pin to plot its signal."
+    - `.op` runs: "Waveforms are not available for Operating Point (.op) analysis. Read the values directly from the schematic annotations."
+    - Loading: "Fetching data...". Fetch error: "Failed to load waveform data."
+    - When the results are out of date, the viewer drops to 0.5 opacity.
+  - **Accessibility:** a visually hidden `ul` labelled "Waveform results" reads each trace, for example "Voltage /OUT: minimum -3.30 V, maximum 3.30 V" or "Current I(V1): No data".
 - **`.ac` analysis:** the user decided on 2026-10-19 that AC gets its own sub-slice, **5d-4**, after 5d-3. It covers the engine, the settings, and a Bode plot, and it owns the "`.ac` −3 dB" criterion.
 - The `start_simulation`, `cancel_simulation`, and `fetch_waveform` commands have no test through Tauri itself. The engine, decimation, settings, and error mapping beneath them are tested.
 
