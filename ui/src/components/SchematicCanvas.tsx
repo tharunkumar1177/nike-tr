@@ -21,6 +21,7 @@ import type { LibraryHit } from "../bindings/LibraryHit";
 import type { MirrorAxis } from "../bindings/MirrorAxis";
 import type { NetLabel } from "../bindings/NetLabel";
 import type { NoConnectFlag } from "../bindings/NoConnectFlag";
+import type { OpAnnotation } from "../bindings/OpAnnotation";
 import type { SymbolField } from "../bindings/SymbolField";
 import type { SymbolInstance } from "../bindings/SymbolInstance";
 import type { SymbolPreview } from "../bindings/SymbolPreview";
@@ -50,7 +51,9 @@ import {
   type LabelAppearance,
   MARKER_PX,
   drawSchematicScene,
+  opAnnotationOrigins,
 } from "../schematicDraw";
+import { formatOpValue } from "../si";
 import {
   findInstanceAt,
   normalizeSteps,
@@ -179,6 +182,17 @@ function countOf(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+function unitOf(annotation: OpAnnotation): string {
+  return annotation.kind === "voltage" ? "V" : "A";
+}
+
+function describeOpAnnotation(annotation: OpAnnotation): string {
+  const value = formatOpValue(annotation.value, annotation.kind);
+  return annotation.kind === "voltage"
+    ? `Voltage at ${annotation.label}: ${value}`
+    : `Current through ${annotation.label}: ${value}`;
+}
+
 interface SchematicCanvasProps {
   label: string;
   viewport: Viewport | null;
@@ -210,6 +224,8 @@ interface SchematicCanvasProps {
   ercStale: boolean;
   selectedMarkerId: string | null;
   onSelectMarker: (id: string | null) => void;
+  /** Operating point results to show beside their nets and devices. */
+  opAnnotations: OpAnnotation[];
   /** A world point to center the view on, such as a chosen violation. */
   focusRequest: Xy | null;
   onFocusRequestConsumed: () => void;
@@ -247,6 +263,7 @@ export function SchematicCanvas({
   ercStale,
   selectedMarkerId,
   onSelectMarker,
+  opAnnotations,
   focusRequest,
   onFocusRequestConsumed,
   onHintChange,
@@ -1110,6 +1127,7 @@ export function SchematicCanvas({
         markers: ercMarkers,
         selectedMarkerId,
         markersStale: ercStale,
+        annotations: opAnnotations,
         gridSizeNm,
       });
     },
@@ -1117,6 +1135,7 @@ export function SchematicCanvas({
       ercMarkers,
       selectedMarkerId,
       ercStale,
+      opAnnotations,
       definitions,
       instances,
       wires,
@@ -1140,6 +1159,8 @@ export function SchematicCanvas({
     viewport ? worldToScreen(viewport, world.x, world.y) : { x: 0, y: 0 };
 
   const refocus = () => containerRef.current?.focus();
+
+  const opOrigins = viewport ? opAnnotationOrigins(viewport, opAnnotations) : [];
 
   const wiringSummary = [
     countOf(wires.length, "wire"),
@@ -1252,9 +1273,33 @@ export function SchematicCanvas({
           onCancel={() => setPropertiesDialog(null)}
         />
       )}
+      {opOrigins.length > 0 && (
+        <div className="op-annotations" aria-hidden="true">
+          {opAnnotations.map((annotation, index) => {
+            const origin = opOrigins[index];
+            return origin ? (
+              <span
+                key={annotation.vector}
+                className="op-annotations__box"
+                style={{ left: origin.x, top: origin.y }}
+                title={`${annotation.label}: ${annotation.value} ${unitOf(annotation)}`}
+              >
+                {formatOpValue(annotation.value, annotation.kind)}
+              </span>
+            ) : null;
+          })}
+        </div>
+      )}
       <div className="visually-hidden" aria-live="polite">
         {announcement}
       </div>
+      {opAnnotations.length > 0 && (
+        <ul className="visually-hidden" aria-label="Operating point results">
+          {opAnnotations.map((annotation) => (
+            <li key={annotation.vector}>{describeOpAnnotation(annotation)}</li>
+          ))}
+        </ul>
+      )}
       <ul className="visually-hidden" aria-label="Placed symbols">
         {instances.map((instance) => (
           <li key={instance.uuid}>

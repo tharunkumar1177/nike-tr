@@ -105,7 +105,7 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
        - `start_simulation` computes the anchors from the same schematic the deck came from and stores them with the plot.
        - `fetch_op_annotations(runId) -> OpAnnotation[]`, where `OpAnnotation` is `{ vector, kind: "voltage" | "current", label, value, position: Xy }`. It returns nothing for a transient. Values are formatted in the UI.
      - **5d-1b UI.**
-       - The settings dialog, the run panel, and the annotations, per the design decisions below. `ui/src/utils/si.ts` parses and formats SI values.
+       - The settings dialog, the run panel, and the annotations, per the design decisions below. `ui/src/si.ts` parses and formats SI values.
        - The menu items "&Run Simulation" (`F5`), "&Cancel Simulation", and "Simulation Se&ttings..." (`CmdOrCtrl+Alt+S`) go under Tools, with IDs `run-simulation`, `cancel-simulation`, and `simulation-settings`. They ship only with the UI that handles them. Esc cancels in the UI while a run is active, but it is not a menu accelerator.
        - `App.tsx` owns the run state: idle, running, finished, cancelled, or failed, plus progress, elapsed time, and staleness. Any `document-changed` event marks the results out of date and clears the annotations.
      - **5d-1b UI design plans (designer, 2026-10-19).** These refine the design decisions below, and win where they differ.
@@ -120,7 +120,7 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
            - Final time: invalid, then ≤ 0 ("Must be greater than 0.").
            - Initial time: invalid, then < 0 ("Must be greater than or equal to 0."), then ≥ final ("Must be less than final time.").
            - Maximum time step, only when not empty: invalid, then ≤ 0, then > final − initial.
-         - `ui/src/utils/si.ts`:
+         - `ui/src/si.ts`:
            - `parseSi` accepts f, p, n, u, µ, m, k, Meg, G, and T (case-insensitive SPICE rules, so `M` means milli), plus the `4k7` form and plain or exponent numbers.
            - `formatSi` uses ASCII prefixes that round-trip: `1e-5` becomes `10u`, `2.5e-3` becomes `2.5m`, `0` stays `0`, `1.5e-7` becomes `150n`, and `10` stays `10`.
        - **Run panel.**
@@ -140,7 +140,7 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
          - The toolbar eye toggle "Show operating point annotations" (`aria-pressed`, on by default) sits before the zoom label.
 
    **5d-1 design decisions (designer, 2026-10-14; the full plans are in the session transcript).**
-   - **Settings dialog** (`SimulationSettingsDialog.tsx`, `ui/src/utils/si.ts`).
+   - **Settings dialog** (`SimulationSettingsDialog.tsx`, `ui/src/si.ts`).
      - It opens from a toolbar gear, a menu item, and `Ctrl+Alt+S`.
      - An "Analysis type" select offers "Operating Point (.op)" and "Transient (.tran)". The transient fields are "Time step", "Final time", "Initial time", "Maximum time step" (placeholder "Optional"), and "Start from initial conditions (UIC)".
      - Fields hold the raw SI text. Each field shows its own error ("Invalid SI number.", "Must be greater than 0.", "Must be greater than or equal to 0.", "Must be less than final time.", "Must not exceed final time minus initial time."), and OK is disabled while any error shows.

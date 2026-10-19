@@ -1581,4 +1581,160 @@ describe("Wiring", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+
+  function opResults(): HTMLElement | null {
+    return screen.queryByRole("list", { name: "Operating point results" });
+  }
+
+  it("runs an operating point from the Tools menu and annotates it", async () => {
+    const snapshot = wiredSnapshot();
+    const { calls } = await openSheet(
+      {
+        start_simulation: () => ({
+          runId: "run-1",
+          scale: null,
+          vectors: ["/out", "v1#branch"],
+        }),
+        fetch_op_annotations: () => [
+          {
+            vector: "/out",
+            kind: "voltage",
+            label: "/OUT",
+            value: 3.3,
+            position: [76_200_000, 64_770_000],
+          },
+          {
+            vector: "v1#branch",
+            kind: "current",
+            label: "V1",
+            value: -0.00125,
+            position: [50_800_000, 58_420_000],
+          },
+        ],
+      },
+      snapshot,
+    );
+
+    await emitFromCore("menu-action", "run-simulation");
+    const panel = await screen.findByRole("region", { name: "Simulation" });
+    expect(
+      await within(panel).findByText(/^Simulation complete in \d+\.\d s\.$/),
+    ).toBeTruthy();
+    expect(argsOf(calls, "fetch_op_annotations")).toEqual([
+      { runId: "run-1" },
+    ]);
+    const results = await screen.findByRole("list", {
+      name: "Operating point results",
+    });
+    const items = within(results).getAllByRole("listitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "Voltage at /OUT: 3.30 V",
+      "Current through V1: -1.25 mA",
+    ]);
+    expect(screen.getByTitle("/OUT: 3.3 V").textContent).toBe("3.30 V");
+
+    const eye = screen.getByRole("button", {
+      name: "Show operating point annotations",
+    });
+    expect(eye.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(eye);
+    expect(eye.getAttribute("aria-pressed")).toBe("false");
+    expect(opResults()).toBeNull();
+    fireEvent.click(eye);
+    expect(opResults()).not.toBeNull();
+
+    await emitFromCore("document-changed", {
+      baseRevision: snapshot.revision,
+      revision: snapshot.revision + 1,
+      titleBlock: null,
+      gridSizeNm: null,
+      definitions: null,
+      instances: null,
+      wires: null,
+      junctions: null,
+      labels: null,
+      noConnects: null,
+      ercSettings: false,
+      simulationSettingsChanged: false,
+      history: { ...snapshot.history, dirty: true },
+    });
+    expect(await within(panel).findByText("Out of date")).toBeTruthy();
+    expect(opResults()).toBeNull();
+  });
+
+  it("opens the settings from an analysis error and applies them", async () => {
+    const { calls } = await openSheet({
+      start_simulation: () => {
+        throw Object.assign(new Error("No simulation analysis is set."), {
+          kind: "simNoAnalysis",
+          detail: null,
+        });
+      },
+      edit_analysis_settings: () => null,
+    });
+
+    await emitFromCore("menu-action", "run-simulation");
+    const panel = await screen.findByRole("region", { name: "Simulation" });
+    fireEvent.click(
+      await within(panel).findByRole("button", {
+        name: "No simulation analysis is set.",
+      }),
+    );
+    expect(
+      screen.getByText("Simulation failed: No simulation analysis is set."),
+    ).toBeTruthy();
+    const dialog = await screen.findByRole("dialog", {
+      name: "Simulation Settings",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "OK" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(argsOf(calls, "edit_analysis_settings")).toEqual([
+      {
+        analysis: {
+          kind: "transient",
+          step: 1e-6,
+          stop: 1e-3,
+          start: 0,
+          maxStep: null,
+          initialConditions: false,
+        },
+      },
+    ]);
+  });
+
+  it("cancels a running simulation with Esc", async () => {
+    let finish: (error: unknown) => void = () => undefined;
+    const { calls } = await openSheet({
+      start_simulation: () =>
+        new Promise((_resolve, reject) => {
+          finish = reject;
+        }),
+      cancel_simulation: () => {
+        finish(
+          Object.assign(new Error("The simulation was cancelled."), {
+            kind: "simCancelled",
+            detail: null,
+          }),
+        );
+        return null;
+      },
+    });
+
+    await emitFromCore("menu-action", "run-simulation");
+    const panel = await screen.findByRole("region", { name: "Simulation" });
+    const progress = within(panel).getByRole("progressbar", {
+      name: "Simulation progress",
+    });
+    expect(progress.hasAttribute("value")).toBe(false);
+    await emitFromCore("simulation-progress", { percentage: 30 });
+    expect(progress.getAttribute("value")).toBe("30");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(
+      await within(panel).findByText("Simulation cancelled.", {
+        selector: "p",
+      }),
+    ).toBeTruthy();
+    expect(argsOf(calls, "cancel_simulation")).toHaveLength(1);
+  });
 });

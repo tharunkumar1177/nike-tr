@@ -108,6 +108,15 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         None,
         false,
     )?;
+    let run_simulation = item(app, "run-simulation", "&Run Simulation", Some("F5"), false)?;
+    let cancel_simulation = item(app, "cancel-simulation", "&Cancel Simulation", None, false)?;
+    let simulation_settings = item(
+        app,
+        "simulation-settings",
+        "Simulation Se&ttings...",
+        Some("CmdOrCtrl+Alt+S"),
+        false,
+    )?;
 
     let file = SubmenuBuilder::new(app, "&File")
         .item(&new_project)
@@ -137,6 +146,10 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         .item(&annotate_schematic)
         .item(&electrical_rules)
         .item(&erc_severities)
+        .separator()
+        .item(&run_simulation)
+        .item(&cancel_simulation)
+        .item(&simulation_settings)
         .build()?;
     let menu = MenuBuilder::new(app)
         .item(&file)
@@ -158,6 +171,9 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
             annotate_schematic,
             electrical_rules,
             erc_severities,
+            run_simulation,
+            cancel_simulation,
+            simulation_settings,
         ],
         undo,
         redo,

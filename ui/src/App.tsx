@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { AnalysisSettings } from "./bindings/AnalysisSettings";
 import type { AppInfo } from "./bindings/AppInfo";
 import type { ErcRuleSeverity } from "./bindings/ErcRuleSeverity";
 import type { ProjectProperties } from "./bindings/ProjectProperties";
@@ -18,6 +19,7 @@ import { ErrorDialog } from "./components/ErrorDialog";
 import { LibraryDialog } from "./components/LibraryDialog";
 import { ProjectLocationDialog } from "./components/ProjectLocationDialog";
 import { ProjectPropertiesDialog } from "./components/ProjectPropertiesDialog";
+import { SimulationSettingsDialog } from "./components/SimulationSettingsDialog";
 import { UnsavedChangesDialog } from "./components/UnsavedChangesDialog";
 import { type RecentState, WelcomeScreen } from "./components/WelcomeScreen";
 import {
@@ -25,9 +27,11 @@ import {
   type ErrorReport,
   MENU_EVENT,
   OPEN_RECENT_PREFIX,
+  cancelSimulation,
   closeProject,
   closeWindow,
   createProject,
+  editAnalysisSettings,
   editErcSeverities,
   editProjectProperties,
   getAppInfo,
@@ -65,6 +69,7 @@ type ModalState =
   | { type: "saveAs" }
   | { type: "properties" }
   | { type: "ercSeverities" }
+  | { type: "simulationSettings" }
   | { type: "unsaved"; next: LeaveAction }
   | {
       type: "error";
@@ -86,6 +91,7 @@ export function App() {
   const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
   const [annotateTicket, setAnnotateTicket] = useState(0);
   const [ercTicket, setErcTicket] = useState(0);
+  const [simulationTicket, setSimulationTicket] = useState(0);
   const libraryOffered = useRef(false);
   const closeLibraryDialog = useCallback(() => setLibraryDialogOpen(false), []);
 
@@ -309,6 +315,18 @@ export function App() {
     }
   }
 
+  async function applySimulationSettings(
+    analysis: AnalysisSettings,
+  ): Promise<ErrorReport | null> {
+    try {
+      await editAnalysisSettings(analysis);
+      setModal(null);
+      return null;
+    } catch (error) {
+      return toErrorReport(error);
+    }
+  }
+
   async function removeRecent(path: string) {
     try {
       const projects = await removeRecentProject(path);
@@ -411,6 +429,17 @@ export function App() {
       case "erc-rule-severities":
         setModal({ type: "ercSeverities" });
         return;
+      case "run-simulation":
+        setSimulationTicket((ticket) => ticket + 1);
+        return;
+      case "cancel-simulation":
+        cancelSimulation().catch((error: unknown) =>
+          showError("Couldn't cancel the simulation", error),
+        );
+        return;
+      case "simulation-settings":
+        setModal({ type: "simulationSettings" });
+        return;
     }
   }
 
@@ -475,6 +504,14 @@ export function App() {
         return project ? (
           <ErcSeveritiesDialog
             onApply={applyErcSeverities}
+            onCancel={dismiss}
+          />
+        ) : null;
+      case "simulationSettings":
+        return project ? (
+          <SimulationSettingsDialog
+            settings={project.simulationSettings}
+            onApply={applySimulationSettings}
             onCancel={dismiss}
           />
         ) : null;
@@ -551,6 +588,10 @@ export function App() {
         annotateTicket={annotateTicket}
         ercTicket={ercTicket}
         ercSettingsVersion={ercSettingsVersion}
+        simulationTicket={simulationTicket}
+        onOpenSimulationSettings={() =>
+          setModal({ type: "simulationSettings" })
+        }
         onViewportChange={updateViewport}
         onCanvasResize={setCanvasSize}
         onUndo={() => void runHistory(undo, "Couldn't undo")}
