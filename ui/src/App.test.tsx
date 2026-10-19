@@ -1775,9 +1775,7 @@ describe("Wiring", () => {
 
     clickAt(canvas, PIN_1);
     const table = await within(panel).findByRole("table");
-    expect(
-      within(table).getByRole("rowheader", { name: "/OUT" }),
-    ).toBeTruthy();
+    expect(within(table).getByRole("rowheader", { name: "/OUT" })).toBeTruthy();
     expect(argsOf(calls, "resolve_probe")).toEqual([
       {
         runId: "run-2",
