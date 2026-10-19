@@ -10,6 +10,7 @@ import {
   NoConnectIcon,
   PlayIcon,
   PowerIcon,
+  ProbeIcon,
   PropertiesIcon,
   RedoIcon,
   SettingsIcon,
@@ -64,7 +65,8 @@ interface ToolbarProps {
   wireMode: boolean;
   onToggleWireMode: () => void;
   noConnectMode: boolean;
-  /** Starts a canvas tool; for `noConnect`, toggles the mode. */
+  probeMode: boolean;
+  /** Starts a canvas tool; for `noConnect` and `probe`, toggles the mode. */
   onStartTool: (tool: CanvasTool) => void;
   simulationRunning: boolean;
   onRunSimulation: () => void;
@@ -88,6 +90,7 @@ export function Toolbar({
   wireMode,
   onToggleWireMode,
   noConnectMode,
+  probeMode,
   onStartTool,
   simulationRunning,
   onRunSimulation,
@@ -182,6 +185,15 @@ export function Toolbar({
           onClick={() => onStartTool("noConnect")}
         >
           <NoConnectIcon />
+        </IconButton>
+        <IconButton
+          label="Probe signal"
+          shortcut="M"
+          pressed={probeMode}
+          disabled={disabled}
+          onClick={() => onStartTool("probe")}
+        >
+          <ProbeIcon />
         </IconButton>
         <span className="toolbar__separator" aria-hidden="true" />
         <IconButton

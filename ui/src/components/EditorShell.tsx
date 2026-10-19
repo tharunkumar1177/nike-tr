@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ErcViolation } from "../bindings/ErcViolation";
 import type { LibraryHit } from "../bindings/LibraryHit";
 import type { OpAnnotation } from "../bindings/OpAnnotation";
+import type { ProbeResult } from "../bindings/ProbeResult";
+import type { ProbeTarget } from "../bindings/ProbeTarget";
 import type { ProjectSnapshot } from "../bindings/ProjectSnapshot";
 import type { SimulationProgress } from "../bindings/SimulationProgress";
 import type { Xy } from "../bindings/Xy";
@@ -10,6 +12,7 @@ import {
   cancelSimulation,
   describeIpcError,
   fetchOpAnnotations,
+  resolveProbe,
   runErc,
   startSimulation,
   subscribe,
@@ -53,6 +56,8 @@ const NO_MARKERS: ErcMarker[] = [];
 const NO_ANNOTATIONS: OpAnnotation[] = [];
 const IDLE: SimRun = { state: "idle" };
 const ELAPSED_TICK_MS = 100;
+const NO_RUN_NOTICE =
+  "Simulation out of date or not found. Run a simulation to plot.";
 
 function countOf(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -127,6 +132,7 @@ export function EditorShell({
   const [symbolDrag, setSymbolDrag] = useState<LibraryHit | null>(null);
   const [wireMode, setWireMode] = useState(false);
   const [noConnectMode, setNoConnectMode] = useState(false);
+  const [probeMode, setProbeMode] = useState(false);
   const [toolRequest, setToolRequest] = useState<CanvasTool | null>(null);
   const zoomLabel = viewport ? formatZoom(viewport.zoom) : "—";
 
@@ -255,6 +261,42 @@ export function EditorShell({
     return subscribe(SIMULATION_PROGRESS_EVENT, onProgress);
   }, []);
 
+  const probe = async (target: ProbeTarget): Promise<string> => {
+    if (run.state !== "finished" || simStale || run.result.scale === null) {
+      return NO_RUN_NOTICE;
+    }
+    let result: ProbeResult;
+    try {
+      result = await resolveProbe(run.result.runId, target);
+    } catch (error) {
+      if (toErrorReport(error).kind === "simNotFound") {
+        return NO_RUN_NOTICE;
+      }
+      throw error;
+    }
+    switch (result.kind) {
+      case "ground":
+        return "Ground is always 0 V.";
+      case "noCurrent":
+        return `No current available for ${result.reference}.`;
+      case "notSimulated":
+        return "No simulation data available for unsimulated item.";
+      case "vector": {
+        const { vector, label, quantity } = result;
+        setSimOpen(true);
+        setErcOpen(false);
+        if (traces.some((trace) => trace.vector === vector)) {
+          setTraces((shown) => shown.filter((item) => item.vector !== vector));
+          return `Removed probe from ${label}.`;
+        }
+        setTraces((shown) => [...shown, { vector, label, quantity }]);
+        return quantity === "voltage"
+          ? `Probed voltage at ${label}.`
+          : `Probed current through ${label}.`;
+      }
+    }
+  };
+
   const jumpToSymbol = (reference: string) => {
     const instance = project.instances.find(
       (item) => item.reference?.text === reference,
@@ -338,6 +380,7 @@ export function EditorShell({
         wireMode={wireMode}
         onToggleWireMode={() => setWireMode((active) => !active)}
         noConnectMode={noConnectMode}
+        probeMode={probeMode}
         onStartTool={setToolRequest}
         simulationRunning={simRunning}
         onRunSimulation={runSimulation}
@@ -371,6 +414,8 @@ export function EditorShell({
             wireMode={wireMode}
             onWireModeChange={setWireMode}
             onNoConnectModeChange={setNoConnectMode}
+            onProbeModeChange={setProbeMode}
+            onProbe={probe}
             annotateTicket={annotateTicket}
             library={library}
             onDownloadLibrary={onDownloadLibrary}

@@ -248,15 +248,13 @@ impl SimInner {
         let budget = budget.min(MAX_WAVEFORM_POINTS) as usize;
         let min_x = min_x.unwrap_or(f64::NEG_INFINITY);
         let max_x = max_x.unwrap_or(f64::INFINITY);
-        let samples = plot
-            .waveform(vector, min_x, max_x, budget)
-            .ok_or_else(|| {
-                AppError::new(
-                    AppErrorKind::SimNotFound,
-                    format!("The simulation has no signal named {vector}."),
-                    None,
-                )
-            })?;
+        let samples = plot.waveform(vector, min_x, max_x, budget).ok_or_else(|| {
+            AppError::new(
+                AppErrorKind::SimNotFound,
+                format!("The simulation has no signal named {vector}."),
+                None,
+            )
+        })?;
         Ok(samples
             .into_iter()
             .map(|sample| WaveformPoint {
@@ -426,9 +424,7 @@ pub fn fetch_waveform(
     max_x: Option<f64>,
     budget: u32,
 ) -> Result<Vec<WaveformPoint>, AppError> {
-    state
-        .lock()
-        .waveform(run_id, &vector, min_x, max_x, budget)
+    state.lock().waveform(run_id, &vector, min_x, max_x, budget)
 }
 
 /// What the probed item `target` measures in run `run_id`.

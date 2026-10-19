@@ -845,6 +845,10 @@ button.sim-row:focus-visible {
   cursor: grabbing;
 }
 
+.canvas--crosshair {
+  cursor: crosshair;
+}
+
 .canvas:focus {
   outline: none;
 }

@@ -198,7 +198,7 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
   - `ProbeResult` adds `notSimulated`, for items on nets the deck doesn't simulate. Its vector field is named `quantity`, because `kind` is the serde tag.
   - Any document change discards the stored results (`SimState::invalidate`), so once results are out of date they can't be probed or re-fetched. The viewer keeps the samples it already fetched, dims them, and doesn't re-fetch on resize.
 - **5d-2 probe tool design (designer, 2026-10-19).**
-  - **Toolbar:** an IconButton "Probe signal" (shortcut `V`, `ProbeIcon`) after the no-connect flag, with `aria-pressed`.
+  - **Toolbar:** an IconButton titled "Probe signal (M)" (`ProbeIcon`) after the no-connect flag, with `aria-pressed`. The designer first proposed `V`, but `V` opens the Value editor, so the shortcut is `M` (for measure).
   - **Availability:** always enabled. Without a usable run, a click shows the stale-run notice.
   - **Hover:** a crosshair cursor, and the target is outlined with a 2 px `--color-focus` stroke: a circle for a pin, the segment for a wire, the bounding box for a symbol.
   - **Clicks:** clicking a plotted signal removes it. The tool stays active until Esc or another tool.
@@ -209,6 +209,7 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
     - "Removed probe from {label}."
     - "Ground is always 0 V."
     - "No current available for {reference}."
+    - "No simulation data available for unsimulated item." (for a `notSimulated` result)
     - "Simulation out of date or not found. Run a simulation to plot."
 - **5d-2 waveform viewer design (designer, 2026-10-19).**
   - **Panel layout:**

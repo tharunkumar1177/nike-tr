@@ -1735,4 +1735,72 @@ describe("Wiring", () => {
     ).toBeTruthy();
     expect(argsOf(calls, "cancel_simulation")).toHaveLength(1);
   });
+
+  it("probes a pin to plot its net and probes it again to remove it", async () => {
+    const { calls, canvas } = await openSheet({
+      start_simulation: () => ({
+        runId: "run-2",
+        scale: "time",
+        vectors: ["time", "/out"],
+      }),
+      resolve_probe: () => ({
+        kind: "vector",
+        vector: "/out",
+        label: "/OUT",
+        quantity: "voltage",
+      }),
+      fetch_waveform: () => [
+        { x: 0, y: 0 },
+        { x: 1e-3, y: 3.3 },
+      ],
+    });
+
+    await emitFromCore("menu-action", "run-simulation");
+    const panel = await screen.findByRole("region", { name: "Simulation" });
+    expect(
+      await within(panel).findByText(/^Simulation complete\. Select the Probe/),
+    ).toBeTruthy();
+
+    const button = screen.getByRole("button", { name: "Probe signal" });
+    expect(button.title).toBe("Probe signal (M)");
+    fireEvent.keyDown(canvas, { key: "m" });
+    expect(await screen.findByText("Probe mode started.")).toBeTruthy();
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen.getByText(
+        "Click a wire or pin for voltage, or a symbol for current. Esc: Exit",
+      ),
+    ).toBeTruthy();
+
+    clickAt(canvas, PIN_1);
+    const legend = await within(panel).findByRole("list", {
+      name: "Plotted signals",
+    });
+    expect(within(legend).getByText("/OUT")).toBeTruthy();
+    expect(argsOf(calls, "resolve_probe")).toEqual([
+      {
+        runId: "run-2",
+        target: {
+          kind: "pin",
+          symbol: resistorInstance().uuid,
+          position: PIN_1,
+        },
+      },
+    ]);
+    expect(
+      await screen.findAllByText("Probed voltage at /OUT."),
+    ).not.toHaveLength(0);
+
+    clickAt(canvas, PIN_1);
+    expect(
+      await screen.findAllByText("Removed probe from /OUT."),
+    ).not.toHaveLength(0);
+    expect(
+      within(panel).queryByRole("list", { name: "Plotted signals" }),
+    ).toBeNull();
+
+    fireEvent.keyDown(canvas, { key: "Escape" });
+    expect(await screen.findByText("Probe mode ended.")).toBeTruthy();
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+  });
 });

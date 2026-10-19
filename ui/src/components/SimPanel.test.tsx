@@ -18,13 +18,27 @@ vi.mock("../ipc", async (importOriginal) => ({
 const PLOT_WIDTH = 400;
 
 class FixedSizeObserver {
-  constructor(private readonly callback: ResizeObserverCallback) {}
+  private readonly callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
+
   observe() {
     const entry = { contentRect: { width: PLOT_WIDTH, height: 200 } };
-    this.callback([entry as ResizeObserverEntry], this as ResizeObserver);
+    this.callback(
+      [entry as unknown as ResizeObserverEntry],
+      this as unknown as ResizeObserver,
+    );
   }
-  disconnect() {}
-  unobserve() {}
+
+  unobserve() {
+    // Nothing to release in the stub.
+  }
+
+  disconnect() {
+    // Nothing to release in the stub.
+  }
 }
 
 beforeEach(() => {
