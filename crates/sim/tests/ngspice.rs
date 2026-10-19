@@ -8,8 +8,10 @@ use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{divider, low_pass, low_pass_transient};
-use tron_sim::{Analysis, Deck, Engine, EngineError, EngineGuard, Plot, Transient, deck};
+use common::{divider, low_pass, low_pass_ac, low_pass_sweep, low_pass_transient};
+use tron_sim::{
+    AcQuantity, Analysis, Deck, Engine, EngineError, EngineGuard, Plot, Transient, deck,
+};
 
 fn library() -> PathBuf {
     std::env::var_os("TRON_NGSPICE")
@@ -113,6 +115,46 @@ fn the_low_pass_step_response_matches_the_analytic_curve() {
     let last = samples.last().unwrap();
     let expected = 1.0 - (-5.0f64).exp();
     assert!((last.y - expected).abs() < 0.01, "{last:?}");
+}
+
+#[test]
+fn the_low_pass_cutoff_matches_the_analytic_value() {
+    let analysis = low_pass_sweep();
+    let deck = deck(&low_pass_ac().schematic(), Some(&analysis)).unwrap();
+    let plot = run(&mut engine(), &deck);
+    assert!(plot.name.starts_with("ac"), "{}", plot.name);
+    assert_eq!(plot.scale.as_deref(), Some("frequency"));
+    let frequency = plot.vector("frequency").expect("the plot has frequency");
+    assert_eq!(frequency.len(), 601);
+    assert!(plot.find("frequency").unwrap().imaginary.is_none());
+
+    let magnitude = plot.ac_series("/OUT", AcQuantity::MagnitudeDb).unwrap();
+    let half_power = 20.0 * std::f64::consts::FRAC_1_SQRT_2.log10();
+    let samples = magnitude.decimate(0.0, f64::INFINITY, 20_000);
+    assert_eq!(samples.len(), 601);
+    let crossing = samples
+        .windows(2)
+        .find(|pair| pair[0].y >= half_power && pair[1].y < half_power)
+        .expect("the magnitude falls through -3 dB");
+    // Between the samples either side, the magnitude is a straight line in log frequency.
+    let (a, b) = (crossing[0], crossing[1]);
+    let (x0, x1) = (a.x.log10(), b.x.log10());
+    let cutoff = 10f64.powf(x0 + (x1 - x0) * (half_power - a.y) / (b.y - a.y));
+    let expected = 1.0 / (std::f64::consts::TAU * 1e3 * 1e-6);
+    assert!(
+        relative_error(cutoff, expected) < 0.01,
+        "{cutoff} != {expected}"
+    );
+
+    let low = magnitude.value_at(1.0).unwrap();
+    assert!(low.abs() < 1e-3, "{low} dB at 1 Hz");
+    let phase = plot.ac_series("/OUT", AcQuantity::PhaseDeg).unwrap();
+    let at_cutoff = phase.value_at(expected).unwrap();
+    assert!((at_cutoff + 45.0).abs() < 0.5, "{at_cutoff}");
+    let last = *frequency.last().unwrap();
+    assert!(relative_error(last, 1e6) < 1e-6, "the sweep ends at {last}");
+    let high = phase.value_at(last).unwrap();
+    assert!((high + 90.0).abs() < 0.1, "{high}° at 1 MHz");
 }
 
 #[test]

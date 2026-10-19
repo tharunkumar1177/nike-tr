@@ -142,6 +142,7 @@ export function SimPanel({
           vectors={result.vectors}
           traces={traces}
           stale={stale}
+          xScale={result.analysisKind === "ac" ? "log" : "linear"}
           view={view}
           onViewChange={changeView}
           measuring={measuring}

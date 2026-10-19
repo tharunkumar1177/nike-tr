@@ -873,6 +873,13 @@ impl Session {
                 ));
             }
         }
+        if let Some(AnalysisSettings::Ac { fstart, fstop, .. }) = analysis
+            && !(fstart.is_finite() && fstop.is_finite())
+        {
+            return Err(CoreError::InvalidEdit(
+                "The AC frequencies must be finite numbers.".to_owned(),
+            ));
+        }
         let before = self.project.analysis();
         if before == analysis {
             return Ok(Changes::default());

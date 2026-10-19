@@ -11,10 +11,12 @@ mod op;
 mod value;
 mod waveform;
 
-pub use analysis::{Analysis, Transient};
+pub use analysis::{Ac, Analysis, Transient};
 pub use deck::{Deck, GROUND, deck};
 pub use error::PreflightError;
 pub use ngspice::{Engine, EngineError, EngineGuard, Plot, Vector};
 pub use op::{OpAnchor, OpAnchors, OpKind, OpValue, Probe, ProbeMap, op_anchors, probe_map};
 pub use value::{parse_value, spice_number};
-pub use waveform::{Measurements, Sample, Series, decimate, measure, value_at};
+pub use waveform::{
+    AcQuantity, Measurements, Sample, Series, decimate, measure, unwrap_degrees, value_at,
+};

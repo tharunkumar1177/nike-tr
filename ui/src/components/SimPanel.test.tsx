@@ -38,6 +38,16 @@ const SPAN: TraceMeasurements = {
   peakToPeak: 6.6,
 };
 
+const AC_SPAN: TraceMeasurements = {
+  from: 1,
+  to: 1e6,
+  min: -60,
+  max: 0,
+  average: null,
+  rms: null,
+  peakToPeak: 60,
+};
+
 class FixedSizeObserver {
   private readonly callback: ResizeObserverCallback;
 
@@ -71,7 +81,7 @@ beforeEach(() => {
   ]);
   vi.mocked(measureTrace).mockReset();
   vi.mocked(measureTrace).mockImplementation(
-    async (_run, _vector, _from, _to, cursors) => ({
+    async (_run, _vector, _quantity, _from, _to, cursors) => ({
       span: SPAN,
       cursors: cursors.map((_at, index) => (index === 0 ? -1 : 2)),
     }),
@@ -105,10 +115,12 @@ function renderPanel(run: SimRun, stale = false, traces: Trace[] = []) {
 }
 
 function finished(scale: string | null, vectors: string[] = []): SimRun {
+  const analysisKind =
+    scale === null ? "operatingPoint" : scale === "time" ? "transient" : "ac";
   return {
     state: "finished",
     elapsedMs: 2000,
-    result: { runId: "run-1", scale, vectors },
+    result: { runId: "run-1", scale, vectors, analysisKind },
   };
 }
 
@@ -214,9 +226,17 @@ describe("SimPanel", () => {
       "/out",
       null,
       null,
+      null,
       PLOT_WIDTH,
     );
-    expect(measureTrace).toHaveBeenCalledWith("run-1", "/out", null, null, []);
+    expect(measureTrace).toHaveBeenCalledWith(
+      "run-1",
+      "/out",
+      null,
+      null,
+      null,
+      [],
+    );
     fireEvent.click(
       within(table).getByRole("button", { name: "Remove /OUT from plot" }),
     );
@@ -237,7 +257,8 @@ describe("SimPanel", () => {
     expect(Number(plot.dataset.minX)).toBeCloseTo(1e-4, 12);
     expect(Number(plot.dataset.maxX)).toBeCloseTo(9e-4, 12);
     await waitFor(() => expect(fetchWaveform).toHaveBeenCalledTimes(2));
-    const [, , minX, maxX, budget] = vi.mocked(fetchWaveform).mock.calls[1]!;
+    const zoomed = vi.mocked(fetchWaveform).mock.calls[1]!;
+    const [, , , minX, maxX, budget] = zoomed;
     expect(minX).toBeCloseTo(1e-4, 12);
     expect(maxX).toBeCloseTo(9e-4, 12);
     expect(budget).toBe(PLOT_WIDTH);
@@ -277,7 +298,7 @@ describe("SimPanel", () => {
     expect(await within(table).findByText("-1.00 V")).toBeTruthy();
     expect(within(table).getByText("2.00 V")).toBeTruthy();
     expect(within(table).getByText("3.00 V")).toBeTruthy();
-    const [, , from, to, cursors] = vi.mocked(measureTrace).mock.lastCall!;
+    const [, , , from, to, cursors] = vi.mocked(measureTrace).mock.lastCall!;
     expect(from).toBeCloseTo(2.5e-4, 12);
     expect(to).toBeCloseTo(7.5e-4, 12);
     expect(cursors).toHaveLength(2);
@@ -304,6 +325,85 @@ describe("SimPanel", () => {
         name: "Measurements cover the visible range.",
       }),
     ).toBeTruthy();
+  });
+
+  it("plots AC magnitude and phase against log frequency", async () => {
+    vi.mocked(fetchWaveform).mockResolvedValue([
+      { x: 1, y: 0 },
+      { x: 1e6, y: -60 },
+    ]);
+    vi.mocked(measureTrace).mockImplementation(
+      async (_run, _vector, quantity, _from, _to, cursors) => ({
+        span: quantity === null ? SPAN : AC_SPAN,
+        cursors: cursors.map((_at, index) => (index === 0 ? -1 : 2)),
+      }),
+    );
+    const { onRemoveTrace } = renderPanel(
+      finished("frequency", ["frequency", "/out"]),
+      false,
+      [OUT],
+    );
+    const table = screen.getByRole("table", {
+      name: "Measurements cover the visible range.",
+    });
+    expect(await within(table).findByText("60.00 dB")).toBeTruthy();
+    const magnitude = within(table).getByRole("rowheader", {
+      name: "/OUT Mag",
+    });
+    const cells = within(magnitude.closest("tr")!).getAllByRole("cell");
+    expect(cells.slice(0, 8).map((cell) => cell.textContent)).toEqual([
+      "—",
+      "—",
+      "—",
+      "-60.00 dB",
+      "0.00 dB",
+      "—",
+      "—",
+      "60.00 dB",
+    ]);
+    expect(
+      within(table).getByRole("rowheader", { name: "/OUT Phase" }),
+    ).toBeTruthy();
+    expect(within(table).getByText("60.00 °")).toBeTruthy();
+    for (const acQuantity of ["magnitudeDb", "phaseDeg"]) {
+      expect(fetchWaveform).toHaveBeenCalledWith(
+        "run-1",
+        "/out",
+        acQuantity,
+        null,
+        null,
+        PLOT_WIDTH,
+      );
+    }
+
+    const plot = screen.getByLabelText("Waveform plot");
+    expect(plot.dataset.xScale).toBe("log");
+    expect(plot.dataset.minX).toBe("1");
+    expect(plot.dataset.maxX).toBe("1000000");
+    fireEvent.keyDown(plot, { key: "a" });
+    expect(Number(plot.dataset.cursorA)).toBeCloseTo(1e3, 9);
+    expect(screen.getByText("Cursor A placed at 1.00 kHz.")).toBeTruthy();
+    fireEvent.keyDown(plot, { key: "b" });
+    fireEvent.keyDown(plot, { key: "ArrowRight", altKey: true });
+    expect(Number(plot.dataset.cursorB)).toBeCloseTo(10 ** 3.06, 6);
+    const column = (name: string) =>
+      within(table).getByRole("columnheader", { name });
+    expect(column("Cursor A (1.00 kHz)")).toBeTruthy();
+    expect(column("Δ (148 Hz, ×1.15)")).toBeTruthy();
+    expect(await within(table).findAllByText("-1.00 dB")).toHaveLength(1);
+    const measured = vi.mocked(measureTrace).mock.lastCall!;
+    const [, , quantity, from, to, at] = measured;
+    expect(quantity).not.toBeNull();
+    expect(from).toBeCloseTo(1e3, 9);
+    expect(to).toBeCloseTo(10 ** 3.06, 6);
+    expect(at[0]).toBeCloseTo(1e3, 9);
+
+    const remove = within(table).getAllByRole("button", {
+      name: "Remove /OUT from plot",
+    });
+    expect(remove).toHaveLength(1);
+    fireEvent.click(remove[0]!);
+    expect(onRemoveTrace).toHaveBeenCalledWith("/out");
   });
 
   it("freezes the view and cursors of results that are out of date", () => {

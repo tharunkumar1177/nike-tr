@@ -67,6 +67,16 @@ static COMMAND: OnceLock<CommandFn> = OnceLock::new();
 
 /// `vector_info.v_type` of a time scale, from ngspice's `sim.h`.
 const SV_TIME: c_int = 1;
+/// `vector_info.v_type` of a frequency scale.
+const SV_FREQUENCY: c_int = 2;
+
+/// `ngcomplex_t` from `sharedspice.h`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Complex {
+    real: f64,
+    imaginary: f64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -230,7 +240,11 @@ pub struct Vector {
     /// The ngspice name, in lower case: a node such as `/out`, a branch current such as
     /// `v1#branch`, or the scale, such as `time`.
     pub name: String,
+    /// The values, or their real parts for a complex vector.
     pub values: Vec<f64>,
+    /// The imaginary parts of a complex vector, as an `.ac` analysis gives, or `None` for a
+    /// real one. A frequency scale is kept real.
+    pub imaginary: Option<Vec<f64>>,
 }
 
 /// The results of one analysis.
@@ -247,10 +261,14 @@ pub struct Plot {
 impl Plot {
     /// The values of the vector named `name`, ignoring case as ngspice does.
     pub fn vector(&self, name: &str) -> Option<&[f64]> {
+        self.find(name).map(|vector| vector.values.as_slice())
+    }
+
+    /// The vector named `name`, ignoring case as ngspice does.
+    pub fn find(&self, name: &str) -> Option<&Vector> {
         self.vectors
             .iter()
             .find(|vector| vector.name.eq_ignore_ascii_case(name))
-            .map(|vector| vector.values.as_slice())
     }
 }
 
@@ -574,13 +592,19 @@ impl Engine {
             let qualified = CString::new(format!("{name}.{vector}")).map_err(|_| no_results())?;
             // SAFETY: ngspice returns a pointer to its own vector record, or null. The data
             // stays valid until the next command, and is copied before then.
-            let data = unsafe { real_values((self.vec_info)(qualified.as_ptr())) };
-            if let Some((kind, values)) = data {
+            let data = unsafe { vector_values((self.vec_info)(qualified.as_ptr())) };
+            if let Some((kind, values, imaginary)) = data {
                 let name = vector.to_ascii_lowercase();
-                if kind == SV_TIME && scale.is_none() {
+                let is_scale = kind == SV_TIME || kind == SV_FREQUENCY;
+                if is_scale && scale.is_none() {
                     scale = Some(name.clone());
                 }
-                vectors.push(Vector { name, values });
+                let imaginary = imaginary.filter(|_| kind != SV_FREQUENCY);
+                vectors.push(Vector {
+                    name,
+                    values,
+                    imaginary,
+                });
             }
         }
         Ok(Plot {
@@ -723,21 +747,33 @@ unsafe fn owned_strings(list: *const *const c_char) -> Vec<String> {
     }
 }
 
-/// The vector's type (`v_type`) and a copy of its values.
+/// The vector's values, split into real and imaginary parts for a complex vector.
+type VectorValues = (c_int, Vec<f64>, Option<Vec<f64>>);
+
+/// The vector's type (`v_type`) and a copy of its values: the real parts, and the
+/// imaginary parts when the vector is complex.
 ///
 /// # Safety
 ///
 /// `info` must be null or point to a valid `vector_info` whose data is live.
-unsafe fn real_values(info: *const VectorInfo) -> Option<(c_int, Vec<f64>)> {
+unsafe fn vector_values(info: *const VectorInfo) -> Option<VectorValues> {
     // SAFETY: the caller guarantees the pointer is null or valid.
     let info = unsafe { info.as_ref() }?;
     let length = usize::try_from(info.length).ok()?;
-    if info.real.is_null() {
+    if !info.real.is_null() {
+        // SAFETY: ngspice stores `v_length` doubles at `v_realdata`.
+        let values = unsafe { std::slice::from_raw_parts(info.real, length) };
+        return Some((info.kind, values.to_vec(), None));
+    }
+    if info.complex.is_null() {
         return None;
     }
-    // SAFETY: ngspice stores `v_length` doubles at `v_realdata`.
-    let values = unsafe { std::slice::from_raw_parts(info.real, length) };
-    Some((info.kind, values.to_vec()))
+    // SAFETY: a vector without real data stores `v_length` `ngcomplex_t` at
+    // `v_compdata`.
+    let values = unsafe { std::slice::from_raw_parts(info.complex.cast::<Complex>(), length) };
+    let real = values.iter().map(|value| value.real).collect();
+    let imaginary = values.iter().map(|value| value.imaginary).collect();
+    Some((info.kind, real, Some(imaginary)))
 }
 
 #[cfg(test)]

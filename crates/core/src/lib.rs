@@ -20,7 +20,7 @@ pub use kicad::{
     MANDATORY_FIELDS, Mirror, PageSize, PinConnection, PlacedPin, PlacedSymbol, Placement,
     SymbolProperty, TITLE_BLOCK_COMMENTS, TitleBlock,
 };
-pub use manifest::AnalysisSettings;
+pub use manifest::{AcSweep, AnalysisSettings};
 pub use netlist::{Net, NetNode, netlist};
 pub use project::{Project, validate_name, write_atomic};
 pub use project_file::ProjectFile;

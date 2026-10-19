@@ -109,6 +109,84 @@ describe("SimulationSettingsDialog", () => {
     });
   });
 
+  it("starts an AC sweep from 100 points per decade, 1 Hz to 1 MHz", () => {
+    renderDialog(null);
+    fireEvent.change(analysisType(), { target: { value: "ac" } });
+    expect(screen.queryByLabelText("Time step")).toBeNull();
+    expect(screen.getByRole("group", { name: "AC Sweep" })).toBeTruthy();
+    const sweep = screen.getByLabelText<HTMLSelectElement>("Sweep type");
+    expect(sweep.value).toBe("dec");
+    expect(field("Number of points (per decade)").value).toBe("100");
+    expect(field("Start frequency").value).toBe("1");
+    expect(field("Stop frequency").value).toBe("1Meg");
+
+    fireEvent.change(sweep, { target: { value: "oct" } });
+    expect(field("Number of points (per octave)")).toBeTruthy();
+    fireEvent.change(sweep, { target: { value: "lin" } });
+    expect(field("Number of points (total)")).toBeTruthy();
+  });
+
+  it("shows saved AC settings with SI suffixes", () => {
+    renderDialog({
+      kind: "ac",
+      sweep: "oct",
+      points: 20,
+      fstart: 10,
+      fstop: 2.5e4,
+    });
+    expect(analysisType().value).toBe("ac");
+    expect(field("Number of points (per octave)").value).toBe("20");
+    expect(field("Start frequency").value).toBe("10");
+    expect(field("Stop frequency").value).toBe("25k");
+  });
+
+  it("checks the AC points and frequency range", () => {
+    renderDialog({
+      kind: "ac",
+      sweep: "dec",
+      points: 100,
+      fstart: 1,
+      fstop: 1e6,
+    });
+    type("Number of points (per decade)", "2.5");
+    expect(screen.getByText("Must be a whole number.")).toBeTruthy();
+    expect(ok().disabled).toBe(true);
+    type("Number of points (per decade)", "0");
+    expect(screen.getByText("Must be greater than 0.")).toBeTruthy();
+
+    type("Number of points (per decade)", "10");
+    type("Start frequency", "0");
+    expect(screen.getByText("Must be greater than 0.")).toBeTruthy();
+    type("Start frequency", "2Meg");
+    expect(
+      screen.getByText("Must be greater than start frequency."),
+    ).toBeTruthy();
+    expect(field("Stop frequency").getAttribute("aria-invalid")).toBe("true");
+    type("Stop frequency", "x");
+    expect(screen.getByText("Invalid SI number.")).toBeTruthy();
+    expect(ok().disabled).toBe(true);
+  });
+
+  it("applies the parsed AC settings", async () => {
+    const { onApply } = renderDialog(null);
+    fireEvent.change(analysisType(), { target: { value: "ac" } });
+    fireEvent.change(screen.getByLabelText("Sweep type"), {
+      target: { value: "lin" },
+    });
+    type("Number of points (total)", "50");
+    type("Start frequency", "100");
+    type("Stop frequency", "10k");
+    fireEvent.click(ok());
+    await vi.waitFor(() => expect(onApply).toHaveBeenCalled());
+    expect(onApply).toHaveBeenCalledWith({
+      kind: "ac",
+      sweep: "lin",
+      points: 50,
+      fstart: 100,
+      fstop: 1e4,
+    });
+  });
+
   it("closes without applying when nothing changed", () => {
     const { onApply, onCancel } = renderDialog({ kind: "operatingPoint" });
     fireEvent.click(ok());

@@ -61,6 +61,26 @@ pub enum AnalysisSettings {
         #[serde(default, rename = "initialConditions")]
         initial_conditions: bool,
     },
+    /// `.ac`: the small-signal response over frequency, in hertz.
+    Ac {
+        sweep: AcSweep,
+        /// Points per decade or octave, or in total for a linear sweep.
+        points: u32,
+        fstart: f64,
+        fstop: f64,
+    },
+}
+
+/// How an `.ac` sweep spaces its frequencies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum AcSweep {
+    #[serde(rename = "dec")]
+    Decade,
+    #[serde(rename = "oct")]
+    Octave,
+    #[serde(rename = "lin")]
+    Linear,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -192,6 +212,22 @@ mod tests {
         let analysis = manifest.simulation.analysis;
         assert_eq!(analysis, Some(AnalysisSettings::OperatingPoint));
         assert!(manifest.to_file_string().contains("\"probes\": []"));
+    }
+
+    #[test]
+    fn stores_an_ac_sweep() {
+        let source = r#"{"formatVersion":1,"name":"amp","simulation":{"analysis":{"kind":"ac","sweep":"dec","points":100,"fstart":1,"fstop":1e6}}}"#;
+        let manifest = Manifest::parse(source).unwrap();
+        let expected = AnalysisSettings::Ac {
+            sweep: AcSweep::Decade,
+            points: 100,
+            fstart: 1.0,
+            fstop: 1e6,
+        };
+        assert_eq!(manifest.simulation.analysis, Some(expected));
+        let written = manifest.to_file_string();
+        assert!(written.contains("\"sweep\": \"dec\""), "{written}");
+        assert_eq!(Manifest::parse(&written), Ok(manifest));
     }
 
     #[test]

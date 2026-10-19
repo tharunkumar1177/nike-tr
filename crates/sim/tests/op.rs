@@ -22,6 +22,7 @@ fn op_plot(vectors: &[(&str, f64)]) -> Plot {
             .map(|(name, value)| Vector {
                 name: (*name).to_owned(),
                 values: vec![*value],
+                imaginary: None,
             })
             .collect(),
     }

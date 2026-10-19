@@ -9,6 +9,11 @@ export type TraceMeasurements = {
  */
 from: number, to: number, min: number, max: number, 
 /**
- * The mean over the span, so uneven time steps are weighted by their width.
+ * The mean over the span, so uneven time steps are weighted by their width. `null`
+ * for an AC quantity, whose mean over frequency means nothing.
  */
-average: number, rms: number, peakToPeak: number, };
+average: number | null, 
+/**
+ * `null` for an AC quantity.
+ */
+rms: number | null, peakToPeak: number, };
