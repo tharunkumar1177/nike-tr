@@ -1,13 +1,15 @@
 import type { ReactNode } from "react";
+import type { SimulationFinished } from "../bindings/SimulationFinished";
 import type { ErrorReport } from "../ipc";
 import { formatSeconds } from "../si";
 import { CheckIcon, ErrorIcon, RemoveIcon } from "./icons";
+import { type Trace, WaveformViewer } from "./WaveformViewer";
 
 /** The latest simulation run, as the panel shows it. */
 export type SimRun =
   | { state: "idle" }
   | { state: "running"; progress: number | null; elapsedMs: number }
-  | { state: "finished"; elapsedMs: number }
+  | { state: "finished"; elapsedMs: number; result: SimulationFinished }
   | { state: "cancelled"; elapsedMs: number }
   | { state: "failed"; error: ErrorReport };
 
@@ -34,6 +36,9 @@ interface SimPanelProps {
   stale: boolean;
   /** Read by screen readers when a run starts or ends. */
   announcement: string;
+  /** The probed signals, in the order they were added. */
+  traces: Trace[];
+  onRemoveTrace: (vector: string) => void;
   onRun: () => void;
   onCancel: () => void;
   onOpenSettings: () => void;
@@ -46,6 +51,8 @@ export function SimPanel({
   run,
   stale,
   announcement,
+  traces,
+  onRemoveTrace,
   onRun,
   onCancel,
   onOpenSettings,
@@ -83,14 +90,24 @@ export function SimPanel({
         </div>
       );
       break;
-    case "finished":
-      content = (
-        <p className="sim-panel__state sim-panel__done" role="status">
-          <CheckIcon />
-          Simulation complete in {formatSeconds(run.elapsedMs)} s.
+    case "finished": {
+      const { result } = run;
+      content = result.scale ? (
+        <WaveformViewer
+          runId={stale ? null : result.runId}
+          vectors={result.vectors}
+          traces={traces}
+          stale={stale}
+          onRemove={onRemoveTrace}
+        />
+      ) : (
+        <p className="sim-panel__state sim-panel__note">
+          Waveforms are not available for Operating Point (.op) analysis. Read
+          the values directly from the schematic annotations.
         </p>
       );
       break;
+    }
     case "cancelled":
       content = (
         <p className="sim-panel__state" role="status">
@@ -135,10 +152,22 @@ export function SimPanel({
   }
 
   const running = run.state === "running";
+  const plotting =
+    run.state === "finished" && run.result.scale !== null && traces.length > 0;
   return (
-    <section className="sim-panel" aria-label="Simulation">
+    <section
+      className={plotting ? "sim-panel sim-panel--plotting" : "sim-panel"}
+      aria-label="Simulation"
+    >
       <header className="sim-panel__header">
-        <h2 className="sim-panel__title">Simulation</h2>
+        {run.state === "finished" ? (
+          <p className="sim-panel__status" role="status">
+            <CheckIcon />
+            Simulation complete in {formatSeconds(run.elapsedMs)} s.
+          </p>
+        ) : (
+          <h2 className="sim-panel__title">Simulation</h2>
+        )}
         {stale && <span className="sim-panel__badge">Out of date</span>}
         <div className="sim-panel__actions">
           <button type="button" className="button" onClick={onOpenSettings}>

@@ -1,21 +1,77 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ErrorReport } from "../ipc";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type ErrorReport, fetchWaveform } from "../ipc";
 import { SimPanel, type SimRun } from "./SimPanel";
+import type { Trace } from "./WaveformViewer";
 
-afterEach(cleanup);
+vi.mock("../ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc")>()),
+  fetchWaveform: vi.fn(),
+}));
 
-function renderPanel(run: SimRun, stale = false) {
+const PLOT_WIDTH = 400;
+
+class FixedSizeObserver {
+  constructor(private readonly callback: ResizeObserverCallback) {}
+  observe() {
+    const entry = { contentRect: { width: PLOT_WIDTH, height: 200 } };
+    this.callback([entry as ResizeObserverEntry], this as ResizeObserver);
+  }
+  disconnect() {}
+  unobserve() {}
+}
+
+beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", FixedSizeObserver);
+  vi.mocked(fetchWaveform).mockReset();
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+function renderPanel(run: SimRun, stale = false, traces: Trace[] = []) {
   const handlers = {
     onRun: vi.fn(),
     onCancel: vi.fn(),
     onOpenSettings: vi.fn(),
     onJumpToSymbol: vi.fn(),
     onClose: vi.fn(),
+    onRemoveTrace: vi.fn(),
   };
-  render(<SimPanel run={run} stale={stale} announcement="" {...handlers} />);
+  render(
+    <SimPanel
+      run={run}
+      stale={stale}
+      announcement=""
+      traces={traces}
+      {...handlers}
+    />,
+  );
   return handlers;
 }
+
+function finished(scale: string | null, vectors: string[] = []): SimRun {
+  return {
+    state: "finished",
+    elapsedMs: 2000,
+    result: { runId: "run-1", scale, vectors },
+  };
+}
+
+const OUT: Trace = { vector: "/out", label: "/OUT", quantity: "voltage" };
+const SUPPLY: Trace = {
+  vector: "v1#branch",
+  label: "V1",
+  quantity: "current",
+};
 
 function failed(error: Partial<ErrorReport>): SimRun {
   return {
@@ -56,12 +112,75 @@ describe("SimPanel", () => {
   });
 
   it("reports a finished run and marks it out of date after an edit", () => {
-    renderPanel({ state: "finished", elapsedMs: 2000 }, true);
-    expect(screen.getByText("Simulation complete in 2.0 s.")).toBeTruthy();
+    renderPanel(finished(null), true);
+    expect(screen.getByRole("status").textContent).toBe(
+      "Simulation complete in 2.0 s.",
+    );
     expect(screen.getByText("Out of date")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Run Simulation" }).className,
     ).toBe("button button--primary");
+  });
+
+  it("points an operating point run to the schematic annotations", () => {
+    renderPanel(finished(null));
+    expect(
+      screen.getByText(/^Waveforms are not available for Operating Point/),
+    ).toBeTruthy();
+  });
+
+  it("asks for a probe before a transient run has traces", () => {
+    renderPanel(finished("time", ["time", "/out"]));
+    expect(
+      screen.getByText(/^Simulation complete\. Select the Probe tool/),
+    ).toBeTruthy();
+    expect(fetchWaveform).not.toHaveBeenCalled();
+  });
+
+  it("fetches and summarizes each trace the run has", async () => {
+    vi.mocked(fetchWaveform).mockResolvedValue([
+      { x: 0, y: -3.3 },
+      { x: 1e-3, y: 3.3 },
+    ]);
+    const { onRemoveTrace } = renderPanel(
+      finished("time", ["time", "/out"]),
+      false,
+      [OUT, SUPPLY],
+    );
+    const results = screen.getByRole("list", { name: "Waveform results" });
+    expect(
+      await within(results).findByText(
+        "Voltage /OUT: minimum -3.30 V, maximum 3.30 V",
+      ),
+    ).toBeTruthy();
+    expect(within(results).getByText("Current I(V1): No data")).toBeTruthy();
+    expect(fetchWaveform).toHaveBeenCalledTimes(1);
+    expect(fetchWaveform).toHaveBeenCalledWith(
+      "run-1",
+      "/out",
+      null,
+      null,
+      PLOT_WIDTH,
+    );
+    const legend = screen.getByRole("list", { name: "Plotted signals" });
+    expect(within(legend).getByText("I(V1) (No data)")).toBeTruthy();
+    fireEvent.click(
+      within(legend).getByRole("button", { name: "Remove /OUT from plot" }),
+    );
+    expect(onRemoveTrace).toHaveBeenCalledWith("/out");
+  });
+
+  it("reports a failed fetch", async () => {
+    vi.mocked(fetchWaveform).mockRejectedValue(new Error("gone"));
+    renderPanel(finished("time", ["time", "/out"]), false, [OUT]);
+    expect(
+      await screen.findByText("Failed to load waveform data."),
+    ).toBeTruthy();
+  });
+
+  it("doesn't fetch results that are out of date", () => {
+    renderPanel(finished("time", ["time", "/out"]), true, [OUT]);
+    expect(fetchWaveform).not.toHaveBeenCalled();
   });
 
   it("reports a cancelled run", () => {

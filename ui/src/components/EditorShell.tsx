@@ -34,6 +34,7 @@ import {
 } from "./SchematicCanvas";
 import { StatusBar, type StatusHint } from "./StatusBar";
 import { Toolbar } from "./Toolbar";
+import type { Trace } from "./WaveformViewer";
 
 /** The last ERC run, and the document revision it checked. */
 interface ErcResults {
@@ -144,6 +145,7 @@ export function EditorShell({
   const [simAnnouncement, setSimAnnouncement] = useState("");
   const [opAnnotations, setOpAnnotations] = useState(NO_ANNOTATIONS);
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
+  const [traces, setTraces] = useState<Trace[]>([]);
 
   const simCurrent =
     simSource === null || simSource.directory === project.directory;
@@ -192,7 +194,7 @@ export function EditorShell({
             : NO_ANNOTATIONS;
         const elapsedMs = elapsed();
         setOpAnnotations(annotations);
-        setSimRun({ state: "finished", elapsedMs });
+        setSimRun({ state: "finished", elapsedMs, result: finished });
         setSimAnnouncement(
           `Simulation complete in ${formatSeconds(elapsedMs)} seconds.`,
         );
@@ -414,6 +416,12 @@ export function EditorShell({
               run={run}
               stale={simStale}
               announcement={simAnnouncement}
+              traces={traces}
+              onRemoveTrace={(vector) =>
+                setTraces((shown) =>
+                  shown.filter((trace) => trace.vector !== vector),
+                )
+              }
               onRun={runSimulation}
               onCancel={cancelRun}
               onOpenSettings={onOpenSimulationSettings}

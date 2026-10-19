@@ -193,6 +193,10 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
        - A missing or stale run gives `simNotFound`.
   3. **Probe tool.** `"probe"` becomes a `CanvasTool`. A click checks pins first, then wires, labels, and junctions, then symbol bodies. `ground` and `noCurrent` show as status hints, not errors. A `vector` result is added to `probedVectors` in `EditorShell`, keyed by vector name, and it persists across runs.
   4. **`WaveformViewer.tsx` inside `SimPanel`.** Plain canvas 2D with no new dependency. Voltages use the left axis and currents the right. The fetch budget is the canvas CSS width, capped at `MAX_WAVEFORM_POINTS`, and the viewer re-fetches when resized. Each legend item removes its trace when clicked, and a vector missing from the current run shows "No data". An `.op` run shows a fallback message instead of the viewer.
+- **5d-2 as built (backend).**
+  - `ProbeTarget` is `item { uuid }` (a wire, label, junction, or symbol body) or `pin { symbol, position: Xy }`. The UI's `SymbolInstance.pins` holds pin positions but not pin numbers, so a pin is matched by its position.
+  - `ProbeResult` adds `notSimulated`, for items on nets the deck doesn't simulate. Its vector field is named `quantity`, because `kind` is the serde tag.
+  - Any document change discards the stored results (`SimState::invalidate`), so once results are out of date they can't be probed or re-fetched. The viewer keeps the samples it already fetched, dims them, and doesn't re-fetch on resize.
 - **5d-2 probe tool design (designer, 2026-10-19).**
   - **Toolbar:** an IconButton "Probe signal" (shortcut `V`, `ProbeIcon`) after the no-connect flag, with `aria-pressed`.
   - **Availability:** always enabled. Without a usable run, a click shows the stale-run notice.
