@@ -108,6 +108,36 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
        - The settings dialog, the run panel, and the annotations, per the design decisions below. `ui/src/utils/si.ts` parses and formats SI values.
        - The menu items "&Run Simulation" (`F5`), "&Cancel Simulation", and "Simulation Se&ttings..." (`CmdOrCtrl+Alt+S`) go under Tools, with IDs `run-simulation`, `cancel-simulation`, and `simulation-settings`. They ship only with the UI that handles them. Esc cancels in the UI while a run is active, but it is not a menu accelerator.
        - `App.tsx` owns the run state: idle, running, finished, cancelled, or failed, plus progress, elapsed time, and staleness. Any `document-changed` event marks the results out of date and clears the annotations.
+     - **5d-1b UI design plans (designer, 2026-10-19).** These refine the design decisions below, and win where they differ.
+       - **Settings dialog.**
+         - `SimulationSettingsDialog.tsx` takes the props `settings: AnalysisSettings | null`, `onApply(settings) => Promise<ErrorReport | null>`, and `onCancel`.
+         - It reuses `Modal`, `.form`, `.field`, and `.field--inline`. Each input and its `.form__error` sit in a `.field` wrapper, with no inline styles.
+         - Transient fields are grouped in a `fieldset.form__section` with the legend "Transient". Initial focus goes to the "Analysis type" select (`data-autofocus`).
+         - The buttons are OK (submit, disabled only while errors show or a submit is in progress) and Cancel. OK with unchanged settings closes without an IPC call.
+         - An IPC failure shows as a `.form__error` with `role="alert"`.
+         - Validation runs on every keystroke, and the first failing check shows under its field:
+           - Time step: invalid, then ≤ 0 ("Must be greater than 0."), then > final − initial ("Must not exceed final time minus initial time.").
+           - Final time: invalid, then ≤ 0 ("Must be greater than 0.").
+           - Initial time: invalid, then < 0 ("Must be greater than or equal to 0."), then ≥ final ("Must be less than final time.").
+           - Maximum time step, only when not empty: invalid, then ≤ 0, then > final − initial.
+         - `ui/src/utils/si.ts`:
+           - `parseSi` accepts f, p, n, u, µ, m, k, Meg, G, and T (case-insensitive SPICE rules, so `M` means milli), plus the `4k7` form and plain or exponent numbers.
+           - `formatSi` uses ASCII prefixes that round-trip: `1e-5` becomes `10u`, `2.5e-3` becomes `2.5m`, `0` stays `0`, `1.5e-7` becomes `150n`, and `10` stays `10`.
+       - **Run panel.**
+         - `SimPanel.tsx` and `SimPanel.css` mirror `ErcPanel` (classes `sim-panel`, `sim-panel__header`, and `sim-row`). The panel is rendered in `editor__center`, and the ERC and simulation panels are mutually exclusive.
+         - The toolbar gets a group with Run (play icon), Cancel (stop icon), and Settings (gear icon).
+         - State: `idle`, `running { progress: number | null, elapsedMs }`, `finished { elapsedMs, stale }`, `cancelled { elapsedMs, stale }`, and `failed { error, stale }`. Elapsed time ticks every 100 ms from a start-time ref.
+         - Strings: "Elapsed: N.N s" next to a `<progress>` (indeterminate until a percentage arrives), "Simulation complete in N.N s.", "Simulation cancelled.", and the badge "Out of date".
+         - The `aria-live` region announces "Simulation started.", "Simulation complete in N.N seconds.", "Simulation cancelled.", and "Simulation failed: {message}".
+         - A failed run shows one error row. For `simNoAnalysis` or `simInvalidAnalysis`, clicking it opens the settings dialog. Otherwise, if the error has a detail (a symbol reference), clicking it jumps to that symbol. The dialog never opens on its own.
+         - F5 runs, with `preventDefault`. Esc cancels only while a run is active and otherwise keeps its existing behavior.
+       - **Op annotations.**
+         - `drawOpAnnotations(context, viewport, annotations, colors, font)` in `schematicDraw.ts` is drawn after the ERC markers.
+         - The box's top-left corner sits 8 px right of and 8 px above the anchor. Its size and font are fixed in screen pixels (the base 14 px font, with 4 px by 2 px padding). Boxes at the same anchor stack downward with a 2 px gap.
+         - Colors use the existing tokens (surface background, primary text, secondary-text border). The designer named `--color-surface-elevated`, `--color-text-primary`, and `--color-text-secondary`; use the matching existing tokens if those names differ.
+         - `formatOpValue(value, kind)` gives 3 significant digits with prefixes from f to T, for example `3.30 V`, `-1.25 mA`, and `-4.57 kV`. A magnitude below 1e-15 shows as `0 V` or `0 A`, and 1e15 or more uses exponent form (`1.23e15 V`).
+         - `SchematicCanvas` draws hidden `aria-hidden` hitboxes, each with a `title` holding the exact value. A visually hidden list (`aria-label="Operating point results"`) reads like "Voltage at /OUT: 3.30 V".
+         - The toolbar eye toggle "Show operating point annotations" (`aria-pressed`, on by default) sits before the zoom label.
 
    **5d-1 design decisions (designer, 2026-10-14; the full plans are in the session transcript).**
    - **Settings dialog** (`SimulationSettingsDialog.tsx`, `ui/src/utils/si.ts`).

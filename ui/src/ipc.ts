@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { AnalysisSettings } from "./bindings/AnalysisSettings";
 import type { AppErrorKind } from "./bindings/AppErrorKind";
 import type { AppInfo } from "./bindings/AppInfo";
 import type { ErcRuleSetting } from "./bindings/ErcRuleSetting";
@@ -10,9 +11,11 @@ import type { LibraryFootprint } from "./bindings/LibraryFootprint";
 import type { LibraryHit } from "./bindings/LibraryHit";
 import type { LibraryStatus } from "./bindings/LibraryStatus";
 import type { LibrarySymbol } from "./bindings/LibrarySymbol";
+import type { OpAnnotation } from "./bindings/OpAnnotation";
 import type { ProjectProperties } from "./bindings/ProjectProperties";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
+import type { SimulationFinished } from "./bindings/SimulationFinished";
 import type { SymbolField } from "./bindings/SymbolField";
 import type { SymbolPlacement } from "./bindings/SymbolPlacement";
 import type { SymbolTransform } from "./bindings/SymbolTransform";
@@ -159,6 +162,29 @@ export function editErcSeverities(
   severities: Record<string, ErcRuleSeverity>,
 ): Promise<void> {
   return invoke<void>("edit_erc_severities", { severities });
+}
+
+export const SIMULATION_PROGRESS_EVENT = "simulation-progress";
+
+/** Replaces the analysis in `tron.json` as one undo step. */
+export function editAnalysisSettings(
+  analysis: AnalysisSettings | null,
+): Promise<void> {
+  return invoke<void>("edit_analysis_settings", { analysis });
+}
+
+/** Checks the schematic and runs its analysis; emits simulation progress. */
+export function startSimulation(): Promise<SimulationFinished> {
+  return invoke<SimulationFinished>("start_simulation");
+}
+
+/** Stops the run in progress, which then fails with `simCancelled`. */
+export function cancelSimulation(): Promise<void> {
+  return invoke<void>("cancel_simulation");
+}
+
+export function fetchOpAnnotations(runId: string): Promise<OpAnnotation[]> {
+  return invoke<OpAnnotation[]>("fetch_op_annotations", { runId });
 }
 
 export function listRecentProjects(): Promise<RecentProject[]> {
