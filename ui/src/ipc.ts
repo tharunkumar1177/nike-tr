@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { AcQuantity } from "./bindings/AcQuantity";
 import type { AnalysisSettings } from "./bindings/AnalysisSettings";
 import type { AppErrorKind } from "./bindings/AppErrorKind";
 import type { AppInfo } from "./bindings/AppInfo";
@@ -193,11 +194,13 @@ export function fetchOpAnnotations(runId: string): Promise<OpAnnotation[]> {
 
 /**
  * The samples of `vector` in run `runId` between `minX` and `maxX` (`null` for the end of
- * the run), reduced to at most `budget` so peaks stay visible.
+ * the run), reduced to at most `budget` so peaks stay visible. An AC run's vectors need
+ * `acQuantity`, and are reduced on a log frequency axis.
  */
 export function fetchWaveform(
   runId: string,
   vector: string,
+  acQuantity: AcQuantity | null,
   minX: number | null,
   maxX: number | null,
   budget: number,
@@ -205,6 +208,7 @@ export function fetchWaveform(
   return invoke<WaveformPoint[]>("fetch_waveform", {
     runId,
     vector,
+    acQuantity,
     minX,
     maxX,
     budget,
@@ -213,11 +217,13 @@ export function fetchWaveform(
 
 /**
  * The exact statistics of `vector` in run `runId` between `minX` and `maxX` (`null` for
- * the end of the run), and its value at each of `cursors`.
+ * the end of the run), and its value at each of `cursors`. An AC run's vectors need
+ * `acQuantity`, have no average or RMS, and are interpolated on log frequency.
  */
 export function measureTrace(
   runId: string,
   vector: string,
+  acQuantity: AcQuantity | null,
   minX: number | null,
   maxX: number | null,
   cursors: number[],
@@ -225,6 +231,7 @@ export function measureTrace(
   return invoke<TraceReadout>("measure_trace", {
     runId,
     vector,
+    acQuantity,
     minX,
     maxX,
     cursors,

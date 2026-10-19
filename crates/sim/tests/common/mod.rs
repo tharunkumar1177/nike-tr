@@ -2,8 +2,9 @@
 
 #![allow(dead_code)]
 
+use tron_core::AcSweep;
 use tron_core::kicad::Schematic;
-use tron_sim::{Analysis, Transient};
+use tron_sim::{Ac, Analysis, Transient};
 
 const FONT: &str = "(effects (font (size 1.27 1.27)))";
 
@@ -205,6 +206,23 @@ pub fn low_pass() -> Circuit {
         ],
         ..divider()
     }
+}
+
+/// The low-pass driven by a 1 V AC source with no DC part: a cutoff of 1/(2π RC).
+pub fn low_pass_ac() -> Circuit {
+    let mut circuit = low_pass();
+    circuit.parts[0] = source("V1", (50.8, 63.5), "dc=0 ac=1");
+    circuit
+}
+
+/// 1 Hz to 1 MHz, a hundred points per decade.
+pub fn low_pass_sweep() -> Analysis {
+    Analysis::Ac(Ac {
+        sweep: AcSweep::Decade,
+        points: 100,
+        start: 1.0,
+        stop: 1e6,
+    })
 }
 
 /// Five time constants of the low-pass, from zero initial conditions, in 10 µs steps.

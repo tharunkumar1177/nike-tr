@@ -1594,6 +1594,7 @@ describe("Wiring", () => {
           runId: "run-1",
           scale: null,
           vectors: ["/out", "v1#branch"],
+          analysisKind: "operatingPoint",
         }),
         fetch_op_annotations: () => [
           {
@@ -1742,6 +1743,7 @@ describe("Wiring", () => {
         runId: "run-2",
         scale: "time",
         vectors: ["time", "/out"],
+        analysisKind: "transient",
       }),
       resolve_probe: () => ({
         kind: "vector",

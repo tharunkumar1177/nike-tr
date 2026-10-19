@@ -5,12 +5,14 @@ import {
   useRef,
   useState,
 } from "react";
+import type { AcQuantity } from "../bindings/AcQuantity";
 import type { OpAnnotationKind } from "../bindings/OpAnnotationKind";
 import type { TraceReadout } from "../bindings/TraceReadout";
 import type { WaveformPoint } from "../bindings/WaveformPoint";
 import { fetchWaveform, measureTrace } from "../ipc";
 import { formatQuantity } from "../si";
 import {
+  type Side,
   TRACE_TOKENS,
   drawWaveforms,
   pixelAtTime,
@@ -24,12 +26,15 @@ import {
   NO_CURSORS,
   PAN_STEP_FRACTION,
   type XRange,
+  type XScale,
   ZOOM_STEP,
   clampTime,
+  fromAxis,
   measuredSpan,
   panView,
   placedCursors,
   showsWholeRun,
+  toAxis,
   zoomView,
 } from "../waveformView";
 import { RemoveIcon } from "./icons";
@@ -49,7 +54,9 @@ interface WaveformViewerProps {
   vectors: string[];
   traces: Trace[];
   stale: boolean;
-  /** The times shown, or `null` for the whole run. */
+  /** Time, or log frequency for an AC run, whose traces show magnitude and phase. */
+  xScale: XScale;
+  /** The range shown, in axis units, or `null` for the whole run. */
   view: XRange | null;
   onViewChange: (view: XRange | null) => void;
   /** Dragging the plot places cursors instead of panning. */
@@ -89,6 +96,93 @@ function traceName(trace: Trace): string {
   return trace.quantity === "voltage" ? trace.label : `I(${trace.label})`;
 }
 
+/** One plotted line and table row: a trace, or the magnitude or phase of an AC one. */
+interface Row {
+  /** Names the row's samples and readouts, as `rowKey` makes it. */
+  key: string;
+  trace: Trace;
+  acQuantity: AcQuantity | null;
+  name: string;
+  unit: string;
+  side: Side;
+  dashed: boolean;
+  token: string;
+  /** The first row of its trace, which holds the trace's remove button. */
+  first: boolean;
+}
+
+function rowKey(vector: string, acQuantity: AcQuantity | null): string {
+  return acQuantity === null ? vector : `${vector}\t${acQuantity}`;
+}
+
+interface Request {
+  vector: string;
+  acQuantity: AcQuantity | null;
+}
+
+function requestOf(key: string): Request {
+  const [vector = "", quantity] = key.split("\t");
+  const acQuantity =
+    quantity === "magnitudeDb" || quantity === "phaseDeg" ? quantity : null;
+  return { vector, acQuantity };
+}
+
+function rowsOf(traces: Trace[], xScale: XScale): Row[] {
+  return traces.flatMap((trace, index): Row[] => {
+    const name = traceName(trace);
+    const token = TRACE_TOKENS[index % TRACE_TOKENS.length]!;
+    if (xScale === "linear") {
+      const voltage = trace.quantity === "voltage";
+      return [
+        {
+          key: rowKey(trace.vector, null),
+          trace,
+          acQuantity: null,
+          name,
+          unit: unitOf(trace.quantity),
+          side: voltage ? "left" : "right",
+          dashed: false,
+          token,
+          first: true,
+        },
+      ];
+    }
+    return [
+      {
+        key: rowKey(trace.vector, "magnitudeDb"),
+        trace,
+        acQuantity: "magnitudeDb",
+        name: `${name} Mag`,
+        unit: "dB",
+        side: "left",
+        dashed: false,
+        token,
+        first: true,
+      },
+      {
+        key: rowKey(trace.vector, "phaseDeg"),
+        trace,
+        acQuantity: "phaseDeg",
+        name: `${name} Phase`,
+        unit: "°",
+        side: "right",
+        dashed: true,
+        token,
+        first: false,
+      },
+    ];
+  });
+}
+
+/** A reading in `unit`: decibels and degrees to 2 decimals, others with SI prefixes. */
+function formatReading(value: number, unit: string): string {
+  if (unit === "dB" || unit === "°") {
+    const fixed = value.toFixed(2);
+    return `${fixed === "-0.00" ? "0.00" : fixed} ${unit}`;
+  }
+  return formatQuantity(value, unit);
+}
+
 /** The times that the samples of every trace span together. */
 function runExtentOf(results: WaveformPoint[][]): XRange | null {
   let min = Infinity;
@@ -108,7 +202,7 @@ function Value({ value, unit }: { value: number | null; unit: string }) {
   if (value === null) {
     return <span className="waveform__empty">—</span>;
   }
-  return <>{formatQuantity(value, unit)}</>;
+  return <>{formatReading(value, unit)}</>;
 }
 
 export function WaveformViewer({
@@ -116,6 +210,7 @@ export function WaveformViewer({
   vectors,
   traces,
   stale,
+  xScale,
   view,
   onViewChange,
   measuring,
@@ -132,12 +227,16 @@ export function WaveformViewer({
   const [overCursor, setOverCursor] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const plotted = traces.length > 0;
-  const shown = traces.filter((trace) => vectors.includes(trace.vector));
-  const wanted = shown.map((trace) => trace.vector).join("\n");
+  const rows = rowsOf(traces, xScale);
+  const shown = rows.filter((row) => vectors.includes(row.trace.vector));
+  const wanted = shown.map((row) => row.key).join("\n");
   const viewMin = view?.min ?? null;
   const viewMax = view?.max ?? null;
   const span = measuredSpan(cursors, view);
   const { a: cursorA, b: cursorB } = cursors;
+  const log = xScale === "log";
+  const xUnit = log ? "Hz" : "s";
+  const formatX = (at: number) => formatQuantity(fromAxis(at, xScale), xUnit);
 
   useEffect(() => {
     const plot = plotRef.current;
@@ -164,13 +263,21 @@ export function WaveformViewer({
       previous.state === "ready" ? previous : { state: "loading" },
     );
     const delay = viewMin === null ? 0 : REFETCH_DELAY_MS;
+    const from = viewMin === null ? null : fromAxis(viewMin, xScale);
+    const to = viewMax === null ? null : fromAxis(viewMax, xScale);
     const timer = window.setTimeout(() => {
-      const requests = names.map((vector) =>
-        fetchWaveform(runId, vector, viewMin, viewMax, size.width),
-      );
+      const requests = names.map((name) => {
+        const { vector, acQuantity } = requestOf(name);
+        return fetchWaveform(runId, vector, acQuantity, from, to, size.width);
+      });
       Promise.all(requests).then(
-        (results) => {
+        (fetchedPoints) => {
           if (current) {
+            const results = fetchedPoints.map((points) =>
+              xScale === "linear"
+                ? points
+                : points.map(({ x, y }) => ({ x: toAxis(x, xScale), y })),
+            );
             const data = new Map<string, WaveformPoint[]>();
             names.forEach((name, index) => data.set(name, results[index]!));
             setFetched({ state: "ready", data });
@@ -190,7 +297,7 @@ export function WaveformViewer({
       current = false;
       window.clearTimeout(timer);
     };
-  }, [runId, size.width, wanted, viewMin, viewMax]);
+  }, [runId, size.width, wanted, viewMin, viewMax, xScale]);
 
   useEffect(() => {
     if (runId === null) {
@@ -199,11 +306,14 @@ export function WaveformViewer({
     let current = true;
     const names = wanted === "" ? [] : wanted.split("\n");
     const taken = { a: cursorA, b: cursorB };
-    const at = placedCursors(taken);
+    const at = placedCursors(taken).map((axis) => fromAxis(axis, xScale));
+    const from = span.from === null ? null : fromAxis(span.from, xScale);
+    const to = span.to === null ? null : fromAxis(span.to, xScale);
     const timer = window.setTimeout(() => {
-      const requests = names.map((vector) =>
-        measureTrace(runId, vector, span.from, span.to, at),
-      );
+      const requests = names.map((name) => {
+        const { vector, acQuantity } = requestOf(name);
+        return measureTrace(runId, vector, acQuantity, from, to, at);
+      });
       Promise.all(requests).then(
         (results) => {
           if (current) {
@@ -223,30 +333,30 @@ export function WaveformViewer({
       current = false;
       window.clearTimeout(timer);
     };
-  }, [runId, wanted, span.from, span.to, cursorA, cursorB]);
+  }, [runId, wanted, span.from, span.to, cursorA, cursorB, xScale]);
 
   useEffect(() => {
     if (viewMin === null || viewMax === null) {
       return;
     }
     const timer = window.setTimeout(() => {
-      const from = formatQuantity(viewMin, "s");
-      const to = formatQuantity(viewMax, "s");
+      const unit = xScale === "log" ? "Hz" : "s";
+      const from = formatQuantity(fromAxis(viewMin, xScale), unit);
+      const to = formatQuantity(fromAxis(viewMax, xScale), unit);
       setAnnouncement(`Zoomed to ${from} to ${to}.`);
     }, REFETCH_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [viewMin, viewMax]);
+  }, [viewMin, viewMax, xScale]);
 
   const data = fetched.state === "ready" ? fetched.data : null;
   const shownRange = view ?? runExtent;
-  const series = traces.flatMap((trace, index) => {
-    const points = data?.get(trace.vector);
-    const token = TRACE_TOKENS[index % TRACE_TOKENS.length]!;
-    return points ? [{ points, quantity: trace.quantity, token }] : [];
+  const series = rows.flatMap((row) => {
+    const points = data?.get(row.key);
+    return points ? [{ row, points }] : [];
   });
-  const hasPoints = (quantity: OpAnnotationKind) =>
-    series.some((item) => item.quantity === quantity && item.points.length);
-  const area = plotArea(size, hasPoints("voltage"), hasPoints("current"));
+  const hasPoints = (side: Side) =>
+    series.some((item) => item.row.side === side && item.points.length);
+  const area = plotArea(size, hasPoints("left"), hasPoints("right"), log);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -267,10 +377,12 @@ export function WaveformViewer({
     drawWaveforms(
       context,
       size,
-      series.map((item) => ({
-        points: item.points,
-        quantity: item.quantity,
-        color: token(item.token),
+      series.map(({ row, points }) => ({
+        points,
+        side: row.side,
+        unit: row.unit,
+        color: token(row.token),
+        dashed: row.dashed,
       })),
       {
         background: token("--color-canvas"),
@@ -281,6 +393,11 @@ export function WaveformViewer({
       `12px ${token("--font-family")}`,
       shownRange ?? { min: 0, max: 0 },
       lines,
+      {
+        scale: xScale,
+        leftTitle: log ? "Magnitude (dB)" : null,
+        rightTitle: log ? "Phase (°)" : null,
+      },
     );
   });
 
@@ -353,8 +470,8 @@ export function WaveformViewer({
 
   const placeCursor = (cursor: CursorId, at: number, verb: string) => {
     setCursors((previous) => ({ ...previous, [cursor]: at }));
-    const time = formatQuantity(at, "s");
-    setAnnouncement(`Cursor ${CURSOR_NAMES[cursor]} ${verb} ${time}.`);
+    const position = formatX(at);
+    setAnnouncement(`Cursor ${CURSOR_NAMES[cursor]} ${verb} ${position}.`);
   };
 
   const removeCursor = (cursor: CursorId) => {
@@ -432,8 +549,7 @@ export function WaveformViewer({
       if (drag.moved) {
         placeCursor("b", at, "placed at");
       } else {
-        const time = formatQuantity(at, "s");
-        setAnnouncement(`Cursor A placed at ${time}.`);
+        setAnnouncement(`Cursor A placed at ${formatX(at)}.`);
       }
     }
   };
@@ -510,10 +626,15 @@ export function WaveformViewer({
   const cursorHeader = (id: CursorId) => {
     const at = id === "a" ? cursorA : cursorB;
     const name = `Cursor ${CURSOR_NAMES[id]}`;
-    return at === null ? name : `${name} (${formatQuantity(at, "s")})`;
+    return at === null ? name : `${name} (${formatX(at)})`;
   };
   let deltaHeader = "Δ";
-  if (bothCursors) {
+  if (bothCursors && log) {
+    const low = fromAxis(cursorA, xScale);
+    const high = fromAxis(cursorB, xScale);
+    const difference = formatQuantity(high - low, "Hz");
+    deltaHeader = `Δ (${difference}, ×${(high / low).toPrecision(3)})`;
+  } else if (bothCursors) {
     const delta = cursorB - cursorA;
     const time = formatQuantity(delta, "s");
     const frequency = formatQuantity(1 / Math.abs(delta), "Hz");
@@ -545,10 +666,11 @@ export function WaveformViewer({
         tabIndex={0}
         aria-label="Waveform plot"
         aria-keyshortcuts="+ - ArrowLeft ArrowRight Home A B Shift+ArrowLeft Shift+ArrowRight Alt+ArrowLeft Alt+ArrowRight Escape"
-        data-min-x={shownRange?.min}
-        data-max-x={shownRange?.max}
-        data-cursor-a={cursorA ?? undefined}
-        data-cursor-b={cursorB ?? undefined}
+        data-x-scale={xScale}
+        data-min-x={shownRange ? fromAxis(shownRange.min, xScale) : undefined}
+        data-max-x={shownRange ? fromAxis(shownRange.max, xScale) : undefined}
+        data-cursor-a={cursorA === null ? undefined : fromAxis(cursorA, xScale)}
+        data-cursor-b={cursorB === null ? undefined : fromAxis(cursorB, xScale)}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -594,12 +716,10 @@ export function WaveformViewer({
                 </td>
               </tr>
             )}
-            {traces.map((trace, index) => {
-              const name = traceName(trace);
+            {rows.map((row) => {
+              const { trace, name, token, unit } = row;
               const missing = !vectors.includes(trace.vector);
-              const token = TRACE_TOKENS[index % TRACE_TOKENS.length];
-              const unit = unitOf(trace.quantity);
-              const readout = taken?.data.get(trace.vector) ?? null;
+              const readout = taken?.data.get(row.key) ?? null;
               const measured = readout?.span ?? null;
               const valueA = cursorValue(readout, "a");
               const valueB = cursorValue(readout, "b");
@@ -607,7 +727,7 @@ export function WaveformViewer({
                 valueA !== null && valueB !== null ? valueB - valueA : null;
               return (
                 <tr
-                  key={trace.vector}
+                  key={row.key}
                   className={
                     missing
                       ? "waveform__row waveform__row--missing"
@@ -648,16 +768,18 @@ export function WaveformViewer({
                   <td>
                     <Value value={measured?.peakToPeak ?? null} unit={unit} />
                   </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="icon-button"
-                      aria-label={`Remove ${name} from plot`}
-                      onClick={() => onRemove(trace.vector)}
-                    >
-                      <RemoveIcon />
-                    </button>
-                  </td>
+                  {row.first && (
+                    <td rowSpan={log ? 2 : undefined}>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label={`Remove ${traceName(trace)} from plot`}
+                        onClick={() => onRemove(trace.vector)}
+                      >
+                        <RemoveIcon />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               );
             })}

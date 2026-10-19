@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   clampView,
+  fromAxis,
   measuredSpan,
   panView,
   placedCursors,
+  toAxis,
   zoomView,
 } from "./waveformView";
 
@@ -71,5 +73,23 @@ describe("measuredSpan", () => {
     expect(placedCursors({ a: 2, b: 1 })).toEqual([2, 1]);
     expect(placedCursors({ a: null, b: 1 })).toEqual([1]);
     expect(placedCursors({ a: null, b: null })).toEqual([]);
+  });
+});
+
+describe("axis units", () => {
+  it("are seconds on a linear axis and decades on a log axis", () => {
+    expect(toAxis(2e-3, "linear")).toBe(2e-3);
+    expect(fromAxis(2e-3, "linear")).toBe(2e-3);
+    expect(toAxis(1e3, "log")).toBeCloseTo(3, 12);
+    expect(fromAxis(toAxis(159.15, "log"), "log")).toBeCloseTo(159.15, 9);
+  });
+
+  it("zoom a log axis by the same ratio of frequency on each side", () => {
+    const run = { min: 0, max: 6 };
+    const zoomed = zoomView(run, run, 3, 0.5)!;
+    expect(fromAxis(zoomed.max, "log") / 1e3).toBeCloseTo(
+      1e3 / fromAxis(zoomed.min, "log"),
+      9,
+    );
   });
 });

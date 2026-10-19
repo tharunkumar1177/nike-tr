@@ -39,6 +39,48 @@ pub struct SimulationFinished {
     pub scale: Option<String>,
     /// Every result vector in lower case, such as `/out` or `v1#branch`.
     pub vectors: Vec<String>,
+    /// Which analysis ran. The vectors of an AC analysis are complex, and are fetched and
+    /// measured as an `AcQuantity`.
+    pub analysis_kind: AnalysisKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AnalysisKind {
+    OperatingPoint,
+    Transient,
+    Ac,
+}
+
+impl From<&Analysis> for AnalysisKind {
+    fn from(analysis: &Analysis) -> AnalysisKind {
+        match analysis {
+            Analysis::OperatingPoint => AnalysisKind::OperatingPoint,
+            Analysis::Transient(_) => AnalysisKind::Transient,
+            Analysis::Ac(_) => AnalysisKind::Ac,
+        }
+    }
+}
+
+/// What to fetch or measure of a complex AC vector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AcQuantity {
+    /// In decibels.
+    MagnitudeDb,
+    /// In degrees, unwrapped.
+    PhaseDeg,
+}
+
+impl From<AcQuantity> for tron_sim::AcQuantity {
+    fn from(quantity: AcQuantity) -> tron_sim::AcQuantity {
+        match quantity {
+            AcQuantity::MagnitudeDb => tron_sim::AcQuantity::MagnitudeDb,
+            AcQuantity::PhaseDeg => tron_sim::AcQuantity::PhaseDeg,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, TS)]
@@ -66,9 +108,11 @@ pub struct TraceMeasurements {
     pub to: f64,
     pub min: f64,
     pub max: f64,
-    /// The mean over the span, so uneven time steps are weighted by their width.
-    pub average: f64,
-    pub rms: f64,
+    /// The mean over the span, so uneven time steps are weighted by their width. `null`
+    /// for an AC quantity, whose mean over frequency means nothing.
+    pub average: Option<f64>,
+    /// `null` for an AC quantity.
+    pub rms: Option<f64>,
     pub peak_to_peak: f64,
 }
 
@@ -79,8 +123,8 @@ impl From<Measurements> for TraceMeasurements {
             to: measured.to,
             min: measured.min,
             max: measured.max,
-            average: measured.average,
-            rms: measured.rms,
+            average: Some(measured.average),
+            rms: Some(measured.rms),
             peak_to_peak: measured.peak_to_peak,
         }
     }
@@ -276,23 +320,24 @@ impl SimInner {
     }
 
     /// The vector `vector` of run `run_id` between `min_x` and `max_x`, where a missing
-    /// bound means the end of the run, reduced to at most `budget` samples.
+    /// bound means the end of the run, reduced to at most `budget` samples. An AC vector
+    /// is fetched as `quantity`, at frequencies spread evenly on a log axis.
     fn waveform(
         &self,
         run_id: Uuid,
         vector: &str,
+        quantity: Option<AcQuantity>,
         min_x: Option<f64>,
         max_x: Option<f64>,
         budget: u32,
     ) -> Result<Vec<WaveformPoint>, AppError> {
         let plot = &self.results(run_id)?.plot;
+        let series = series(plot, vector, quantity)?;
         let budget = budget.min(MAX_WAVEFORM_POINTS) as usize;
         let min_x = min_x.unwrap_or(f64::NEG_INFINITY);
         let max_x = max_x.unwrap_or(f64::INFINITY);
-        let samples = plot
-            .waveform(vector, min_x, max_x, budget)
-            .ok_or_else(|| missing_vector(vector))?;
-        Ok(samples
+        Ok(series
+            .decimate(min_x, max_x, budget)
             .into_iter()
             .map(|sample| WaveformPoint {
                 x: sample.x,
@@ -302,25 +347,58 @@ impl SimInner {
     }
 
     /// The statistics of `vector` in run `run_id` between `min_x` and `max_x`, where a
-    /// missing bound means the end of the run, and its value at each of `cursors`.
+    /// missing bound means the end of the run, and its value at each of `cursors`. An AC
+    /// vector is measured as `quantity`, interpolated on log frequency, without an average
+    /// or RMS.
     fn measure_trace(
         &self,
         run_id: Uuid,
         vector: &str,
+        quantity: Option<AcQuantity>,
         min_x: Option<f64>,
         max_x: Option<f64>,
         cursors: &[f64],
     ) -> Result<TraceReadout, AppError> {
         let plot = &self.results(run_id)?.plot;
-        let Some(series) = plot.series(vector) else {
-            return Err(missing_vector(vector));
-        };
+        let series = series(plot, vector, quantity)?;
         let min_x = min_x.unwrap_or(f64::NEG_INFINITY);
         let max_x = max_x.unwrap_or(f64::INFINITY);
+        let span = series.measure(min_x, max_x).map(|measured| {
+            let span = TraceMeasurements::from(measured);
+            match quantity {
+                Some(_) => TraceMeasurements {
+                    average: None,
+                    rms: None,
+                    ..span
+                },
+                None => span,
+            }
+        });
         Ok(TraceReadout {
-            span: series.measure(min_x, max_x).map(TraceMeasurements::from),
+            span,
             cursors: cursors.iter().map(|&at| series.value_at(at)).collect(),
         })
+    }
+}
+
+/// The vector `vector` of `plot` as a series, or `quantity` of it when it's complex.
+fn series<'a>(
+    plot: &'a Plot,
+    vector: &str,
+    quantity: Option<AcQuantity>,
+) -> Result<tron_sim::Series<'a>, AppError> {
+    let series = match quantity {
+        None => plot.series(vector),
+        Some(quantity) => plot.ac_series(vector, quantity.into()),
+    };
+    match series {
+        Some(series) => Ok(series),
+        None if plot.find(vector).is_some() => Err(AppError::new(
+            AppErrorKind::SimNotFound,
+            format!("{vector} has no magnitude or phase outside an AC analysis."),
+            None,
+        )),
+        None => Err(missing_vector(vector)),
     }
 }
 
@@ -397,10 +475,13 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
     let path = ngspice_path(&app)?;
     let code_models = code_model_dir(&path)?;
     let state = app.state::<AppState>();
-    let (deck, anchors, probes, cancel, generation) = state.with_session(|session| {
+    let (deck, anchors, probes, kind, cancel, generation) = state.with_session(|session| {
         let project = session.project();
         let analysis = project.analysis().map(Analysis::from);
         let deck = deck(project.schematic(), analysis.as_ref())?;
+        let kind = analysis
+            .as_ref()
+            .map_or(AnalysisKind::OperatingPoint, AnalysisKind::from);
         let anchors = op_anchors(project.schematic(), &deck)?;
         let probes = probe_map(project.schematic(), &deck)?;
         let sim = app.state::<SimState>();
@@ -414,7 +495,7 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
         }
         let cancel = Arc::new(AtomicBool::new(false));
         inner.running = Some(Arc::clone(&cancel));
-        Ok((deck, anchors, probes, cancel, inner.generation))
+        Ok((deck, anchors, probes, kind, cancel, inner.generation))
     })??;
 
     let emitter = app.clone();
@@ -452,6 +533,7 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
             .iter()
             .map(|vector| vector.name.clone())
             .collect(),
+        analysis_kind: kind,
     };
     inner.results = Some(Results {
         run_id,
@@ -481,34 +563,41 @@ pub async fn cancel_simulation(app: AppHandle) -> Result<(), AppError> {
 
 /// The vector `vector` of run `run_id` between `min_x` and `max_x`, where a missing bound
 /// means the end of the run, reduced to at most `budget` samples (capped at
-/// `MAX_WAVEFORM_POINTS`) so peaks stay visible.
+/// `MAX_WAVEFORM_POINTS`) so peaks stay visible. The vectors of an AC run need
+/// `ac_quantity`, and are reduced on a log frequency axis.
 #[tauri::command]
 pub fn fetch_waveform(
     state: State<'_, SimState>,
     run_id: Uuid,
     vector: String,
+    ac_quantity: Option<AcQuantity>,
     min_x: Option<f64>,
     max_x: Option<f64>,
     budget: u32,
 ) -> Result<Vec<WaveformPoint>, AppError> {
-    state.lock().waveform(run_id, &vector, min_x, max_x, budget)
+    state
+        .lock()
+        .waveform(run_id, &vector, ac_quantity, min_x, max_x, budget)
 }
 
 /// The exact minimum, maximum, average, RMS, and peak-to-peak value of `vector` in run
 /// `run_id` between `min_x` and `max_x`, where a missing bound means the end of the run,
-/// and its value at each of `cursors`, all from the full-resolution samples.
+/// and its value at each of `cursors`, all from the full-resolution samples. The vectors
+/// of an AC run need `ac_quantity`; they have no average or RMS, and are interpolated on
+/// log frequency.
 #[tauri::command]
 pub fn measure_trace(
     state: State<'_, SimState>,
     run_id: Uuid,
     vector: String,
+    ac_quantity: Option<AcQuantity>,
     min_x: Option<f64>,
     max_x: Option<f64>,
     cursors: Vec<f64>,
 ) -> Result<TraceReadout, AppError> {
     state
         .lock()
-        .measure_trace(run_id, &vector, min_x, max_x, &cursors)
+        .measure_trace(run_id, &vector, ac_quantity, min_x, max_x, &cursors)
 }
 
 /// What the probed item `target` measures in run `run_id`.
@@ -564,6 +653,7 @@ mod tests {
             vectors: vec![Vector {
                 name: "/out".to_owned(),
                 values: vec![1.5],
+                imaginary: None,
             }],
         };
         state.lock().results = Some(Results {
@@ -609,6 +699,7 @@ mod tests {
                 .map(|(name, values)| Vector {
                     name: (*name).to_owned(),
                     values: values.to_vec(),
+                    imaginary: None,
                 })
                 .collect(),
         };
@@ -628,11 +719,11 @@ mod tests {
         let time: &[f64] = &[0.0, 1e-3, 2e-3];
         let inner = transient(&[("time", time), ("/out", &[0.0, 1.0, 4.0])]);
         let points = inner
-            .waveform(Uuid::nil(), "/out", None, None, 100)
+            .waveform(Uuid::nil(), "/out", None, None, None, 100)
             .unwrap();
         let xs: Vec<f64> = points.iter().map(|point| point.x).collect();
         assert_eq!(xs, vec![0.0, 1e-3, 2e-3]);
-        let missing = inner.waveform(Uuid::nil(), "/in", None, None, 100);
+        let missing = inner.waveform(Uuid::nil(), "/in", None, None, None, 100);
         assert_eq!(missing.unwrap_err().kind, AppErrorKind::SimNotFound);
     }
 
@@ -642,24 +733,109 @@ mod tests {
         let inner = transient(&[("time", time), ("/out", &[0.0, 2.0, 2.0])]);
         let nil = Uuid::nil();
         let readout = inner
-            .measure_trace(nil, "/out", None, None, &[1e-3, 5e-3])
+            .measure_trace(nil, "/out", None, None, None, &[1e-3, 5e-3])
             .unwrap();
         let span = readout.span.unwrap();
         assert_eq!((span.from, span.to), (0.0, 2e-3));
         assert_eq!((span.min, span.max, span.peak_to_peak), (0.0, 2.0, 2.0));
-        assert!((span.average - 1.5).abs() < 1e-12, "{}", span.average);
+        let average = span.average.unwrap();
+        assert!((average - 1.5).abs() < 1e-12, "{average}");
+        assert!(span.rms.is_some());
         assert_eq!(readout.cursors, vec![Some(2.0), None]);
         let json = serde_json::to_value(&readout).unwrap();
         assert_eq!(json["span"]["peakToPeak"], 2.0);
         assert_eq!(json["cursors"], serde_json::json!([2.0, null]));
 
-        let outside = inner.measure_trace(nil, "/out", Some(1.0), None, &[]);
+        let outside = inner.measure_trace(nil, "/out", None, Some(1.0), None, &[]);
         assert_eq!(outside.unwrap().span, None);
-        let missing = inner.measure_trace(nil, "/in", None, None, &[]);
+        let missing = inner.measure_trace(nil, "/in", None, None, None, &[]);
         assert_eq!(missing.unwrap_err().kind, AppErrorKind::SimNotFound);
         let other = Uuid::from_u128(1);
-        let stale = inner.measure_trace(other, "/out", None, None, &[]);
+        let stale = inner.measure_trace(other, "/out", None, None, None, &[]);
         assert_eq!(stale.unwrap_err().kind, AppErrorKind::SimNotFound);
+    }
+
+    /// `/out` at 1 Hz, 10 Hz, and 100 Hz, with a magnitude of 1, 0.1, and 0.01 and a phase
+    /// of 0°, 90°, and 180°.
+    fn ac() -> SimInner {
+        let plot = Plot {
+            name: "ac1".to_owned(),
+            scale: Some("frequency".to_owned()),
+            vectors: vec![
+                Vector {
+                    name: "frequency".to_owned(),
+                    values: vec![1.0, 10.0, 100.0],
+                    imaginary: None,
+                },
+                Vector {
+                    name: "/out".to_owned(),
+                    values: vec![1.0, 0.0, -0.01],
+                    imaginary: Some(vec![0.0, 0.1, 0.0]),
+                },
+            ],
+        };
+        SimInner {
+            results: Some(Results {
+                run_id: Uuid::nil(),
+                plot,
+                anchors: OpAnchors::default(),
+                probes: ProbeMap::default(),
+            }),
+            ..SimInner::default()
+        }
+    }
+
+    #[test]
+    fn an_ac_trace_is_fetched_and_measured_as_magnitude_or_phase() {
+        let inner = ac();
+        let nil = Uuid::nil();
+        let magnitude = Some(AcQuantity::MagnitudeDb);
+        let points = inner
+            .waveform(nil, "/out", magnitude, None, None, 100)
+            .unwrap();
+        let ys: Vec<f64> = points.iter().map(|point| point.y).collect();
+        assert_eq!(ys.len(), 3);
+        assert!(ys[0].abs() < 1e-9 && (ys[2] + 40.0).abs() < 1e-9);
+        assert!((points[2].x - 100.0).abs() < 1e-9, "{}", points[2].x);
+
+        let readout = inner
+            .measure_trace(nil, "/out", magnitude, None, None, &[10.0])
+            .unwrap();
+        let span = readout.span.unwrap();
+        assert_eq!((span.average, span.rms), (None, None));
+        assert!((span.peak_to_peak - 40.0).abs() < 1e-9);
+        assert!((readout.cursors[0].unwrap() + 20.0).abs() < 1e-9);
+        let json = serde_json::to_value(&readout).unwrap();
+        assert_eq!(json["span"]["average"], serde_json::Value::Null);
+
+        let phase = Some(AcQuantity::PhaseDeg);
+        let readout = inner
+            .measure_trace(nil, "/out", phase, None, None, &[100.0])
+            .unwrap();
+        assert!((readout.cursors[0].unwrap() - 180.0).abs() < 1e-9);
+
+        let real = inner.waveform(nil, "frequency", phase, None, None, 9);
+        assert_eq!(real.unwrap_err().kind, AppErrorKind::SimNotFound);
+        let missing = inner.waveform(nil, "/in", phase, None, None, 100);
+        assert_eq!(missing.unwrap_err().kind, AppErrorKind::SimNotFound);
+    }
+
+    #[test]
+    fn ac_names_match_the_ui_shapes() {
+        let quantity: AcQuantity = serde_json::from_str("\"magnitudeDb\"").unwrap();
+        assert_eq!(quantity, AcQuantity::MagnitudeDb);
+        let phase: AcQuantity = serde_json::from_str("\"phaseDeg\"").unwrap();
+        assert_eq!(phase, AcQuantity::PhaseDeg);
+        let kinds = [
+            AnalysisKind::OperatingPoint,
+            AnalysisKind::Transient,
+            AnalysisKind::Ac,
+        ];
+        let json = serde_json::to_value(kinds).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!(["operatingPoint", "transient", "ac"])
+        );
     }
 
     #[test]

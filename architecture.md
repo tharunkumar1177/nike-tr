@@ -55,7 +55,7 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 
 ### File format
 
-- Projects are saved as KiCad-compatible S-expression files: `.kicad_sch` for the schematic and `.kicad_pcb` for the board. A `tron.json` project manifest records Tron-only settings, including the simulation analysis settings (`.op` and `.tran` parameters). Changing an analysis setting is an undoable command that marks the project unsaved. KiCad does not see these settings.
+- Projects are saved as KiCad-compatible S-expression files: `.kicad_sch` for the schematic and `.kicad_pcb` for the board. A `tron.json` project manifest records Tron-only settings, including the simulation analysis settings (`.op`, `.tran`, and `.ac` parameters). Changing an analysis setting is an undoable command that marks the project unsaved. KiCad does not see these settings.
 - Tron reads and writes the ERC section of the KiCad `.kicad_pro` JSON (rule severities and violation exclusions). Every other key is kept and written back unchanged. Changing a severity or an exclusion is an undoable command that marks the project unsaved, like any document edit.
 - Every write is atomic: write to a temporary file in the same directory, flush it, then rename it over the target.
 - Unknown S-expression nodes are kept and written back unchanged, so a round trip never loses data Tron doesn't understand.
@@ -67,6 +67,7 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 - Large reads are scoped to the viewport. Full-document serialization over IPC is forbidden in edit loops.
 - Simulation result vectors stay in Rust. The UI fetches only the signals and the x range it shows, capped at a point budget, and Rust reduces the data by min-max decimation so peaks survive.
 - Measurements and cursor readouts are computed in Rust over the full-resolution vectors, never from the decimated samples the UI holds.
+- An AC run's vectors are complex. The UI asks for a real quantity of them (magnitude in dB, or unwrapped phase in degrees), and Rust reduces, measures, and interpolates it on log frequency. An AC quantity has no average or RMS.
 - Request and response types are defined in Rust and exported to TypeScript, so the two sides cannot drift.
 
 ### Connectivity and netlist

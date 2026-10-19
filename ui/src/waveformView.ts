@@ -1,15 +1,31 @@
 /**
- * The time range the waveform viewer shows and where its cursors sit: zooming and
- * panning within a run, and the span its measurements cover.
+ * The range the waveform viewer shows and where its cursors sit: zooming and panning
+ * within a run, and the span its measurements cover.
+ *
+ * Positions are in axis units: seconds on a linear time axis, and the base-10 logarithm
+ * of the frequency on a log axis, so zooming and panning a log axis is geometric.
  */
 
-/** A range of time, in seconds. */
+/** How the x axis spaces its values: time, or frequency on a log scale. */
+export type XScale = "linear" | "log";
+
+/** A range of the x axis, in axis units. */
 export interface XRange {
   min: number;
   max: number;
 }
 
-/** The two measurement cursors, in seconds, or `null` where one isn't placed. */
+/** `value`, in seconds or hertz, in the axis units of `scale`. */
+export function toAxis(value: number, scale: XScale): number {
+  return scale === "log" ? Math.log10(value) : value;
+}
+
+/** A position in the axis units of `scale`, in seconds or hertz. */
+export function fromAxis(position: number, scale: XScale): number {
+  return scale === "log" ? 10 ** position : position;
+}
+
+/** The two measurement cursors, in axis units, or `null` where one isn't placed. */
 export interface Cursors {
   a: number | null;
   b: number | null;

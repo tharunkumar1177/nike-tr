@@ -1,6 +1,6 @@
 //! The analyses a simulation runs.
 
-use tron_core::AnalysisSettings;
+use tron_core::{AcSweep, AnalysisSettings};
 
 use crate::value::spice_number;
 
@@ -10,6 +10,18 @@ pub enum Analysis {
     OperatingPoint,
     /// `.tran`: the response over time.
     Transient(Transient),
+    /// `.ac`: the small-signal response over frequency.
+    Ac(Ac),
+}
+
+/// The `.ac` parameters, in hertz.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ac {
+    pub sweep: AcSweep,
+    /// Points per decade or octave, or in total for a linear sweep.
+    pub points: u32,
+    pub start: f64,
+    pub stop: f64,
 }
 
 /// The `.tran` parameters, in seconds.
@@ -31,7 +43,35 @@ impl Analysis {
         match self {
             Analysis::OperatingPoint => Ok(".op".to_owned()),
             Analysis::Transient(transient) => transient.directive(),
+            Analysis::Ac(ac) => ac.directive(),
         }
+    }
+}
+
+impl Ac {
+    fn directive(&self) -> Result<String, String> {
+        if self.points == 0 {
+            return Err("The AC sweep needs at least one point.".to_owned());
+        }
+        if !(self.start.is_finite() && self.start > 0.0) {
+            return Err("The AC start frequency must be greater than zero.".to_owned());
+        }
+        if !(self.stop.is_finite() && self.stop > self.start) {
+            return Err(
+                "The AC stop frequency must be greater than the start frequency.".to_owned(),
+            );
+        }
+        let sweep = match self.sweep {
+            AcSweep::Decade => "dec",
+            AcSweep::Octave => "oct",
+            AcSweep::Linear => "lin",
+        };
+        Ok(format!(
+            ".ac {sweep} {} {} {}",
+            self.points,
+            spice_number(self.start),
+            spice_number(self.stop)
+        ))
     }
 }
 
@@ -51,6 +91,17 @@ impl From<AnalysisSettings> for Analysis {
                 start,
                 max_step,
                 initial_conditions,
+            }),
+            AnalysisSettings::Ac {
+                sweep,
+                points,
+                fstart,
+                fstop,
+            } => Analysis::Ac(Ac {
+                sweep,
+                points,
+                start: fstart,
+                stop: fstop,
             }),
         }
     }
@@ -149,6 +200,41 @@ mod tests {
         for (transient, word) in cases {
             let error = Analysis::Transient(transient).directive().unwrap_err();
             assert!(error.contains(word), "{error}");
+        }
+    }
+
+    fn ac(points: u32, start: f64, stop: f64) -> Analysis {
+        Analysis::Ac(Ac {
+            sweep: AcSweep::Decade,
+            points,
+            start,
+            stop,
+        })
+    }
+
+    #[test]
+    fn ac_sweeps_name_their_spacing_and_check_their_range() {
+        assert_eq!(
+            ac(100, 1.0, 1e6).directive().unwrap(),
+            ".ac dec 100 1e0 1e6"
+        );
+        let octave = Analysis::Ac(Ac {
+            sweep: AcSweep::Octave,
+            points: 10,
+            start: 20.0,
+            stop: 2e4,
+        });
+        assert_eq!(octave.directive().unwrap(), ".ac oct 10 2e1 2e4");
+        let cases = [
+            (ac(0, 1.0, 1e3), "at least one point"),
+            (ac(10, 0.0, 1e3), "start frequency"),
+            (ac(10, f64::INFINITY, 1e3), "start frequency"),
+            (ac(10, 1e3, 1e3), "stop frequency"),
+            (ac(10, 1.0, f64::NAN), "stop frequency"),
+        ];
+        for (analysis, words) in cases {
+            let error = analysis.directive().unwrap_err();
+            assert!(error.contains(words), "{error}");
         }
     }
 }
