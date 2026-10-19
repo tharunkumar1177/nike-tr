@@ -84,6 +84,7 @@ pub fn run() {
             sim::cancel_simulation,
             sim::fetch_waveform,
             sim::fetch_op_annotations,
+            sim::resolve_probe,
         ])
         .run(tauri::generate_context!())
         .expect("the Tron desktop runtime failed to start");

@@ -12,6 +12,8 @@ import type { LibraryHit } from "./bindings/LibraryHit";
 import type { LibraryStatus } from "./bindings/LibraryStatus";
 import type { LibrarySymbol } from "./bindings/LibrarySymbol";
 import type { OpAnnotation } from "./bindings/OpAnnotation";
+import type { ProbeResult } from "./bindings/ProbeResult";
+import type { ProbeTarget } from "./bindings/ProbeTarget";
 import type { ProjectProperties } from "./bindings/ProjectProperties";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
@@ -19,6 +21,7 @@ import type { SimulationFinished } from "./bindings/SimulationFinished";
 import type { SymbolField } from "./bindings/SymbolField";
 import type { SymbolPlacement } from "./bindings/SymbolPlacement";
 import type { SymbolTransform } from "./bindings/SymbolTransform";
+import type { WaveformPoint } from "./bindings/WaveformPoint";
 import type { Xy } from "./bindings/Xy";
 
 export const DOCUMENT_CHANGED_EVENT = "document-changed";
@@ -185,6 +188,34 @@ export function cancelSimulation(): Promise<void> {
 
 export function fetchOpAnnotations(runId: string): Promise<OpAnnotation[]> {
   return invoke<OpAnnotation[]>("fetch_op_annotations", { runId });
+}
+
+/**
+ * The samples of `vector` in run `runId` between `minX` and `maxX` (`null` for the end of
+ * the run), reduced to at most `budget` so peaks stay visible.
+ */
+export function fetchWaveform(
+  runId: string,
+  vector: string,
+  minX: number | null,
+  maxX: number | null,
+  budget: number,
+): Promise<WaveformPoint[]> {
+  return invoke<WaveformPoint[]>("fetch_waveform", {
+    runId,
+    vector,
+    minX,
+    maxX,
+    budget,
+  });
+}
+
+/** What the probed item `target` measures in run `runId`. */
+export function resolveProbe(
+  runId: string,
+  target: ProbeTarget,
+): Promise<ProbeResult> {
+  return invoke<ProbeResult>("resolve_probe", { runId, target });
 }
 
 export function listRecentProjects(): Promise<RecentProject[]> {

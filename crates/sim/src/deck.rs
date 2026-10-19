@@ -138,7 +138,7 @@ fn pin_numbers(
 }
 
 /// Whether a net is ground: KiCad simulates nets named `GND` or `0` as node `0`.
-fn is_ground(net: &str) -> bool {
+pub(crate) fn is_ground(net: &str) -> bool {
     net == "GND" || net == GROUND
 }
 
