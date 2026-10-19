@@ -178,7 +178,7 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
 - **Bundled ngspice in an installed app (unverified):** CI checks that the files are bundled but never runs the installed app. Still unverified: an install under `Program Files`, an install path with non-ASCII characters (ngspice receives a narrow-string path), and a path that contains `'` (rejected by design).
 - **Progress on very long transients (unexplained):** a 0.1 s transient with a 0.1 µs maximum step reports progress midway. A 2 s transient with the same step reported none in its first 10 s on the CI runner ([CI 38594420004](https://github.com/tharunkumar1177/tron/actions/runs/38594420004)). The cause is unknown, so the 5d UI must not treat a run without progress as stuck, and should show elapsed time as well.
 - **F5 in the installed app (unverified):** F5 and `Ctrl+Alt+S` rely on the native menu accelerators, like the other shortcuts. CI can't confirm that WebView2 passes F5 to the menu instead of handling it itself.
-- **No analysis covers `.ac` yet:** the "`.ac` −3 dB" criterion has no sub-slice. Ask the user before planning 5d-2.
+- **`.ac` analysis:** the user decided on 2026-10-19 that AC gets its own sub-slice, **5d-4**, after 5d-3. It covers the engine, the settings, and a Bode plot, and it owns the "`.ac` −3 dB" criterion.
 - The `start_simulation`, `cancel_simulation`, and `fetch_waveform` commands have no test through Tauri itself. The engine, decimation, settings, and error mapping beneath them are tested.
 
 ### Slice 5 research (2026-10-14, unverified until CI confirms)
