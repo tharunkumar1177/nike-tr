@@ -1753,6 +1753,7 @@ describe("Wiring", () => {
         { x: 0, y: 0 },
         { x: 1e-3, y: 3.3 },
       ],
+      measure_trace: () => ({ span: null, cursors: [] }),
     });
 
     await emitFromCore("menu-action", "run-simulation");
@@ -1773,10 +1774,10 @@ describe("Wiring", () => {
     ).toBeTruthy();
 
     clickAt(canvas, PIN_1);
-    const legend = await within(panel).findByRole("list", {
-      name: "Plotted signals",
-    });
-    expect(within(legend).getByText("/OUT")).toBeTruthy();
+    const table = await within(panel).findByRole("table");
+    expect(
+      within(table).getByRole("rowheader", { name: "/OUT" }),
+    ).toBeTruthy();
     expect(argsOf(calls, "resolve_probe")).toEqual([
       {
         runId: "run-2",
@@ -1795,9 +1796,7 @@ describe("Wiring", () => {
     expect(
       await screen.findAllByText("Removed probe from /OUT."),
     ).not.toHaveLength(0);
-    expect(
-      within(panel).queryByRole("list", { name: "Plotted signals" }),
-    ).toBeNull();
+    expect(within(panel).queryByRole("table")).toBeNull();
 
     fireEvent.keyDown(canvas, { key: "Escape" });
     expect(await screen.findByText("Probe mode ended.")).toBeTruthy();

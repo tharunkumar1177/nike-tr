@@ -1,9 +1,42 @@
-import type { ReactNode } from "react";
+import {
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+  useRef,
+  useState,
+} from "react";
 import type { SimulationFinished } from "../bindings/SimulationFinished";
 import type { ErrorReport } from "../ipc";
 import { formatSeconds } from "../si";
+import type { XRange } from "../waveformView";
 import { CheckIcon, ErrorIcon, RemoveIcon } from "./icons";
 import { type Trace, WaveformViewer } from "./WaveformViewer";
+
+/** The panel's height limits, in CSS pixels, and its keyboard resize step. */
+const MIN_HEIGHT_PX = 240;
+const PLOTTING_HEIGHT_PX = 320;
+const MAX_HEIGHT_FRACTION = 0.8;
+const RESIZE_STEP_PX = 20;
+
+/** The view zoomed into, for the run it belongs to. */
+interface Zoom {
+  runId: string;
+  view: XRange;
+}
+
+/** Where a resize drag started. */
+interface ResizeDrag {
+  pointerId: number;
+  y: number;
+  height: number;
+}
+
+function maxHeight(): number {
+  return Math.max(
+    MIN_HEIGHT_PX,
+    Math.round(window.innerHeight * MAX_HEIGHT_FRACTION),
+  );
+}
 
 /** The latest simulation run, as the panel shows it. */
 export type SimRun =
@@ -59,6 +92,16 @@ export function SimPanel({
   onJumpToSymbol,
   onClose,
 }: SimPanelProps) {
+  const [zoom, setZoom] = useState<Zoom | null>(null);
+  const [measuring, setMeasuring] = useState(false);
+  const [height, setHeight] = useState<number | null>(null);
+  const resizeRef = useRef<ResizeDrag>(null);
+  const runId = run.state === "finished" ? run.result.runId : null;
+  const view = zoom !== null && zoom.runId === runId ? zoom.view : null;
+  const changeView = (next: XRange | null) => {
+    setZoom(next === null || runId === null ? null : { runId, view: next });
+  };
+
   let content: ReactNode;
   switch (run.state) {
     case "idle":
@@ -94,10 +137,14 @@ export function SimPanel({
       const { result } = run;
       content = result.scale ? (
         <WaveformViewer
+          key={result.runId}
           runId={stale ? null : result.runId}
           vectors={result.vectors}
           traces={traces}
           stale={stale}
+          view={view}
+          onViewChange={changeView}
+          measuring={measuring}
           onRemove={onRemoveTrace}
         />
       ) : (
@@ -154,11 +201,71 @@ export function SimPanel({
   const running = run.state === "running";
   const plotting =
     run.state === "finished" && run.result.scale !== null && traces.length > 0;
+  const shownHeight = height ?? (plotting ? PLOTTING_HEIGHT_PX : MIN_HEIGHT_PX);
+
+  const resizeTo = (next: number) => {
+    setHeight(Math.min(Math.max(next, MIN_HEIGHT_PX), maxHeight()));
+  };
+
+  const onResizeStart = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      y: event.clientY,
+      height: shownHeight,
+    };
+  };
+
+  const onResizeMove = (event: PointerEvent<HTMLDivElement>) => {
+    const start = resizeRef.current;
+    if (start && start.pointerId === event.pointerId) {
+      resizeTo(start.height + start.y - event.clientY);
+    }
+  };
+
+  const onResizeEnd = () => {
+    resizeRef.current = null;
+  };
+
+  const onResizeKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const sizes: Record<string, number> = {
+      ArrowUp: shownHeight + RESIZE_STEP_PX,
+      ArrowDown: shownHeight - RESIZE_STEP_PX,
+      Home: MIN_HEIGHT_PX,
+      End: maxHeight(),
+    };
+    const next = sizes[event.key];
+    if (next !== undefined) {
+      event.preventDefault();
+      resizeTo(next);
+    }
+  };
+
   return (
     <section
       className={plotting ? "sim-panel sim-panel--plotting" : "sim-panel"}
+      style={height === null ? undefined : { height }}
       aria-label="Simulation"
     >
+      <div
+        className="sim-panel__resize"
+        role="separator"
+        tabIndex={0}
+        aria-label="Resize simulation panel"
+        aria-orientation="horizontal"
+        aria-valuenow={shownHeight}
+        aria-valuemin={MIN_HEIGHT_PX}
+        aria-valuemax={maxHeight()}
+        onPointerDown={onResizeStart}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeEnd}
+        onPointerCancel={onResizeEnd}
+        onKeyDown={onResizeKey}
+      />
       <header className="sim-panel__header">
         {run.state === "finished" ? (
           <p className="sim-panel__status" role="status">
@@ -170,6 +277,27 @@ export function SimPanel({
         )}
         {stale && <span className="sim-panel__badge">Out of date</span>}
         <div className="sim-panel__actions">
+          {plotting && (
+            <>
+              <button
+                type="button"
+                className="button"
+                aria-pressed={measuring}
+                disabled={stale}
+                onClick={() => setMeasuring((previous) => !previous)}
+              >
+                Measure
+              </button>
+              <button
+                type="button"
+                className="button"
+                disabled={stale || view === null}
+                onClick={() => changeView(null)}
+              >
+                Zoom to Fit
+              </button>
+            </>
+          )}
           <button type="button" className="button" onClick={onOpenSettings}>
             Settings
           </button>

@@ -1,11 +1,12 @@
 /**
  * Lays out and draws the waveform viewer's plot: a time axis, a voltage axis on the
- * left and a current axis on the right when traces of that kind exist, gridlines, and
- * one line per trace. The context arrives in CSS pixels.
+ * left and a current axis on the right when traces of that kind exist, gridlines, one
+ * line per trace, and the cursors. The context arrives in CSS pixels.
  */
 import type { OpAnnotationKind } from "./bindings/OpAnnotationKind";
 import type { WaveformPoint } from "./bindings/WaveformPoint";
 import { formatSi } from "./si";
+import type { XRange } from "./waveformView";
 
 export const TICK_COUNT = 5;
 const TRACE_WIDTH_PX = 1.5;
@@ -76,9 +77,49 @@ export interface PlotColors {
   text: string;
 }
 
+/** A cursor line to draw. */
+export interface CursorLine {
+  at: number;
+  color: string;
+}
+
 interface Size {
   width: number;
   height: number;
+}
+
+/** Where the traces are drawn inside the canvas, in CSS pixels. */
+export interface PlotArea {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/** The plot area of a canvas of `size`, leaving room for the axes that are shown. */
+export function plotArea(
+  size: Size,
+  voltage: boolean,
+  current: boolean,
+): PlotArea {
+  return {
+    left: voltage ? AXIS_WIDTH_PX : EDGE_PX,
+    right: size.width - (current ? AXIS_WIDTH_PX : EDGE_PX),
+    top: TOP_PX,
+    bottom: size.height - BOTTOM_PX,
+  };
+}
+
+/** The time at `x` pixels across `area` when it shows `view`. */
+export function timeAtPixel(area: PlotArea, view: XRange, x: number): number {
+  const fraction = (x - area.left) / (area.right - area.left);
+  return view.min + fraction * (view.max - view.min);
+}
+
+/** How many pixels across `area` the time `at` is drawn when it shows `view`. */
+export function pixelAtTime(area: PlotArea, view: XRange, at: number): number {
+  const fraction = (at - view.min) / (view.max - view.min);
+  return area.left + fraction * (area.right - area.left);
 }
 
 function extent(values: number[]): [number, number] | null {
@@ -93,40 +134,73 @@ function extent(values: number[]): [number, number] | null {
   return low <= high ? [low, high] : null;
 }
 
-function axisFor(series: Series[], quantity: OpAnnotationKind): Axis | null {
+/**
+ * The samples of `points` that `view` shows, plus the one just outside each end so a
+ * trace whose samples straddle the view still has a range.
+ */
+export function visiblePoints(
+  points: WaveformPoint[],
+  view: XRange,
+): WaveformPoint[] {
+  const first = points.findIndex((point) => point.x >= view.min);
+  if (first === -1) {
+    return points.slice(-1);
+  }
+  let end = first;
+  while (end < points.length && points[end]!.x <= view.max) {
+    end++;
+  }
+  return points.slice(Math.max(first - 1, 0), end + 1);
+}
+
+function axisFor(
+  series: Series[],
+  quantity: OpAnnotationKind,
+  view: XRange,
+): Axis | null {
   const values = series
     .filter((item) => item.quantity === quantity)
-    .flatMap((item) => item.points.map((point) => point.y));
+    .flatMap((item) =>
+      visiblePoints(item.points, view).map((point) => point.y),
+    );
   const range = extent(values);
   return range ? niceAxis(range[0], range[1]) : null;
 }
 
-/** Draws the axes, gridlines, and traces of `series` filling `size`. */
+/** The time ticks for `view`: round steps, without any outside it. */
+export function timeTicks(view: XRange): number[] {
+  const slack = (view.max - view.min) * 1e-9;
+  return niceAxis(view.min, view.max).ticks.filter(
+    (tick) => tick >= view.min - slack && tick <= view.max + slack,
+  );
+}
+
+/**
+ * Draws the axes, gridlines, and traces of `series` filling `size`, over the times in
+ * `view`, then the `cursors` that `view` shows. The value axes fit the visible samples.
+ */
 export function drawWaveforms(
   context: CanvasRenderingContext2D,
   size: Size,
   series: Series[],
   colors: PlotColors,
   font: string,
+  view: XRange,
+  cursors: CursorLine[],
 ) {
   context.fillStyle = colors.background;
   context.fillRect(0, 0, size.width, size.height);
-  const xRange = extent(series.flatMap((item) => item.points.map((p) => p.x)));
-  const voltage = axisFor(series, "voltage");
-  const current = axisFor(series, "current");
-  if (!xRange || (!voltage && !current)) {
+  const voltage = axisFor(series, "voltage", view);
+  const current = axisFor(series, "current", view);
+  if (view.max <= view.min || (!voltage && !current)) {
     return;
   }
-  const time = niceAxis(xRange[0], xRange[1]);
-  const left = voltage ? AXIS_WIDTH_PX : EDGE_PX;
-  const right = size.width - (current ? AXIS_WIDTH_PX : EDGE_PX);
-  const top = TOP_PX;
-  const bottom = size.height - BOTTOM_PX;
+  const area = plotArea(size, voltage !== null, current !== null);
+  const { left, right, top, bottom } = area;
   if (right <= left || bottom <= top) {
     return;
   }
-  const xAt = (x: number) =>
-    left + ((x - time.min) / (time.max - time.min)) * (right - left);
+  const xAt = (x: number) => pixelAtTime(area, view, x);
   const yAt = (axis: Axis, y: number) =>
     bottom - ((y - axis.min) / (axis.max - axis.min)) * (bottom - top);
 
@@ -135,7 +209,7 @@ export function drawWaveforms(
   context.fillStyle = colors.text;
   context.textBaseline = "top";
   context.textAlign = "center";
-  for (const tick of time.ticks) {
+  for (const tick of timeTicks(view)) {
     const x = Math.round(xAt(tick)) + 0.5;
     context.strokeStyle = colors.grid;
     context.beginPath();
@@ -187,6 +261,18 @@ export function drawWaveforms(
         context.lineTo(x, y);
       }
     });
+    context.stroke();
+  }
+  context.lineWidth = 1;
+  for (const cursor of cursors) {
+    if (cursor.at < view.min || cursor.at > view.max) {
+      continue;
+    }
+    const x = Math.round(xAt(cursor.at)) + 0.5;
+    context.strokeStyle = cursor.color;
+    context.beginPath();
+    context.moveTo(x, top);
+    context.lineTo(x, bottom);
     context.stroke();
   }
   context.restore();

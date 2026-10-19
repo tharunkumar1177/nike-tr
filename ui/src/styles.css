@@ -555,6 +555,7 @@ body,
 }
 
 .sim-panel {
+  position: relative;
   display: flex;
   flex: none;
   flex-direction: column;
@@ -632,10 +633,30 @@ body,
   font-weight: 600;
 }
 
+.sim-panel__resize {
+  position: absolute;
+  top: -2px;
+  right: 0;
+  left: 0;
+  z-index: 1;
+  height: 4px;
+  cursor: ns-resize;
+}
+
+.sim-panel__resize:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.sim-panel__actions .button[aria-pressed="true"] {
+  background-color: var(--color-surface-hover);
+  color: var(--color-focus);
+}
+
 .waveform {
-  position: relative;
   display: flex;
   flex: 1;
+  flex-direction: column;
   min-height: 0;
 }
 
@@ -647,7 +668,22 @@ body,
   position: relative;
   flex: 1;
   min-width: 0;
+  min-height: 80px;
   overflow: hidden;
+  touch-action: none;
+}
+
+.waveform__plot:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.waveform__plot--measuring {
+  cursor: crosshair;
+}
+
+.waveform__plot--on-cursor {
+  cursor: col-resize;
 }
 
 .waveform__canvas {
@@ -657,43 +693,64 @@ body,
   height: 100%;
 }
 
-.waveform__message {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
+.waveform__table-container {
+  flex: none;
+  max-height: 40%;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-border);
+}
+
+.waveform__table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.waveform__caption {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  text-align: left;
+}
+
+.waveform__table th,
+.waveform__table td {
+  padding: var(--space-1) var(--space-2);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.waveform__table thead th {
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
   color: var(--color-text-secondary);
 }
 
-.waveform__legend {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  max-width: 60%;
-  margin: 0;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-surface-elevated) 80%, #0000);
-  font-size: var(--text-xs);
-  list-style: none;
+.waveform__table th:first-child {
+  text-align: left;
 }
 
-.waveform__item {
+.waveform__row {
+  border-bottom: 1px solid var(--color-grid-line);
+}
+
+.waveform__row:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.waveform__row th {
+  font-weight: 400;
+}
+
+.waveform__row--missing {
+  opacity: 0.5;
+}
+
+.waveform__signal {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-}
-
-.waveform__item--missing {
-  opacity: 0.5;
 }
 
 .waveform__swatch {
@@ -702,8 +759,17 @@ body,
   border-top: 2px solid currentcolor;
 }
 
-.waveform__item--missing .waveform__swatch {
+.waveform__row--missing .waveform__swatch {
   border-top-style: dashed;
+}
+
+.waveform__empty {
+  color: var(--color-text-secondary);
+}
+
+.waveform__table td.waveform__table-message {
+  color: var(--color-text-secondary);
+  text-align: center;
 }
 
 .sim-row {

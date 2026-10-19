@@ -21,6 +21,7 @@ import type { SimulationFinished } from "./bindings/SimulationFinished";
 import type { SymbolField } from "./bindings/SymbolField";
 import type { SymbolPlacement } from "./bindings/SymbolPlacement";
 import type { SymbolTransform } from "./bindings/SymbolTransform";
+import type { TraceReadout } from "./bindings/TraceReadout";
 import type { WaveformPoint } from "./bindings/WaveformPoint";
 import type { Xy } from "./bindings/Xy";
 
@@ -207,6 +208,26 @@ export function fetchWaveform(
     minX,
     maxX,
     budget,
+  });
+}
+
+/**
+ * The exact statistics of `vector` in run `runId` between `minX` and `maxX` (`null` for
+ * the end of the run), and its value at each of `cursors`.
+ */
+export function measureTrace(
+  runId: string,
+  vector: string,
+  minX: number | null,
+  maxX: number | null,
+  cursors: number[],
+): Promise<TraceReadout> {
+  return invoke<TraceReadout>("measure_trace", {
+    runId,
+    vector,
+    minX,
+    maxX,
+    cursors,
   });
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatOpValue, formatSi, parseSi } from "./si";
+import { formatOpValue, formatQuantity, formatSi, parseSi } from "./si";
 
 describe("parseSi", () => {
   it("reads SPICE suffixes, ignoring case", () => {
@@ -62,5 +62,14 @@ describe("formatOpValue", () => {
     expect(formatOpValue(1e-18, "voltage")).toBe("0 V");
     expect(formatOpValue(-3e-17, "current")).toBe("0 A");
     expect(formatOpValue(1.234e15, "voltage")).toBe("1.23e15 V");
+  });
+});
+
+describe("formatQuantity", () => {
+  it("formats any unit the way operating-point values are", () => {
+    expect(formatQuantity(2.5e-4, "s")).toBe("250 µs");
+    expect(formatQuantity(-5e-4, "s")).toBe("-500 µs");
+    expect(formatQuantity(2000, "Hz")).toBe("2.00 kHz");
+    expect(formatQuantity(0, "s")).toBe("0 s");
   });
 });
