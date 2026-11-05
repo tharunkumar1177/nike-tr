@@ -155,7 +155,10 @@ pub fn diagnose(output: &[String], deck: &Deck) -> Option<Diagnosis> {
     let mut device = None;
     let kind = if let Some(failure) = &timestep {
         match failure.culprit {
-            Some(Culprit::Node(node)) => blame.node(node),
+            Some(Culprit::Node(node)) => {
+                blame.node(node);
+                device = node.strip_suffix("#branch").map(str::to_owned);
+            }
             Some(Culprit::Device(name)) => {
                 blame.device(name);
                 device = Some(name.to_owned());
@@ -201,11 +204,13 @@ struct TimestepFailure<'a> {
 /// timepoint: ` form, which has no time.
 fn timestep_too_small(line: &str) -> Option<TimestepFailure<'_>> {
     let rest = &line[line.find("timestep too small")?..];
-    let time = rest.find("time = ")
+    let time = rest
+        .find("time = ")
         .map(|start| &rest[start + "time = ".len()..])
         .and_then(|text| text.split([',', ' ']).next())
         .and_then(|number| number.parse().ok());
-    let blamed = rest.find("trouble with ")
+    let blamed = rest
+        .find("trouble with ")
         .and_then(|start| culprit(&rest[start + "trouble with ".len()..]));
     Some(TimestepFailure {
         time,
@@ -510,6 +515,12 @@ mod tests {
         let unknown = diagnose(&output(&[initial]), &deck()).unwrap();
         let expected = "Transient step too small at the initial timepoint.";
         assert_eq!(unknown.message(), expected);
+
+        let line = "TRAN: Timestep too small; initial timepoint: \
+                    trouble with node \"v1#branch\"";
+        let branch = diagnose(&output(&[line]), &deck()).unwrap();
+        let expected = "Transient step too small at the initial timepoint in v1 (V1).";
+        assert_eq!(branch.message(), expected);
     }
 
     #[test]

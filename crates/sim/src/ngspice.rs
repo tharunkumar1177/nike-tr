@@ -486,6 +486,12 @@ impl Engine {
         result
     }
 
+    /// Every line ngspice printed during the last run, warnings and notes included,
+    /// without its stream prefix.
+    pub fn output(&self) -> &[String] {
+        &self.output
+    }
+
     /// Like [`Engine::run_cancellable`], and says how the run converged. ngspice retries a
     /// failed operating point with gmin and source stepping itself. When the analysis still
     /// fails to converge, the deck runs once more with a 1 GΩ shunt from every node to

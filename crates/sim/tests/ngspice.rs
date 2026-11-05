@@ -250,7 +250,7 @@ fn a_circuit_that_converges_directly_says_so() {
 }
 
 #[test]
-fn a_floating_node_is_diagnosed_and_rescued_by_a_shunt() {
+fn a_floating_capacitor_node_converges_with_stepping() {
     let lines = [
         "* Tron simulation",
         "V1 a 0 DC 5",
@@ -264,15 +264,34 @@ fn a_floating_node_is_diagnosed_and_rescued_by_a_shunt() {
     let floating = hand_deck(&lines, &nodes, &devices);
     let mut engine = engine();
     let converged = run_convergent(&mut engine, &floating);
-    assert_eq!(converged.convergence, Convergence::RshuntRescue);
+    let output = engine.output().join("\n");
+    assert_eq!(converged.convergence, Convergence::Stepped, "{output}");
+    assert_eq!(converged.diagnosis, None);
+    let input = converged.plot.vector("a").expect("the plot has a")[0];
+    assert!(relative_error(input, 5.0) < 1e-6, "{input}");
+}
+
+#[test]
+fn a_floating_resistor_without_stepping_is_rescued_by_a_shunt() {
+    let lines = [
+        "* Tron simulation",
+        "V1 a 0 DC 5",
+        "R1 a 0 1e3",
+        "R2 b c 1e3",
+        ".options gminsteps=0 srcsteps=0",
+        ".op",
+        ".end",
+    ];
+    let nodes = [("a", "IN"), ("b", "/B"), ("c", "/C")];
+    let devices = [("V1", "V1"), ("R1", "R1"), ("R2", "R2")];
+    let island = hand_deck(&lines, &nodes, &devices);
+    let mut engine = engine();
+    let converged = run_convergent(&mut engine, &island);
+    let output = engine.output().join("\n");
+    let convergence = converged.convergence;
+    assert_eq!(convergence, Convergence::RshuntRescue, "{output}");
     let diagnosis = converged.diagnosis.expect("the failure is kept");
-    assert_eq!(
-        diagnosis.kind,
-        DiagnosisKind::SingularMatrix,
-        "{diagnosis:?}"
-    );
-    assert_eq!(diagnosis.nets, ["FLOAT"], "{diagnosis:?}");
-    assert_eq!(diagnosis.reference(), Some("C1"));
+    assert_eq!(diagnosis.reference(), Some("R2"), "{diagnosis:?}");
     let input = converged.plot.vector("a").expect("the plot has a")[0];
     assert!(relative_error(input, 5.0) < 1e-6, "{input}");
 
@@ -296,16 +315,20 @@ fn a_loop_of_voltage_sources_stays_a_convergence_error() {
     let cancel = AtomicBool::new(false);
     let result = engine.run_convergent(&shorted, &cancel, |_| {});
     let error = result.unwrap_err();
+    let output = engine.output().join("\n");
     let EngineError::Convergence(diagnosis) = &error else {
-        panic!("unexpected error: {error}");
+        panic!("unexpected error: {error}\n{output}");
     };
     assert_eq!(
         diagnosis.kind,
-        DiagnosisKind::SingularMatrix,
+        DiagnosisKind::TimestepTooSmall,
         "{diagnosis:?}"
     );
-    let blamed = diagnosis.reference();
-    assert!(matches!(blamed, Some("V1" | "V2")), "{diagnosis:?}");
+    assert_eq!(diagnosis.reference(), Some("V1"), "{diagnosis:?}");
+    assert_eq!(
+        error.to_string(),
+        "Transient step too small at the initial timepoint in v1 (V1)."
+    );
 
     let plot = run(&mut engine, &divider_deck());
     assert!(plot.vector("/OUT").is_some());

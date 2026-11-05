@@ -37,7 +37,8 @@ impl Deck {
     /// A copy of the deck with `.options <option>` just before `.end`, or at the end if it
     /// has no `.end`.
     pub fn with_option(&self, option: &str) -> Deck {
-        let end = self.lines
+        let end = self
+            .lines
             .iter()
             .rposition(|line| line.trim().eq_ignore_ascii_case(".end"))
             .unwrap_or(self.lines.len());
