@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .cursor/hooks/prompts-log.ps1",
+        "timeout": 10
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .cursor/hooks/guard-files.ps1",
+        "timeout": 10
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .cursor/hooks/guard-files.ps1",
+        "matcher": "[Pp][Rr][Oo][Mm][Pp][Tt]",
+        "timeout": 30,
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .cursor/hooks/guard-files.ps1",
+        "matcher": "Grep|Read",
+        "timeout": 10
+      }
+    ]
+  }
+}
