@@ -7,6 +7,7 @@ import type { ProbeTarget } from "../bindings/ProbeTarget";
 import type { ProjectSnapshot } from "../bindings/ProjectSnapshot";
 import type { SimulationProgress } from "../bindings/SimulationProgress";
 import type { Xy } from "../bindings/Xy";
+import { failedAnnouncement, finishedAnnouncement } from "../convergence";
 import {
   SIMULATION_PROGRESS_EVENT,
   cancelSimulation,
@@ -19,7 +20,6 @@ import {
   toErrorReport,
 } from "../ipc";
 import type { ErcMarker } from "../schematicDraw";
-import { formatSeconds } from "../si";
 import type { LibraryStatusState } from "../useLibraryStatus";
 import {
   type ScreenPoint,
@@ -202,7 +202,7 @@ export function EditorShell({
         setOpAnnotations(annotations);
         setSimRun({ state: "finished", elapsedMs, result: finished });
         setSimAnnouncement(
-          `Simulation complete in ${formatSeconds(elapsedMs)} seconds.`,
+          finishedAnnouncement(elapsedMs, finished.convergence),
         );
       })
       .catch((error: unknown) => {
@@ -212,7 +212,7 @@ export function EditorShell({
           setSimAnnouncement("Simulation cancelled.");
         } else {
           setSimRun({ state: "failed", error: report });
-          setSimAnnouncement(`Simulation failed: ${report.message}`);
+          setSimAnnouncement(failedAnnouncement(report));
         }
       });
   };

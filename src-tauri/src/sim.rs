@@ -42,6 +42,33 @@ pub struct SimulationFinished {
     /// Which analysis ran. The vectors of an AC analysis are complex, and are fetched and
     /// measured as an `AcQuantity`.
     pub analysis_kind: AnalysisKind,
+    /// How the run converged. After `rshuntRescue` the results are approximate.
+    pub convergence: Convergence,
+}
+
+/// How a run reached its results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Convergence {
+    /// The first Newton iteration converged.
+    Direct,
+    /// ngspice needed gmin or source stepping, and the results are still exact.
+    Stepped,
+    /// The first run failed to converge, and the results come from a retry with a 1 GΩ
+    /// shunt from every node to ground.
+    RshuntRescue,
+}
+
+impl From<tron_sim::Convergence> for Convergence {
+    /// The IPC form of the engine's convergence.
+    fn from(convergence: tron_sim::Convergence) -> Convergence {
+        match convergence {
+            tron_sim::Convergence::Direct => Convergence::Direct,
+            tron_sim::Convergence::Stepped => Convergence::Stepped,
+            tron_sim::Convergence::RshuntRescue => Convergence::RshuntRescue,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -501,7 +528,7 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
     let emitter = app.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let mut engine = Engine::lock(&path, Some(&code_models))?;
-        engine.run_cancellable(&deck, &cancel, move |percentage| {
+        engine.run_convergent(&deck, &cancel, move |percentage| {
             let progress = SimulationProgress { percentage };
             if let Err(error) = emitter.emit(SIMULATION_PROGRESS_EVENT, progress) {
                 eprintln!("could not report simulation progress: {error}");
@@ -513,10 +540,11 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
     let sim = app.state::<SimState>();
     let mut inner = sim.lock();
     inner.running = None;
-    let plot = match outcome {
+    let converged = match outcome {
         Ok(result) => result?,
         Err(error) => return Err(unexpected("The simulation stopped unexpectedly.", error)),
     };
+    let plot = converged.plot;
     if inner.generation != generation {
         return Err(AppError::new(
             AppErrorKind::SimCancelled,
@@ -534,6 +562,7 @@ pub async fn start_simulation(app: AppHandle) -> Result<SimulationFinished, AppE
             .map(|vector| vector.name.clone())
             .collect(),
         analysis_kind: kind,
+        convergence: converged.convergence.into(),
     };
     inner.results = Some(Results {
         run_id,

@@ -1595,6 +1595,7 @@ describe("Wiring", () => {
           scale: null,
           vectors: ["/out", "v1#branch"],
           analysisKind: "operatingPoint",
+          convergence: "direct",
         }),
         fetch_op_annotations: () => [
           {
@@ -1744,6 +1745,7 @@ describe("Wiring", () => {
         scale: "time",
         vectors: ["time", "/out"],
         analysisKind: "transient",
+        convergence: "direct",
       }),
       resolve_probe: () => ({
         kind: "vector",

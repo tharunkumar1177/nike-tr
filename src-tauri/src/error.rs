@@ -53,6 +53,9 @@ pub enum AppErrorKind {
     SimCircuitRejected,
     /// The analysis failed, or ngspice stopped; the detail is what it reported.
     SimAnalysisFailed,
+    /// The analysis did not converge, even with a shunt to ground; the message names the
+    /// nets involved, and the detail names the symbol to check, if any.
+    SimConvergence,
     /// A simulation is already running.
     SimRunning,
     /// The simulation was cancelled, or the schematic changed while it ran.
@@ -200,6 +203,11 @@ impl From<EngineError> for AppError {
                 "The simulation failed.",
                 Some(lines.join("\n")),
             ),
+            EngineError::Convergence(diagnosis) => AppError::new(
+                Kind::SimConvergence,
+                diagnosis.message(),
+                diagnosis.reference().map(str::to_owned),
+            ),
             EngineError::Exited => AppError::new(Kind::SimAnalysisFailed, error.to_string(), None),
             EngineError::Cancelled => {
                 AppError::new(Kind::SimCancelled, "The simulation was cancelled.", None)
@@ -212,6 +220,7 @@ impl From<EngineError> for AppError {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use tron_sim::{Diagnosis, DiagnosisKind};
 
     #[test]
     fn preflight_errors_keep_their_kind_and_name_the_symbol() {
@@ -227,6 +236,26 @@ mod tests {
         assert_eq!(json["kind"], "simNoGround");
         let cancelled = AppError::from(EngineError::Cancelled);
         assert_eq!(cancelled.kind, AppErrorKind::SimCancelled);
+    }
+
+    #[test]
+    fn convergence_errors_name_the_symbol_to_check() {
+        let diagnosis = Diagnosis {
+            kind: DiagnosisKind::SingularMatrix,
+            time: None,
+            nets: vec!["FLOAT".to_owned()],
+            references: vec!["C1".to_owned()],
+            device: None,
+        };
+        let error = AppError::from(EngineError::Convergence(diagnosis));
+        assert_eq!(error.kind, AppErrorKind::SimConvergence);
+        assert_eq!(
+            error.message,
+            "The operating point did not converge: singular matrix at net FLOAT."
+        );
+        assert_eq!(error.detail.as_deref(), Some("C1"));
+        let json = serde_json::to_value(&error).unwrap();
+        assert_eq!(json["kind"], "simConvergence");
     }
 
     #[test]

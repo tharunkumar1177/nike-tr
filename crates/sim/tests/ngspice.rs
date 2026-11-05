@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
@@ -10,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use common::{divider, low_pass, low_pass_ac, low_pass_sweep, low_pass_transient};
 use tron_sim::{
-    AcQuantity, Analysis, Deck, Engine, EngineError, EngineGuard, Plot, Transient, deck,
+    AcQuantity, Analysis, Converged, Convergence, Deck, DiagnosisKind, Engine, EngineError,
+    EngineGuard, Plot, Transient, deck,
 };
 
 fn library() -> PathBuf {
@@ -56,6 +58,31 @@ fn run(engine: &mut Engine, deck: &Deck) -> Plot {
     match engine.run(deck) {
         Ok(plot) => plot,
         Err(error) => panic!("{error}"),
+    }
+}
+
+/// Runs `deck` with the shunt retry, and panics if it fails.
+fn run_convergent(engine: &mut Engine, deck: &Deck) -> Converged {
+    match engine.run_convergent(deck, &AtomicBool::new(false), |_| {}) {
+        Ok(converged) => converged,
+        Err(error) => panic!("{error}"),
+    }
+}
+
+/// SPICE names mapped to schematic names.
+fn names(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|&(spice, name)| (spice.to_owned(), name.to_owned()))
+        .collect()
+}
+
+/// A deck written by hand, with its node and device names.
+fn hand_deck(lines: &[&str], nodes: &[(&str, &str)], devices: &[(&str, &str)]) -> Deck {
+    Deck {
+        lines: lines.iter().map(|line| (*line).to_owned()).collect(),
+        nodes: names(nodes),
+        devices: names(devices),
     }
 }
 
@@ -209,6 +236,99 @@ fn a_long_transient_can_be_cancelled_while_it_runs() {
     canceller.join().unwrap();
     assert_eq!(result.unwrap_err(), EngineError::Cancelled);
     assert!(elapsed < Duration::from_secs(30), "took {elapsed:?}");
+
+    let plot = run(&mut engine, &divider_deck());
+    assert!(plot.vector("/OUT").is_some());
+}
+
+#[test]
+fn a_circuit_that_converges_directly_says_so() {
+    let converged = run_convergent(&mut engine(), &divider_deck());
+    assert_eq!(converged.convergence, Convergence::Direct);
+    assert_eq!(converged.diagnosis, None);
+    assert!(converged.plot.vector("/OUT").is_some());
+}
+
+#[test]
+fn a_floating_capacitor_node_converges_with_stepping() {
+    let lines = [
+        "* Tron simulation",
+        "V1 a 0 DC 5",
+        "R1 a 0 1e3",
+        "C1 a b 1e-6",
+        ".op",
+        ".end",
+    ];
+    let nodes = [("a", "IN"), ("b", "FLOAT")];
+    let devices = [("V1", "V1"), ("R1", "R1"), ("C1", "C1")];
+    let floating = hand_deck(&lines, &nodes, &devices);
+    let mut engine = engine();
+    let converged = run_convergent(&mut engine, &floating);
+    let output = engine.output().join("\n");
+    assert_eq!(converged.convergence, Convergence::Stepped, "{output}");
+    assert_eq!(converged.diagnosis, None);
+    let input = converged.plot.vector("a").expect("the plot has a")[0];
+    assert!(relative_error(input, 5.0) < 1e-6, "{input}");
+}
+
+#[test]
+fn a_floating_resistor_without_stepping_is_rescued_by_a_shunt() {
+    let lines = [
+        "* Tron simulation",
+        "V1 a 0 DC 5",
+        "R1 a 0 1e3",
+        "R2 b c 1e3",
+        ".options gminsteps=0 srcsteps=0",
+        ".op",
+        ".end",
+    ];
+    let nodes = [("a", "IN"), ("b", "/B"), ("c", "/C")];
+    let devices = [("V1", "V1"), ("R1", "R1"), ("R2", "R2")];
+    let island = hand_deck(&lines, &nodes, &devices);
+    let mut engine = engine();
+    let converged = run_convergent(&mut engine, &island);
+    let output = engine.output().join("\n");
+    let convergence = converged.convergence;
+    assert_eq!(convergence, Convergence::RshuntRescue, "{output}");
+    let diagnosis = converged.diagnosis.expect("the failure is kept");
+    assert_eq!(diagnosis.reference(), Some("R2"), "{diagnosis:?}");
+    let input = converged.plot.vector("a").expect("the plot has a")[0];
+    assert!(relative_error(input, 5.0) < 1e-6, "{input}");
+
+    let plot = run(&mut engine, &divider_deck());
+    assert!(plot.vector("/OUT").is_some());
+}
+
+#[test]
+fn a_loop_of_voltage_sources_stays_a_convergence_error() {
+    let lines = [
+        "* Tron simulation",
+        "V1 a 0 DC 5",
+        "V2 a 0 DC 3",
+        "R1 a 0 1e3",
+        ".op",
+        ".end",
+    ];
+    let devices = [("V1", "V1"), ("V2", "V2"), ("R1", "R1")];
+    let shorted = hand_deck(&lines, &[("a", "IN")], &devices);
+    let mut engine = engine();
+    let cancel = AtomicBool::new(false);
+    let result = engine.run_convergent(&shorted, &cancel, |_| {});
+    let error = result.unwrap_err();
+    let output = engine.output().join("\n");
+    let EngineError::Convergence(diagnosis) = &error else {
+        panic!("unexpected error: {error}\n{output}");
+    };
+    assert_eq!(
+        diagnosis.kind,
+        DiagnosisKind::TimestepTooSmall,
+        "{diagnosis:?}"
+    );
+    assert_eq!(diagnosis.reference(), Some("V1"), "{diagnosis:?}");
+    assert_eq!(
+        error.to_string(),
+        "Transient step too small at the initial timepoint in v1 (V1)."
+    );
 
     let plot = run(&mut engine, &divider_deck());
     assert!(plot.vector("/OUT").is_some());
