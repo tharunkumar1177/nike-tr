@@ -163,7 +163,16 @@ pub fn diagnose(output: &[String], deck: &Deck) -> Option<Diagnosis> {
                 blame.device(name);
                 device = Some(name.to_owned());
             }
-            None => singular.iter().for_each(|node| blame.node(node)),
+            None => {
+                device = singular
+                    .iter()
+                    .find_map(|node| node.strip_suffix("#branch"))
+                    .map(str::to_owned);
+                if let Some(name) = &device {
+                    blame.device(name);
+                }
+                singular.iter().for_each(|node| blame.node(node));
+            }
         }
         DiagnosisKind::TimestepTooSmall
     } else if !singular.is_empty() {
@@ -521,6 +530,15 @@ mod tests {
         let branch = diagnose(&output(&[line]), &deck()).unwrap();
         let expected = "Transient step too small at the initial timepoint in v1 (V1).";
         assert_eq!(branch.message(), expected);
+
+        let lines = output(&[
+            "Warning: singular matrix:  check node /out",
+            "Warning: singular matrix:  check node v1#branch",
+            "TRAN: Timestep too small; initial timepoint: cause unrecorded.",
+        ]);
+        let singular = diagnose(&lines, &deck()).unwrap();
+        assert_eq!(singular.references, ["V1", "R1"]);
+        assert_eq!(singular.message(), expected);
     }
 
     #[test]
