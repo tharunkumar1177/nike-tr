@@ -16,11 +16,16 @@ use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use libloading::Library;
 
 use crate::deck::Deck;
+use crate::diagnose::{Convergence, Diagnosis, diagnose, stepped};
+
+/// The option of the retry after a convergence failure: a 1 GΩ shunt from every node to
+/// ground, which gives a floating node a DC path.
+const RSHUNT: &str = "rshunt=1e9";
 
 /// `struct vector_info` from `sharedspice.h`.
 #[repr(C)]
@@ -188,7 +193,7 @@ extern "C" fn background_running(stopped: bool, _id: c_int, _user: *mut c_void) 
 }
 
 /// Why ngspice could not run a deck.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EngineError {
     /// The shared library could not be loaded, or lacks a function Tron needs.
     Load { path: PathBuf, message: String },
@@ -200,6 +205,9 @@ pub enum EngineError {
     Circuit(Vec<String>),
     /// The analysis failed. The lines are what it printed on standard error.
     Analysis(Vec<String>),
+    /// The analysis did not converge, even with a shunt to ground on every node. Only
+    /// [`Engine::run_convergent`] reports it.
+    Convergence(Diagnosis),
     /// [`Engine::halt`] stopped the run, and its partial results were discarded.
     Cancelled,
 }
@@ -227,6 +235,7 @@ impl fmt::Display for EngineError {
             EngineError::Analysis(lines) => {
                 write!(f, "The simulation failed: {}", lines.join(" "))
             }
+            EngineError::Convergence(diagnosis) => f.write_str(&diagnosis.message()),
             EngineError::Cancelled => write!(f, "The simulation was cancelled."),
         }
     }
@@ -272,6 +281,15 @@ impl Plot {
     }
 }
 
+/// The results of [`Engine::run_convergent`], and how the run reached them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Converged {
+    pub plot: Plot,
+    pub convergence: Convergence,
+    /// Why the first run failed, when the results come from the retry with a shunt.
+    pub diagnosis: Option<Diagnosis>,
+}
+
 /// The loaded ngspice library.
 pub struct Engine {
     path: PathBuf,
@@ -282,6 +300,8 @@ pub struct Engine {
     all_vecs: AllVecsFn,
     /// The folder whose XSPICE code models were loaded at startup.
     code_models: Option<PathBuf>,
+    /// Every line ngspice printed during the last run, without its stream prefix.
+    output: Vec<String>,
     /// Kept loaded for the life of the process; the function pointers above point into it.
     _library: Library,
 }
@@ -398,6 +418,7 @@ impl Engine {
             cur_plot,
             all_vecs,
             code_models: None,
+            output: Vec::new(),
             _library: library,
         })
     }
@@ -465,6 +486,53 @@ impl Engine {
         result
     }
 
+    /// Like [`Engine::run_cancellable`], and says how the run converged. ngspice retries a
+    /// failed operating point with gmin and source stepping itself. When the analysis still
+    /// fails to converge, the deck runs once more with a 1 GΩ shunt from every node to
+    /// ground. If that fails too, the error is [`EngineError::Convergence`] with the first
+    /// run's diagnosis. Progress restarts from zero for the retry.
+    pub fn run_convergent(
+        &mut self,
+        deck: &Deck,
+        cancel: &AtomicBool,
+        progress: impl Fn(f64) + Send + Sync + 'static,
+    ) -> Result<Converged, EngineError> {
+        let progress = Arc::new(progress);
+        let first = {
+            let progress = Arc::clone(&progress);
+            self.run_cancellable(deck, cancel, move |percent| progress(percent))
+        };
+        let failure = match first {
+            Ok(plot) => {
+                let convergence = if stepped(&self.output) {
+                    Convergence::Stepped
+                } else {
+                    Convergence::Direct
+                };
+                return Ok(Converged {
+                    plot,
+                    convergence,
+                    diagnosis: None,
+                });
+            }
+            Err(failure @ EngineError::Analysis(_)) => failure,
+            Err(other) => return Err(other),
+        };
+        let Some(diagnosis) = diagnose(&self.output, deck) else {
+            return Err(failure);
+        };
+        let rescue = deck.with_option(RSHUNT);
+        match self.run_cancellable(&rescue, cancel, move |percent| progress(percent)) {
+            Ok(plot) => Ok(Converged {
+                plot,
+                convergence: Convergence::RshuntRescue,
+                diagnosis: Some(diagnosis),
+            }),
+            Err(error @ (EngineError::Cancelled | EngineError::Exited)) => Err(error),
+            Err(_) => Err(EngineError::Convergence(diagnosis)),
+        }
+    }
+
     /// Stops the analysis that is running, which then fails with
     /// [`EngineError::Cancelled`]. A halt that arrives while a run is being set up stops it
     /// as soon as it starts. Does nothing when no run is in progress.
@@ -484,6 +552,7 @@ impl Engine {
     }
 
     fn load_and_run(&mut self, deck: &Deck, cancel: &AtomicBool) -> Result<Plot, EngineError> {
+        self.output.clear();
         {
             let mut state = run_state();
             state.phase = Phase::Starting;
@@ -504,7 +573,7 @@ impl Engine {
         pointers.push(ptr::null_mut());
         // SAFETY: a NULL-terminated array of NUL-terminated lines; ngspice copies them.
         let status = unsafe { (self.circ)(pointers.as_mut_ptr()) };
-        let errors = take_errors();
+        let errors = self.take_run_errors();
         if status != 0 || !errors.is_empty() {
             return Err(EngineError::Circuit(errors));
         }
@@ -513,7 +582,7 @@ impl Engine {
         }
         let status = self.command("bg_run")?;
         if status != 0 {
-            return Err(EngineError::Analysis(take_errors()));
+            return Err(EngineError::Analysis(self.take_run_errors()));
         }
         let halt_now = {
             let mut state = run_state();
@@ -542,11 +611,21 @@ impl Engine {
         if halted {
             return Err(EngineError::Cancelled);
         }
-        let errors = take_errors();
+        let errors = self.take_run_errors();
         if !errors.is_empty() {
             return Err(EngineError::Analysis(errors));
         }
         self.plot()
+    }
+
+    /// The error lines ngspice printed since the last call, as `take_errors` gives them.
+    /// Every line, warnings and notes included, is kept in `output` for the diagnosis.
+    fn take_run_errors(&mut self) -> Vec<String> {
+        let lines = take_lines();
+        for line in &lines {
+            self.output.push(without_stream(line).trim().to_owned());
+        }
+        error_lines(&lines)
     }
 
     /// Removes the loaded circuit and every result, and clears ngspice's output.
@@ -631,8 +710,19 @@ fn send_halt() {
 /// The lines ngspice printed on standard error since the last reset, without the prefix.
 /// ngspice reports warnings there too, so only lines naming an error count.
 fn take_errors() -> Vec<String> {
+    error_lines(&take_lines())
+}
+
+/// Every line ngspice printed since the last reset, with its `stdout ` or `stderr `
+/// prefix, and clears them.
+fn take_lines() -> Vec<String> {
     let mut output = OUTPUT.lock().unwrap_or_else(PoisonError::into_inner);
-    let errors = output
+    std::mem::take(&mut *output)
+}
+
+/// The standard error lines of `lines` that name an error, without the prefix.
+fn error_lines(lines: &[String]) -> Vec<String> {
+    lines
         .iter()
         .filter_map(|line| line.strip_prefix("stderr "))
         .filter(|line| {
@@ -640,9 +730,14 @@ fn take_errors() -> Vec<String> {
             lower.contains("error") || lower.contains("aborted")
         })
         .map(|line| line.trim().to_owned())
-        .collect();
-    output.clear();
-    errors
+        .collect()
+}
+
+/// `line` without the `stdout ` or `stderr ` prefix ngspice gives it.
+fn without_stream(line: &str) -> &str {
+    line.strip_prefix("stdout ")
+        .or_else(|| line.strip_prefix("stderr "))
+        .unwrap_or(line)
 }
 
 /// The error and every cause under it, such as the operating system error behind a failed

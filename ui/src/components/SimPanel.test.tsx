@@ -7,7 +7,9 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Convergence } from "../bindings/Convergence";
 import type { TraceMeasurements } from "../bindings/TraceMeasurements";
+import { CONVERGENCE_HINT } from "../convergence";
 import { type ErrorReport, fetchWaveform, measureTrace } from "../ipc";
 import { SimPanel, type SimRun } from "./SimPanel";
 import type { Trace } from "./WaveformViewer";
@@ -114,13 +116,17 @@ function renderPanel(run: SimRun, stale = false, traces: Trace[] = []) {
   return handlers;
 }
 
-function finished(scale: string | null, vectors: string[] = []): SimRun {
+function finished(
+  scale: string | null,
+  vectors: string[] = [],
+  convergence: Convergence = "direct",
+): SimRun {
   const analysisKind =
     scale === null ? "operatingPoint" : scale === "time" ? "transient" : "ac";
   return {
     state: "finished",
     elapsedMs: 2000,
-    result: { runId: "run-1", scale, vectors, analysisKind },
+    result: { runId: "run-1", scale, vectors, analysisKind, convergence },
   };
 }
 
@@ -468,6 +474,49 @@ describe("SimPanel", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /^No model\./ }));
     expect(onJumpToSymbol).toHaveBeenCalledWith("D1");
+  });
+
+  it("says when a run needed stepping or a shunt to converge", () => {
+    renderPanel(finished(null));
+    expect(screen.queryByText(/gmin or source stepping/)).toBeNull();
+    cleanup();
+
+    renderPanel(finished(null, [], "stepped"));
+    expect(
+      screen.getByText(
+        "Converged with gmin or source stepping. The results are exact.",
+      ),
+    ).toBeTruthy();
+    cleanup();
+
+    renderPanel(finished("time", ["time", "/out"], "rshuntRescue"), true);
+    expect(
+      screen.getByText(/Results are approximate — check for floating nodes\.$/),
+    ).toBeTruthy();
+    expect(screen.getByText("Out of date")).toBeTruthy();
+  });
+
+  it("jumps to the symbol a convergence error blames, with a hint", () => {
+    const message =
+      "The operating point did not converge: singular matrix at net FLOAT.";
+    const { onJumpToSymbol } = renderPanel(
+      failed({ kind: "simConvergence", message, detail: "C1" }),
+    );
+    expect(screen.getByText(CONVERGENCE_HINT)).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: /singular matrix at net FLOAT/ }),
+    );
+    expect(onJumpToSymbol).toHaveBeenCalledWith("C1");
+  });
+
+  it("shows a convergence error that blames no symbol as an alert", () => {
+    const message =
+      "The operating point did not converge: too many iterations.";
+    renderPanel(failed({ kind: "simConvergence", message }));
+    expect(screen.queryByRole("button", { name: /too many/ })).toBeNull();
+    expect(screen.getByRole("alert").textContent).toBe(
+      `${message}${CONVERGENCE_HINT}`,
+    );
   });
 
   it("shows other errors as an alert without an action", () => {

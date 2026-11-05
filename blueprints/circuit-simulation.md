@@ -37,7 +37,7 @@ The analysis settings live in `tron.json` (see [File format](../architecture.md#
 
 ### Error and recovery
 
-When a run fails to converge, `sim` retries with gmin stepping and then source stepping before failing. The error names the node or device involved when ngspice reports one.
+ngspice 46 itself retries every DC operating point (including the initial bias of `.tran` and `.ac`) with dynamic gmin, true gmin, and then source stepping. When a run still fails with a convergence error, `sim` retries once with `.options rshunt=1e9` (a 1 GΩ shunt from every node to ground), and the run says when it needed help. The error names the node or device involved when ngspice reports one.
 
 ## Related blueprints
 
@@ -160,6 +160,29 @@ Four sequential PRs on branches named `slice-5a-...` to `slice-5d-...`:
      - Annotations clear on any edit. A tooltip shows the exact value.
      - It needs, per vector: `vector`, `kind` (voltage or current), `label`, and an `anchorNm`.
 4. **5d. Bundling and UI.** Ship `ngspice.dll`, `spinit`, the code models, and `COPYING` as Tauri resources. Add the probe tool, `.op` annotations, and a waveform viewer with zoom, two cursors with a delta readout, and measurements (min, max, average, RMS, peak-to-peak). This needs a designer plan first.
+
+## Slice 6 plan (approved 2026-11-06)
+
+Built as one PR on branch `slice-6-convergence`.
+
+- **Research (2026-11-06, from the ngspice-46 sources).**
+  - `cktop.c` runs direct Newton, then dynamic gmin, then true gmin, then source stepping on every DC op. It prints `Note: Starting dynamic gmin stepping`, `Warning: Dynamic gmin stepping failed`, `Note: Starting true gmin stepping`, `Warning: True gmin stepping failed`, `Note: Starting source stepping`, `Warning: source stepping failed`, and finally `Error: The operating point could not be simulated successfully.`
+  - `niiter.c` prints `Warning: singular matrix: check node %s` or `check nodes %s and %s` (at most 6 per run), and its error message is `Too many iterations without convergence`.
+  - `dctran.c` and `ckttroub.c` print `TRAN: Timestep too small; time = %g, timestep = %g: trouble with node "%s"`, with the variants `initial timepoint: `, `trouble with %s-instance %s`, and `cause unrecorded.`
+  - `runcoms.c` prints `doAnalyses: <message>` and then `run simulation(s) aborted`.
+  - Names are lower-cased, because `inpcom.c` lower-cases every deck line. Which lines go to stdout and which to stderr is unverified, so both streams are parsed.
+  - Linear R, C, L, V, and I circuits never fail by iteration count. Two parallel voltage sources give a singular matrix that nothing rescues. A capacitor to a dangling node gives `check node b`, and `rshunt` rescues it.
+  - KiCad doesn't retry, and shows the raw console text.
+- **Decisions (user, 2026-11-06).**
+  - One automatic retry with `rshunt=1e9`, only after a convergence failure. If it also fails, the first run's diagnosis is reported.
+  - Approved IPC changes: `AppErrorKind::SimConvergence` (`simConvergence`), whose `detail` is the blamed symbol reference or null, and `SimulationFinished.convergence: "direct" | "stepped" | "rshuntRescue"`.
+  - The panel shows an info line for `stepped` (the results are exact) and a warning for `rshuntRescue` (the results are approximate).
+- **Steps.**
+  1. `crates/sim/src/diagnose.rs` classifies the output lines and builds a `Diagnosis { kind, nets, reference }`, mapping lower-case SPICE names back to net names and symbol references through the deck. Unclassified output keeps today's raw-line error.
+  2. `crates/sim/src/ngspice.rs` keeps every output line, and `run_convergent` adds the `rshunt` retry. `run` and `run_cancellable` keep their behavior.
+  3. Real-ngspice tests: a dangling capacitor node is diagnosed by name and rescued with `rshuntRescue`, parallel voltage sources stay a convergence error, and the engine recovers after both.
+  4. `src-tauri`: the new error kind and its mapping, `SimulationFinished.convergence`, and regenerated bindings.
+  5. `SimPanel.tsx`: the stepped and rescue notices, and `simConvergence` errors jump to the named symbol, per the designer plan.
 
 ## Acceptance or verification criteria
 

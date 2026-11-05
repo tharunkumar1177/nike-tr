@@ -591,6 +591,35 @@ body,
   margin-left: auto;
 }
 
+.sim-panel__notice {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--text-sm);
+}
+
+.sim-panel__notice .icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.sim-panel__notice--info {
+  color: var(--color-text-secondary);
+}
+
+.sim-panel__notice--warning {
+  color: var(--color-text-primary);
+}
+
+.sim-panel__notice--warning .icon {
+  color: var(--color-text-warning);
+}
+
 .sim-panel__content {
   display: flex;
   flex: 1;

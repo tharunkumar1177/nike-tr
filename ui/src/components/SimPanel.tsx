@@ -6,10 +6,17 @@ import {
   useState,
 } from "react";
 import type { SimulationFinished } from "../bindings/SimulationFinished";
+import { CONVERGENCE_HINT, convergenceNotice } from "../convergence";
 import type { ErrorReport } from "../ipc";
 import { formatSeconds } from "../si";
 import type { XRange } from "../waveformView";
-import { CheckIcon, ErrorIcon, RemoveIcon } from "./icons";
+import {
+  CheckIcon,
+  ErrorIcon,
+  InfoIcon,
+  RemoveIcon,
+  WarningIcon,
+} from "./icons";
 import { type Trace, WaveformViewer } from "./WaveformViewer";
 
 /** The panel's height limits, in CSS pixels, and its keyboard resize step. */
@@ -57,6 +64,7 @@ function symbolReference(error: ErrorReport): string | null {
     case "simNoModel":
     case "simUnannotated":
     case "simDuplicateReference":
+    case "simConvergence":
       return error.detail;
     default:
       return null;
@@ -173,6 +181,9 @@ export function SimPanel({
           </span>
           <span className="sim-row__text">
             <span className="sim-row__message">{error.message}</span>
+            {error.kind === "simConvergence" && (
+              <span className="sim-row__detail">{CONVERGENCE_HINT}</span>
+            )}
             {detail !== null && (
               <span className="sim-row__detail">{detail}</span>
             )}
@@ -199,6 +210,8 @@ export function SimPanel({
     }
   }
 
+  const notice =
+    run.state === "finished" ? convergenceNotice(run.result.convergence) : null;
   const running = run.state === "running";
   const plotting =
     run.state === "finished" && run.result.scale !== null && traces.length > 0;
@@ -327,6 +340,12 @@ export function SimPanel({
           </button>
         </div>
       </header>
+      {notice && (
+        <p className={`sim-panel__notice sim-panel__notice--${notice.tone}`}>
+          {notice.tone === "warning" ? <WarningIcon /> : <InfoIcon />}
+          {notice.text}
+        </p>
+      )}
       <div className="sim-panel__content">{content}</div>
       <div className="visually-hidden" aria-live="polite">
         {announcement}

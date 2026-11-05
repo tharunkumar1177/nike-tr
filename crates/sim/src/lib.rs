@@ -4,6 +4,7 @@
 
 mod analysis;
 mod deck;
+mod diagnose;
 mod error;
 mod model;
 mod ngspice;
@@ -13,8 +14,9 @@ mod waveform;
 
 pub use analysis::{Ac, Analysis, Transient};
 pub use deck::{Deck, GROUND, deck};
+pub use diagnose::{Convergence, Diagnosis, DiagnosisKind, diagnose, stepped};
 pub use error::PreflightError;
-pub use ngspice::{Engine, EngineError, EngineGuard, Plot, Vector};
+pub use ngspice::{Converged, Engine, EngineError, EngineGuard, Plot, Vector};
 pub use op::{OpAnchor, OpAnchors, OpKind, OpValue, Probe, ProbeMap, op_anchors, probe_map};
 pub use value::{parse_value, spice_number};
 pub use waveform::{

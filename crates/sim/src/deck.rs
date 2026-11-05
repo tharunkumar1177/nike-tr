@@ -27,10 +27,23 @@ pub struct Deck {
 }
 
 impl Deck {
+    /// The deck as one string, a line each.
     pub fn text(&self) -> String {
         let mut text = self.lines.join("\n");
         text.push('\n');
         text
+    }
+
+    /// A copy of the deck with `.options <option>` just before `.end`, or at the end if it
+    /// has no `.end`.
+    pub fn with_option(&self, option: &str) -> Deck {
+        let end = self.lines
+            .iter()
+            .rposition(|line| line.trim().eq_ignore_ascii_case(".end"))
+            .unwrap_or(self.lines.len());
+        let mut deck = self.clone();
+        deck.lines.insert(end, format!(".options {option}"));
+        deck
     }
 }
 
