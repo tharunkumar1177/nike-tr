@@ -1,6 +1,6 @@
 ---
 name: ci-reviewer
-model: kimi-k3-high
+model: kimi-k3[reasoning=high]
 description: CI build reviewer. Use after every push, or whenever a GitHub Actions run fails, to find out why. Polls the run with the gh CLI, reads only the failing jobs' logs, and returns the root cause of each failure with file and line, separated from the cascade errors it triggered. Read-only; diagnoses but never fixes.
 ---
 

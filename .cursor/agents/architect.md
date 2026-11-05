@@ -1,6 +1,6 @@
 ---
 name: architect
-model: gemini-3.1-pro
+model: kimi-k3[reasoning=high]
 description: Software architect for system design and technical decisions. Use proactively before large features, new services, schema or data-model changes, stack choices, refactors, or anything touching performance, security, sync, or scalability. Read-only; returns a decision-ready design and implementation plan for approval.
 readonly: true
 ---
