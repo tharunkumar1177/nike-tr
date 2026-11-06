@@ -1,3 +1,5 @@
+//! The error type for building, opening, and reading the component library index.
+
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -29,6 +31,12 @@ pub enum LibraryError {
     },
     /// A stored symbol definition that cannot be read or merged with its ancestors.
     Definition {
+        lib: String,
+        name: String,
+        message: String,
+    },
+    /// A stored footprint definition that cannot be read.
+    FootprintDefinition {
         lib: String,
         name: String,
         message: String,
@@ -83,6 +91,9 @@ impl fmt::Display for LibraryError {
             ),
             LibraryError::Definition { lib, name, message } => {
                 write!(f, "symbol {lib}:{name}: {message}")
+            }
+            LibraryError::FootprintDefinition { lib, name, message } => {
+                write!(f, "footprint {lib}:{name}: {message}")
             }
         }
     }

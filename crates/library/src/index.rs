@@ -10,13 +10,13 @@ use tron_core::sexpr::{self, SExpr};
 
 use crate::builder::BuildReport;
 use crate::error::LibraryError;
-use crate::kicad_mod::{FootprintRecord, Mount};
+use crate::kicad_mod::{FootprintRecord, Mount, board_definition};
 use crate::kicad_sym::{SymbolRecord, flatten};
 use crate::search::match_expression;
 
 /// Stored as the database `user_version`. Bump it whenever the schema or the preview JSON
 /// changes shape, so the app refuses an index it cannot read.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// The attribution the KiCad library license requires wherever the index is shown.
 pub const ATTRIBUTION: &str = "Symbols and footprints from the KiCad libraries \
@@ -62,6 +62,7 @@ CREATE TABLE footprints (
     pad_count INTEGER NOT NULL,
     mount TEXT NOT NULL,
     preview TEXT NOT NULL,
+    source TEXT NOT NULL,
     UNIQUE (lib, name)
 );
 
@@ -84,8 +85,8 @@ INSERT INTO symbols (
 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
 
 const INSERT_FOOTPRINT: &str = "
-INSERT INTO footprints (lib, name, description, tags, pad_count, mount, preview)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+INSERT INTO footprints (lib, name, description, tags, pad_count, mount, preview, source)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 
 const INSERT_SEARCH: &str = "
 INSERT INTO search (kind, item, name, lib, keywords, description)
@@ -115,9 +116,11 @@ const SELECT_DEFINITION: &str = "SELECT lib, name, extends, source FROM symbols 
 const SELECT_PARENT: &str = "SELECT extends, source FROM symbols WHERE lib = ?1 AND name = ?2";
 
 const SELECT_FOOTPRINT: &str = "
-SELECT lib, name, description, tags, pad_count, mount, preview
+SELECT lib, name, description, tags, pad_count, mount, preview, source
 FROM footprints
 WHERE id = ?1";
+
+const SELECT_FOOTPRINT_SOURCE: &str = "SELECT lib, name, source FROM footprints WHERE id = ?1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ItemKind {
@@ -218,6 +221,7 @@ impl Writer {
             record.pad_count,
             record.mount.as_str(),
             preview,
+            record.source,
         ])?;
         let id = self.conn.last_insert_rowid();
         let mut search = self.conn.prepare_cached(INSERT_SEARCH)?;
@@ -392,10 +396,30 @@ impl Index {
                     pad_count: row.get(4)?,
                     mount: row.get(5)?,
                     preview: json_column(row, 6)?,
+                    source: row.get(7)?,
                 })
             })
             .optional()?;
         Ok(record)
+    }
+
+    /// The footprint as a board embeds it: named `<lib>:<name>`, without the library file's
+    /// version and generator. Returns `None` when no footprint has the id `id`.
+    pub fn footprint_definition(&self, id: i64) -> Result<Option<SExpr>, LibraryError> {
+        let mut select = self.conn.prepare_cached(SELECT_FOOTPRINT_SOURCE)?;
+        let row: Option<(String, String, String)> = select
+            .query_row([id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .optional()?;
+        let Some((lib, name, source)) = row else {
+            return Ok(None);
+        };
+        let invalid = |message: String| LibraryError::FootprintDefinition {
+            lib: lib.clone(),
+            name: name.clone(),
+            message,
+        };
+        let root = parse_source(&source).map_err(invalid)?;
+        board_definition(&lib, &root).map(Some).map_err(invalid)
     }
 }
 

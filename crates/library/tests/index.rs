@@ -397,12 +397,74 @@ fn rounded_smd_pads_store_their_corner_radius() {
     assert_eq!(pad.drill, None);
 }
 
+/// The pad numbers of a board footprint definition, in file order.
+fn pad_numbers(definition: &SExpr) -> Vec<&str> {
+    definition
+        .args()
+        .iter()
+        .filter(|item| item.head() == Some("pad"))
+        .filter_map(|item| item.args().first().and_then(SExpr::text))
+        .collect()
+}
+
+#[test]
+fn footprints_store_their_source_and_a_board_ready_definition() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = fixture_index(dir.path());
+    let id = index.search("R_0603_1608Metric", 1).unwrap()[0].id;
+    let record = index.footprint(id).unwrap().unwrap();
+    assert!(
+        record
+            .source
+            .starts_with("(footprint \"R_0603_1608Metric\""),
+        "{}",
+        record.source
+    );
+    let stored = sexpr::parse(&record.source).unwrap();
+    assert!(stored.child("version").is_some());
+
+    let definition = index.footprint_definition(id).unwrap().unwrap();
+    assert_eq!(definition.head(), Some("footprint"));
+    assert_eq!(
+        definition.args().first().and_then(SExpr::text),
+        Some("Resistor_SMD:R_0603_1608Metric")
+    );
+    for head in ["version", "generator", "generator_version"] {
+        assert!(definition.child(head).is_none(), "{head} was kept");
+    }
+    let layer = definition
+        .child("layer")
+        .and_then(|node| node.args().first());
+    assert_eq!(layer.and_then(SExpr::text), Some("F.Cu"));
+    assert_eq!(property_value(&definition, "Reference"), Some("REF**"));
+    assert_eq!(pad_numbers(&definition), ["1", "2"]);
+
+    let reparsed = sexpr::parse(&definition.to_pretty_string()).unwrap();
+    assert_eq!(reparsed, definition);
+}
+
+#[test]
+fn through_hole_footprints_keep_their_drilled_pads() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = fixture_index(dir.path());
+    let id = index.search("LED_D5.0mm", 1).unwrap()[0].id;
+    let definition = index.footprint_definition(id).unwrap().unwrap();
+    assert_eq!(
+        definition.args().first().and_then(SExpr::text),
+        Some("LED_THT:LED_D5.0mm")
+    );
+    assert_eq!(pad_numbers(&definition), ["1", "2"]);
+    let pad = definition.child("pad").unwrap();
+    assert!(pad.child("drill").is_some());
+}
+
 #[test]
 fn unknown_ids_return_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let index = fixture_index(dir.path());
     assert_eq!(index.symbol(9_999).unwrap(), None);
     assert_eq!(index.footprint(9_999).unwrap(), None);
+    assert_eq!(index.footprint_definition(9_999).unwrap(), None);
 }
 
 #[test]
