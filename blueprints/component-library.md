@@ -130,7 +130,7 @@ Slice 3c:
 
 Slice 7a (footprint definitions for board placement):
 
-- [ ] Each footprint row stores its definition, and `footprint_definition` returns it named `<lib>:<name>` without the file-only nodes, tested on the SMD and through-hole fixtures.
+- [x] Each footprint row stores its definition, and `footprint_definition` returns it named `<lib>:<name>` without the file-only nodes, tested on the SMD and through-hole fixtures in `crates/library/tests/index.rs`. The full KiCad 10.0.7 index built with schema version 3 compresses to 44,588,092 bytes, up from 30.2 MB, and the slowest benchmark query, `r`, still has a median of about 30 ms.
 - [ ] A library run on `main` publishes `library-kicad-10.0.7-r3`, its benchmark still passes, and the workflow's pull request pins it.
 
 ## Remaining gaps and unknowns
