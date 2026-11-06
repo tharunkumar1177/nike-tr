@@ -414,7 +414,9 @@ fn footprints_store_their_source_and_a_board_ready_definition() {
     let id = index.search("R_0603_1608Metric", 1).unwrap()[0].id;
     let record = index.footprint(id).unwrap().unwrap();
     assert!(
-        record.source.starts_with("(footprint \"R_0603_1608Metric\""),
+        record
+            .source
+            .starts_with("(footprint \"R_0603_1608Metric\""),
         "{}",
         record.source
     );
@@ -430,7 +432,9 @@ fn footprints_store_their_source_and_a_board_ready_definition() {
     for head in ["version", "generator", "generator_version"] {
         assert!(definition.child(head).is_none(), "{head} was kept");
     }
-    let layer = definition.child("layer").and_then(|node| node.args().first());
+    let layer = definition
+        .child("layer")
+        .and_then(|node| node.args().first());
     assert_eq!(layer.and_then(SExpr::text), Some("F.Cu"));
     assert_eq!(property_value(&definition, "Reference"), Some("REF**"));
     assert_eq!(pad_numbers(&definition), ["1", "2"]);
