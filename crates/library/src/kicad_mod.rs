@@ -55,6 +55,10 @@ pub struct FootprintRecord {
     pub pad_count: u32,
     pub mount: Mount,
     pub preview: FootprintPreview,
+    /// The footprint's `(footprint ...)` definition as KiCad text, exactly as the library file
+    /// holds it. [`Index::footprint_definition`](crate::Index::footprint_definition) turns it
+    /// into the form a board embeds.
+    pub source: String,
 }
 
 /// Reads every footprint in the `.pretty` directory `dir`, sorted by name.
@@ -120,7 +124,37 @@ fn footprint(lib: &str, root: &SExpr) -> Result<FootprintRecord, String> {
         pad_count: u32::try_from(pad_count).unwrap_or(u32::MAX),
         mount,
         preview: FootprintPreview { graphics, pads },
+        source: root.to_pretty_string().trim_end().to_owned(),
     })
+}
+
+/// The library-file nodes a board footprint does not carry: they describe the `.kicad_mod`
+/// file, not the part.
+const FILE_ONLY_NODES: [&str; 3] = ["version", "generator", "generator_version"];
+
+/// Turns a stored library footprint into the standalone form a `.kicad_pcb` embeds: a
+/// `(footprint "<lib>:<name>" ...)` list without the library file's version and generator.
+/// Legacy `(module ...)` definitions are renamed to `(footprint ...)`.
+pub fn board_definition(lib: &str, root: &SExpr) -> Result<SExpr, String> {
+    if !matches!(root.head(), Some("footprint" | "module")) {
+        return Err("a definition is not a (footprint) list".to_owned());
+    }
+    let Some(name) = text_arg(root, 0) else {
+        return Err("a definition has no name".to_owned());
+    };
+    let mut items = vec![
+        SExpr::atom("footprint"),
+        SExpr::string(format!("{lib}:{name}")),
+    ];
+    for item in root.args().iter().skip(1) {
+        let file_only = item
+            .head()
+            .is_some_and(|head| FILE_ONLY_NODES.contains(&head));
+        if !file_only {
+            items.push(item.clone());
+        }
+    }
+    Ok(SExpr::List(items))
 }
 
 fn graphic_layer(name: &str) -> Option<Layer> {

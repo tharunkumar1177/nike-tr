@@ -79,6 +79,7 @@ Preview geometry is stored as `i64` nanometers in a Y-down space. KiCad symbol f
 - Derived symbols take graphics and pins from the root of their `extends` chain. Each property comes from the nearest symbol in the chain that defines it.
 - Each symbol row stores its own `(symbol ...)` definition as KiCad text in `source`, without merging ancestors, so derived symbols don't duplicate their base graphics. `Index::symbol_definition(id)` follows `extends` within the same library and returns the standalone form a schematic embeds in `(lib_symbols)`: named `<lib>:<name>`, with settings and properties from the nearest definition, and the root's unit drawings renamed `<name>_<unit>_<style>`. A missing parent or a loop fails with `LibraryError::Definition`.
 - Footprint previews keep pads plus graphics on `F.SilkS`, `F.Fab`, and `F.CrtYd`.
+- Each footprint row stores its whole `(footprint ...)` definition as KiCad text in `source` (schema version 3, slice 7a). `Index::footprint_definition(id)` returns the form a `.kicad_pcb` embeds: named `<lib>:<name>`, with the library file's `version`, `generator`, and `generator_version` removed, and a legacy `(module ...)` head renamed `footprint`. An unreadable source fails with `LibraryError::FootprintDefinition`.
 
 ### Search
 
@@ -98,7 +99,7 @@ None
 ## Relevant implementation and tests
 
 - `crates/library/src/kicad_sym.rs`, `kicad_mod.rs` — reading KiCad 10 symbol (`.kicad_symdir` and `.kicad_sym`) and footprint (`.pretty`) libraries
-- `crates/library/src/index.rs` — schema, writer, and the read-only `Index` with `search`, `symbol`, `symbol_definition`, `footprint`, and `meta`
+- `crates/library/src/index.rs` — schema, writer, and the read-only `Index` with `search`, `symbol`, `symbol_definition`, `footprint`, `footprint_definition`, and `meta`
 - `crates/library/src/search.rs` — the FTS5 query sanitizer
 - `crates/library/src/builder.rs` and `src/bin/build_index.rs` — the index build
 - `crates/library/src/bin/search_benchmark.rs` — the release gate for size, latency, and ranking
@@ -126,6 +127,11 @@ Slice 3c:
 - [x] The first launch asks before downloading. Declining leaves the app usable with an empty library.
 - [ ] The library browser previews symbol and footprint graphics.
 - [ ] The browser shows the KiCad attribution stored in the index.
+
+Slice 7a (footprint definitions for board placement):
+
+- [ ] Each footprint row stores its definition, and `footprint_definition` returns it named `<lib>:<name>` without the file-only nodes, tested on the SMD and through-hole fixtures.
+- [ ] A library run on `main` publishes `library-kicad-10.0.7-r3`, its benchmark still passes, and the workflow's pull request pins it.
 
 ## Remaining gaps and unknowns
 
