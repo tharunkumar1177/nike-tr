@@ -1,7 +1,8 @@
-//! KiCad schematic and board files.
+//! KiCad schematic files, and the helpers board files share with them.
 //!
 //! Each file is held as its full S-expression tree. Typed accessors read and
 //! replace the parts Tron edits, and every other node passes through untouched.
+//! Board files live in [`crate::board`].
 
 use crate::kicad_value::{angle, child_text, children, flag, point, text_arg};
 use crate::sexpr::{self, ParseError, SExpr};
@@ -10,8 +11,9 @@ use crate::units::{Angle, Nm, Point};
 use crate::wiring::{Junction, Label, NoConnect, Sheet, Wire, node_uuid};
 use uuid::Uuid;
 
+pub use crate::board::Board;
+
 pub const SCHEMATIC_FORMAT_VERSION: &str = "20231120";
-pub const BOARD_FORMAT_VERSION: &str = "20240108";
 pub const GENERATOR: &str = "tron";
 pub const GENERATOR_VERSION: &str = "0.1";
 pub const TITLE_BLOCK_COMMENTS: usize = 9;
@@ -201,7 +203,8 @@ impl PageSize {
     }
 }
 
-fn parse_kind(source: &str, expected: &'static str) -> Result<SExpr, FileError> {
+/// Parses a whole file and checks that its root list is `(expected ...)`.
+pub(crate) fn parse_kind(source: &str, expected: &'static str) -> Result<SExpr, FileError> {
     let root = sexpr::parse(source).map_err(FileError::Syntax)?;
     if root.head() == Some(expected) {
         Ok(root)
@@ -1202,67 +1205,13 @@ pub(crate) fn mm_text(value: Nm) -> String {
 }
 
 /// Formats an angle in degrees the way KiCad writes it.
-fn deg_text(angle: Angle) -> String {
+pub(crate) fn deg_text(angle: Angle) -> String {
     let decidegrees = angle.decidegrees();
     let fraction = decidegrees % 10;
     if fraction == 0 {
         format!("{}", decidegrees / 10)
     } else {
         format!("{}.{}", decidegrees / 10, fraction)
-    }
-}
-
-/// A `.kicad_pcb` file. Tron doesn't edit boards yet, so it is preserved as read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Board {
-    root: SExpr,
-}
-
-impl Board {
-    pub fn new_empty() -> Board {
-        let layer = |id: &str, name: &str, kind: &str, user_name: Option<&str>| {
-            let mut items = vec![SExpr::atom(id), SExpr::string(name), SExpr::atom(kind)];
-            if let Some(user_name) = user_name {
-                items.push(SExpr::string(user_name));
-            }
-            SExpr::List(items)
-        };
-        let mut items = header("kicad_pcb", BOARD_FORMAT_VERSION);
-        items.extend([
-            SExpr::node(
-                "general",
-                vec![SExpr::node("thickness", vec![SExpr::atom("1.6")])],
-            ),
-            SExpr::node("paper", vec![SExpr::string("A4")]),
-            SExpr::node(
-                "layers",
-                vec![
-                    layer("0", "F.Cu", "signal", None),
-                    layer("31", "B.Cu", "signal", None),
-                    layer("36", "B.SilkS", "user", Some("B.Silkscreen")),
-                    layer("37", "F.SilkS", "user", Some("F.Silkscreen")),
-                    layer("38", "B.Mask", "user", None),
-                    layer("39", "F.Mask", "user", None),
-                    layer("44", "Edge.Cuts", "user", None),
-                ],
-            ),
-            SExpr::node(
-                "setup",
-                vec![SExpr::node("pad_to_mask_clearance", vec![SExpr::atom("0")])],
-            ),
-            SExpr::node("net", vec![SExpr::atom("0"), SExpr::string("")]),
-        ]);
-        Board {
-            root: SExpr::List(items),
-        }
-    }
-
-    pub fn parse(source: &str) -> Result<Board, FileError> {
-        parse_kind(source, "kicad_pcb").map(|root| Board { root })
-    }
-
-    pub fn to_file_string(&self) -> String {
-        self.root.to_pretty_string()
     }
 }
 

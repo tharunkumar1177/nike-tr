@@ -50,7 +50,7 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 - Every physical length and position is an `i64` count of **nanometers**. One user-facing millimeter equals 1,000,000 units.
 - The schematic and the board use separate coordinate spaces with the same unit. X grows to the right and Y grows downward, matching KiCad.
 - Angles are stored as `i32` tenths of a degree, normalized to `[0, 3600)`.
-- Floating point is allowed only for rendering and for simulation values. It is never written back into document geometry.
+- Floating point is allowed only for rendering and for simulation values. It is never written back into document geometry. The one exception is pad positions at arbitrary angles: they are computed with floating-point trigonometry and rounded to the nearest nanometer when the command runs, so the document stays integer.
 - Simulation quantities use SI base units as `f64`: volts, amperes, seconds, and hertz.
 
 ### File format
@@ -59,6 +59,8 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 - Tron reads and writes the ERC section of the KiCad `.kicad_pro` JSON (rule severities and violation exclusions). Every other key is kept and written back unchanged. Changing a severity or an exclusion is an undoable command that marks the project unsaved, like any document edit.
 - Every write is atomic: write to a temporary file in the same directory, flush it, then rename it over the target.
 - Unknown S-expression nodes are kept and written back unchanged, so a round trip never loses data Tron doesn't understand.
+- Tron edits the `.kicad_pcb` and writes it in the KiCad 10 form: format `20260206` with `generator_version "10.0"`, KiCad 10's layer IDs, and nets referenced by name on pads, tracks, vias, and zones, with no numbered net table. Older boards are upgraded when they are read. Tron manages the board's `(layers)` table and `setup.stackup`.
+- A board is saved only if every typed coordinate fits KiCad's 32-bit nanometer range.
 
 ### IPC contract
 

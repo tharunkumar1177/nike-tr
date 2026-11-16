@@ -188,8 +188,12 @@ impl Project {
     /// Writes the manifest, schematic, and board, and the `.kicad_pro` when its settings
     /// changed. Each write is atomic, so a failure leaves the previous version of that
     /// file intact. A `.kicad_pro` Tron created is removed again when undo took the
-    /// project back to having none.
+    /// project back to having none. Nothing is written when the board has a coordinate
+    /// KiCad can't store.
     pub fn save(&mut self) -> Result<(), CoreError> {
+        self.board
+            .check_export_bounds()
+            .map_err(CoreError::InvalidEdit)?;
         write_atomic(&self.manifest_path(), &self.manifest.to_file_string())?;
         write_atomic(&self.schematic_path(), &self.schematic.to_file_string())?;
         write_atomic(&self.board_path(), &self.board.to_file_string())?;
@@ -254,6 +258,12 @@ impl Project {
 
     pub(crate) fn schematic_mut(&mut self) -> &mut Schematic {
         &mut self.schematic
+    }
+
+    /// The board document, read-only. Edits go through [`crate::session::Session`] commands
+    /// so they stay undoable.
+    pub fn board(&self) -> &Board {
+        &self.board
     }
 
     pub fn manifest_path(&self) -> PathBuf {

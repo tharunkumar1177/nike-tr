@@ -120,6 +120,52 @@ fn a_kicad_project_without_a_manifest_opens_and_keeps_unknown_nodes() {
     assert_eq!(Project::load(&dir).unwrap(), project);
 }
 
+/// A KiCad 8 board with one resistor at `at`, using the old layer numbering and a numbered
+/// net table.
+fn legacy_board(at: &str) -> String {
+    format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (generator_version \"8.0\") \
+        (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user)) \
+        (net 0 \"\") (net 1 \"GND\") \
+        (footprint \"Device:R\" (layer \"F.Cu\") \
+        (uuid \"0b6f3c1e-4a2d-4f6b-9c8e-1d2a3b4c5d6e\") (at {at}) \
+        (property \"Reference\" \"R1\" (at 0 0 0)) \
+        (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"GND\"))))"
+    )
+}
+
+#[test]
+fn an_older_board_is_upgraded_and_reopens_unchanged() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = Project::create(temp.path(), "amp", golden_uuid()).unwrap();
+    fs::write(project.board_path(), legacy_board("10 20")).unwrap();
+
+    let mut reopened = Project::load(project.dir()).unwrap();
+    let footprints = reopened.board().footprints();
+    assert_eq!(footprints.len(), 1);
+    assert_eq!(footprints[0].pads[0].net.as_deref(), Some("GND"));
+    reopened.save().unwrap();
+    let written = read(&reopened.board_path());
+    assert!(written.contains("(version 20260206)"), "{written}");
+    assert!(written.contains("(25 \"Edge.Cuts\" user)"), "{written}");
+    assert!(written.contains("(net \"GND\")"), "{written}");
+    assert!(!written.contains("(net 1"), "{written}");
+    assert_eq!(Project::load(reopened.dir()).unwrap(), reopened);
+}
+
+#[test]
+fn a_board_outside_kicads_range_is_not_saved() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = Project::create(temp.path(), "amp", golden_uuid()).unwrap();
+    let far = legacy_board("3000 0");
+    fs::write(project.board_path(), &far).unwrap();
+
+    let mut reopened = Project::load(project.dir()).unwrap();
+    let error = reopened.save().unwrap_err();
+    assert!(matches!(error, CoreError::InvalidEdit(_)), "{error}");
+    assert_eq!(read(&project.board_path()), far);
+}
+
 #[test]
 fn parse_errors_name_the_file_line_and_column() {
     let temp = tempfile::tempdir().unwrap();
