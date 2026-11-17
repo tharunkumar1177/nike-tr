@@ -137,7 +137,11 @@ struct Part {
 #[derive(Debug, Clone)]
 enum Action {
     Add(Part),
-    Update { uuid: Uuid, part: Part, replace: bool },
+    Update {
+        uuid: Uuid,
+        part: Part,
+        replace: bool,
+    },
     Remove(Uuid),
 }
 
@@ -318,7 +322,11 @@ fn analyze(
             });
         }
         let fields = [
-            (FootprintField::Reference, &footprint.reference, &part.reference),
+            (
+                FootprintField::Reference,
+                &footprint.reference,
+                &part.reference,
+            ),
             (FootprintField::Value, &footprint.value, &part.value),
         ];
         for (field, from, to) in fields {
@@ -334,7 +342,11 @@ fn analyze(
         }
         let pad_numbers = match definitions.get(&part.lib_id) {
             Some(definition) if replace => definition_pad_numbers(definition),
-            _ => footprint.pads.iter().map(|pad| pad.number.clone()).collect(),
+            _ => footprint
+                .pads
+                .iter()
+                .map(|pad| pad.number.clone())
+                .collect(),
         };
         let mut seen = HashSet::new();
         for number in pad_numbers {
@@ -475,10 +487,15 @@ fn not_on_board(schematic: &Schematic, uuid: Uuid) -> bool {
 /// Whether the board footprint with `uuid` is marked `(attr ... board_only)`, so it never
 /// needs a symbol.
 fn is_board_only(board: &Board, uuid: Uuid) -> bool {
-    let Some(attr) = board.footprint_node(uuid).and_then(|node| node.child("attr")) else {
+    let Some(attr) = board
+        .footprint_node(uuid)
+        .and_then(|node| node.child("attr"))
+    else {
         return false;
     };
-    attr.args().iter().any(|arg| arg.text() == Some("board_only"))
+    attr.args()
+        .iter()
+        .any(|arg| arg.text() == Some("board_only"))
 }
 
 /// The net a pad joins: the net of the symbol pin with the same number.
@@ -543,7 +560,10 @@ impl Builder<'_> {
     ) -> Result<SExpr, String> {
         let definition = self.definition(part)?;
         if definition.head() != Some("footprint") {
-            return Err(format!("the definition of {} is not a footprint", part.lib_id));
+            return Err(format!(
+                "the definition of {} is not a footprint",
+                part.lib_id
+            ));
         }
         let mut items = vec![
             SExpr::atom("footprint"),
@@ -699,7 +719,11 @@ impl Packer {
     fn new(board: &Board) -> Packer {
         let mut outline = Bounds::default();
         for graphic in board.edge_cuts() {
-            graphic.shape.points().into_iter().for_each(|at| outline.add(at));
+            graphic
+                .shape
+                .points()
+                .into_iter()
+                .for_each(|at| outline.add(at));
         }
         let (left, bottom) = match outline.0 {
             Some((min, max)) => (min.x, max.y),

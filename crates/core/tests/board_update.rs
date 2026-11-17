@@ -7,8 +7,9 @@ use std::path::Path;
 
 use tron_core::sexpr::{self, SExpr};
 use tron_core::{
-    Board, BoardUpdateOptions, BoardUpdatePlan, Changes, FootprintField, Nm, Point, Project,
-    Ratsnest, Session, plan_board_update, required_footprints,
+    Angle, Board, BoardUpdateOptions, BoardUpdatePlan, Changes, FootprintField,
+    FootprintTransform, Nm, Point, Project, Ratsnest, Session, Side, plan_board_update,
+    required_footprints,
 };
 use uuid::Uuid;
 
@@ -217,6 +218,60 @@ fn later_updates_rename_and_remove_footprints() {
         .map(|footprint| (footprint.reference.as_str(), footprint.value.as_str()))
         .collect();
     assert_eq!(values, [("R1", "10k"), ("R2", "22k")]);
+}
+
+#[test]
+fn footprints_move_rotate_and_flip_as_single_steps() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut session = golden_session(temp.path());
+    assign_footprints(&mut session);
+    apply(&mut session, BoardUpdateOptions::default());
+    let r1 = session.project().board().footprints()[0].uuid;
+    let original = session.project().board().clone();
+    let r1_pad = |session: &Session| {
+        let footprint = session.project().board().footprint(r1).unwrap();
+        footprint.pad_position(&footprint.pads[1])
+    };
+
+    let moved = session
+        .move_footprints(&[r1], Nm(1_000_000), Nm::ZERO)
+        .unwrap();
+    assert!(moved.footprints);
+    assert_eq!(session.undo_label(), Some("Move Footprint"));
+    let footprint = session.project().board().footprint(r1).unwrap();
+    assert_eq!(footprint.position, mm(2.48, 10.73));
+    assert_eq!(r1_pad(&session), mm(3.305, 10.73));
+    let lines = Ratsnest::new(session.project().board()).lines();
+    assert_eq!(lines[0].from, mm(3.305, 10.73));
+
+    let rotated = session
+        .transform_footprints(&[r1], FootprintTransform::Rotate(1))
+        .unwrap();
+    assert!(rotated.footprints);
+    let footprint = session.project().board().footprint(r1).unwrap();
+    assert_eq!(footprint.rotation, Angle::from_decidegrees(900));
+    assert_eq!(r1_pad(&session), mm(2.48, 9.905));
+
+    session
+        .transform_footprints(&[r1], FootprintTransform::Flip)
+        .unwrap();
+    assert_eq!(session.undo_label(), Some("Flip Footprint"));
+    let footprint = session.project().board().footprint(r1).unwrap();
+    assert_eq!(footprint.side, Side::Back);
+    assert_eq!(footprint.rotation, Angle::from_decidegrees(2700));
+    assert_eq!(r1_pad(&session), mm(2.48, 11.555));
+
+    let unchanged = session
+        .transform_footprints(&[r1], FootprintTransform::Rotate(4))
+        .unwrap();
+    assert!(!unchanged.any());
+    let missing = session.move_footprints(&[Uuid::nil()], Nm(1), Nm::ZERO);
+    assert!(missing.is_err());
+
+    for _ in 0..3 {
+        session.undo().unwrap();
+    }
+    assert_eq!(session.project().board(), &original);
 }
 
 #[test]

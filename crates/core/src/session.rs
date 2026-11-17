@@ -3,7 +3,7 @@
 //! Every edit is an invertible [`Command`]. Undo applies the inverse of the
 //! latest command and redo applies it again, so both restore exact states.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use uuid::Uuid;
@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::board_update::{self, BoardUpdateOptions, UPDATE_BOARD_LABEL};
 use crate::erc::{RuleSeverities, Violation};
 use crate::error::CoreError;
+use crate::footprint::{Footprint, flip_node, footprint_uuid, rotate_node};
 use crate::kicad::{
     MANDATORY_FIELDS, Mirror, PlacedSymbol, Placement, Schematic, SymbolProperty, TitleBlock,
 };
@@ -33,6 +34,9 @@ pub const ANNOTATE_LABEL: &str = "Annotate Schematic";
 pub const EDIT_FIELDS_LABEL: &str = "Edit Symbol Properties";
 pub const ERC_SEVERITIES_LABEL: &str = "Edit ERC Severities";
 pub const ANALYSIS_LABEL: &str = "Simulation Settings";
+pub const MOVE_FOOTPRINTS_LABEL: &str = "Move Footprint";
+pub const ROTATE_FOOTPRINTS_LABEL: &str = "Rotate Footprint";
+pub const FLIP_FOOTPRINTS_LABEL: &str = "Flip Footprint";
 /// The longest field value, such as a datasheet URL.
 pub const MAX_FIELD_VALUE_CHARS: usize = 4096;
 
@@ -115,6 +119,15 @@ pub enum SymbolTransform {
     /// Mirror about the symbol origin: `Mirror::X` flips horizontally, `Mirror::Y`
     /// vertically.
     Mirror(Mirror),
+}
+
+/// The transform applied by [`Session::transform_footprints`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FootprintTransform {
+    /// Quarter turns counterclockwise on screen, about each footprint's origin.
+    Rotate(i32),
+    /// KiCad's flip to the other side of the board, about each footprint's origin.
+    Flip,
 }
 
 impl Command {
@@ -357,10 +370,10 @@ impl Changes {
         match node.head().unwrap_or_default() {
             "footprint" => self.footprints = true,
             "layers" | "setup" | "general" => self.stackup = true,
-            head if head.starts_with("gr_") => {
-                if crate::kicad_value::child_text(node, "layer") == Some("Edge.Cuts") {
-                    self.board_outline = true;
-                }
+            head if head.starts_with("gr_")
+                && crate::kicad_value::child_text(node, "layer") == Some("Edge.Cuts") =>
+            {
+                self.board_outline = true;
             }
             _ => {}
         }
@@ -1077,6 +1090,80 @@ impl Session {
         Ok(())
     }
 
+    /// Moves every footprint in `uuids` by `(dx, dy)` as one undo step.
+    pub fn move_footprints(
+        &mut self,
+        uuids: &[Uuid],
+        dx: Nm,
+        dy: Nm,
+    ) -> Result<Changes, CoreError> {
+        let uuids = dedupe(uuids);
+        if uuids.is_empty() || (dx == Nm::ZERO && dy == Nm::ZERO) {
+            return Ok(Changes::default());
+        }
+        self.edit_footprints(&uuids, MOVE_FOOTPRINTS_LABEL, |node| {
+            let footprint = Footprint::read(node)?;
+            Some(footprint.moved_by(dx, dy).to_node(node))
+        })
+    }
+
+    /// Rotates or flips every footprint in `uuids` about its own origin as one undo step.
+    pub fn transform_footprints(
+        &mut self,
+        uuids: &[Uuid],
+        transform: FootprintTransform,
+    ) -> Result<Changes, CoreError> {
+        let no_change = matches!(
+            transform,
+            FootprintTransform::Rotate(steps) if steps.rem_euclid(4) == 0
+        );
+        let uuids = dedupe(uuids);
+        if uuids.is_empty() || no_change {
+            return Ok(Changes::default());
+        }
+        match transform {
+            FootprintTransform::Rotate(steps) => {
+                let by = quarter_turns(steps);
+                self.edit_footprints(&uuids, ROTATE_FOOTPRINTS_LABEL, |node| {
+                    Some(rotate_node(node, by))
+                })
+            }
+            FootprintTransform::Flip => {
+                self.edit_footprints(&uuids, FLIP_FOOTPRINTS_LABEL, |node| Some(flip_node(node)))
+            }
+        }
+    }
+
+    /// Replaces each footprint in `uuids` with `edit` applied to its node, as one undo step
+    /// named `label`. Fails when a footprint is missing or can't be read.
+    fn edit_footprints(
+        &mut self,
+        uuids: &[Uuid],
+        label: &str,
+        edit: impl Fn(&SExpr) -> Option<SExpr>,
+    ) -> Result<Changes, CoreError> {
+        let mut found = HashSet::new();
+        let mut removed = Vec::with_capacity(uuids.len());
+        let mut inserted = Vec::with_capacity(uuids.len());
+        for (position, node) in self.project.board().items().iter().enumerate() {
+            let Some(uuid) = footprint_uuid(node).filter(|uuid| uuids.contains(uuid)) else {
+                continue;
+            };
+            let next = edit(node).ok_or_else(|| unreadable_footprint(uuid))?;
+            found.insert(uuid);
+            removed.push((position + 1, node.clone()));
+            inserted.push((position + 1, next));
+        }
+        if found.len() != uuids.len() {
+            return Err(missing_footprint());
+        }
+        Ok(self.execute(Command::EditBoard {
+            label: label.to_owned(),
+            removed,
+            inserted,
+        }))
+    }
+
     /// Updates the board from the schematic as one undo step, carrying out the plan
     /// [`crate::board_update::plan_board_update`] returns for the same inputs. New
     /// footprints and the items inside them get UUIDs from `fresh`.
@@ -1335,6 +1422,16 @@ fn quarter_turns(steps: i32) -> Angle {
 
 fn missing_symbol() -> CoreError {
     CoreError::InvalidEdit("A symbol in the selection is not placed on the schematic.".to_owned())
+}
+
+/// The error for a selection naming a footprint the board doesn't have.
+fn missing_footprint() -> CoreError {
+    CoreError::InvalidEdit("A footprint in the selection is not on the board.".to_owned())
+}
+
+/// The error for a footprint whose node can't be read as a footprint.
+fn unreadable_footprint(uuid: Uuid) -> CoreError {
+    CoreError::InvalidEdit(format!("The footprint {uuid} can't be read."))
 }
 
 fn validate_title_block(block: &TitleBlock) -> Result<(), CoreError> {

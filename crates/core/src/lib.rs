@@ -37,7 +37,7 @@ pub use netlist::{Net, NetNode, netlist};
 pub use project::{Project, validate_name, write_atomic};
 pub use project_file::ProjectFile;
 pub use ratsnest::{Ratsnest, RatsnestLine};
-pub use session::{Changes, Command, FieldEdit, Session, SymbolTransform};
+pub use session::{Changes, Command, FieldEdit, FootprintTransform, Session, SymbolTransform};
 pub use symbol::{Fill, Pin, Shape, SymbolGraphics, SymbolPreview, Xy, unit_count};
 pub use units::{Angle, Nm, Point, UnitError};
 pub use wiring::{Junction, Label, LabelKind, LabelShape, NoConnect, Wire};

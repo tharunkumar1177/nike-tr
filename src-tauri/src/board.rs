@@ -94,15 +94,30 @@ impl From<&Footprint> for BoardFootprint {
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(export)]
 pub enum OutlineGeometry {
-    Line { start: Xy, end: Xy },
+    Line {
+        start: Xy,
+        end: Xy,
+    },
     /// A circular arc through three points.
-    Arc { start: Xy, mid: Xy, end: Xy },
+    Arc {
+        start: Xy,
+        mid: Xy,
+        end: Xy,
+    },
     /// An axis-aligned rectangle between opposite corners.
-    Rect { start: Xy, end: Xy },
+    Rect {
+        start: Xy,
+        end: Xy,
+    },
     /// A circle around `center` through `end`.
-    Circle { center: Xy, end: Xy },
+    Circle {
+        center: Xy,
+        end: Xy,
+    },
     /// A closed polygon.
-    Polygon { points: Vec<Xy> },
+    Polygon {
+        points: Vec<Xy>,
+    },
 }
 
 /// One graphic of the board outline.
@@ -497,7 +512,10 @@ mod tests {
         };
         let json = serde_json::to_value(BoardFootprint::from(&footprint)).unwrap();
         assert_eq!(json["libId"], "Resistor_SMD:R_0603_1608Metric");
-        assert_eq!(json["position"], serde_json::json!([100_000_000, 50_000_000]));
+        assert_eq!(
+            json["position"],
+            serde_json::json!([100_000_000, 50_000_000])
+        );
         assert_eq!(json["rotation"], 900);
         assert_eq!(json["side"], "back");
         let pad = &json["pads"][0];
