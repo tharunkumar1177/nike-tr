@@ -7,9 +7,8 @@ use std::path::Path;
 
 use tron_core::sexpr::{self, SExpr};
 use tron_core::{
-    Angle, Board, BoardUpdateOptions, BoardUpdatePlan, Changes, FootprintField,
-    FootprintTransform, Nm, Point, Project, Ratsnest, Session, Side, plan_board_update,
-    required_footprints,
+    Angle, Board, BoardUpdateOptions, BoardUpdatePlan, Changes, FootprintField, FootprintTransform,
+    Nm, Point, Project, Ratsnest, Session, Side, plan_board_update, required_footprints,
 };
 use uuid::Uuid;
 
