@@ -70,10 +70,7 @@ impl Pad {
     /// other child of `previous` in place. A new net goes after `(roundrect_rratio ...)` or
     /// whatever shape option precedes `(pinfunction ...)`, where KiCad writes it.
     fn to_node(&self, previous: &SExpr) -> SExpr {
-        let mut items = vec![
-            SExpr::atom("pad"),
-            SExpr::string(self.number.as_str()),
-        ];
+        let mut items = vec![SExpr::atom("pad"), SExpr::string(self.number.as_str())];
         let mut net = self.net.as_deref().map(net_node);
         for child in previous.args().iter().skip(1) {
             match child.head() {
@@ -350,10 +347,7 @@ mod tests {
         assert_eq!(footprint.pads.len(), 2);
         assert_eq!(footprint.pads[0].number, "1");
         assert_eq!(footprint.pads[0].net.as_deref(), Some("GND"));
-        assert_eq!(
-            footprint.pads[0].position,
-            Point::new(Nm(-825_000), Nm(0))
-        );
+        assert_eq!(footprint.pads[0].position, Point::new(Nm(-825_000), Nm(0)));
         assert_eq!(footprint.pads[1].net, None);
     }
 

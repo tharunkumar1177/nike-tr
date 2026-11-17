@@ -201,14 +201,31 @@ impl Stackup {
 /// The geometry of a board graphic on `Edge.Cuts`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutlineShape {
-    Line { start: Point, end: Point },
+    /// A straight segment.
+    Line {
+        start: Point,
+        end: Point,
+    },
     /// A circular arc through three points.
-    Arc { start: Point, mid: Point, end: Point },
+    Arc {
+        start: Point,
+        mid: Point,
+        end: Point,
+    },
     /// An axis-aligned rectangle between opposite corners.
-    Rect { start: Point, end: Point },
+    Rect {
+        start: Point,
+        end: Point,
+    },
     /// A circle through `end` around `center`.
-    Circle { center: Point, end: Point },
-    Polygon { points: Vec<Point> },
+    Circle {
+        center: Point,
+        end: Point,
+    },
+    /// A closed polygon through its corners.
+    Polygon {
+        points: Vec<Point>,
+    },
 }
 
 impl OutlineShape {
@@ -851,8 +868,14 @@ mod tests {
     fn coordinates_outside_kicads_range_are_refused() {
         assert_eq!(legacy().check_export_bounds(), Ok(()));
         let far = LEGACY.replace("(at 120 80)", "(at 2200 80)");
-        let error = Board::parse(&far).unwrap().check_export_bounds().unwrap_err();
-        assert!(error.starts_with("Footprint R1 at (2200, 80) mm"), "{error}");
+        let error = Board::parse(&far)
+            .unwrap()
+            .check_export_bounds()
+            .unwrap_err();
+        assert!(
+            error.starts_with("Footprint R1 at (2200, 80) mm"),
+            "{error}"
+        );
         let outline = LEGACY.replace("(end 150 100)", "(end 150 -2147.5)");
         let error = Board::parse(&outline)
             .unwrap()

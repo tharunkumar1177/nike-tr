@@ -6,9 +6,9 @@ The user turns a schematic into a physical board. They pull footprints and nets 
 
 ## Current verified status
 
-**Status:** Planned
+**Status:** In progress
 
-Slice 7 is in progress, starting with 7a (footprint definitions in the library index).
+7a is done: the index stores footprint sources ([PR #29](https://github.com/tharunkumar1177/tron/pull/29)), and release `library-kicad-10.0.7-r3` is pinned ([PR #30](https://github.com/tharunkumar1177/tron/pull/30)). 7b is green in CI. `crates/core/src/board.rs` types the `(layers)` table, `setup.stackup`, and the `Edge.Cuts` outline, and `crates/core/src/footprint.rs` types footprints and pads. Opening an older board upgrades it in memory: it gets the KiCad 10 header and layer ordinals, and numbered nets become named nets. New projects get KiCad's 2-layer table and stackup, and saving refuses coordinates outside KiCad's 32-bit nanometer range. Next is 7c.
 
 ## Architecture dependencies
 
@@ -68,7 +68,8 @@ The whole board is sent in the snapshot when a project opens. Viewport-scoped bo
 
 ## Relevant implementation and tests
 
-- `crates/core` — Planned
+- `crates/core/src/board.rs`, `crates/core/src/footprint.rs` — Implemented (7b), with unit tests for the upgrade, round trip, layers, stackups, outline shapes, and footprint edits
+- `crates/core/tests/project_files.rs` — Implemented: an upgraded board reopens unchanged, and an out-of-range board is not saved
 - `ui/src` — Planned
 
 ## Acceptance or verification criteria
