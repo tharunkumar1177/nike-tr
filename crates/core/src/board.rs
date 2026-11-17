@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::footprint::{Footprint, net_name, net_node};
+use crate::footprint::{Footprint, footprint_uuid, net_name, net_node};
 use crate::kicad::{FileError, GENERATOR, mm_text, parse_kind};
 use crate::kicad_value::{child_text, children, length, number, point, points, stroke_width};
 use crate::sexpr::SExpr;
@@ -382,6 +382,52 @@ impl Board {
         })
     }
 
+    /// The node of the footprint with `uuid`.
+    pub(crate) fn footprint_node(&self, uuid: Uuid) -> Option<&SExpr> {
+        self.items()
+            .iter()
+            .find(|item| footprint_uuid(item) == Some(uuid))
+    }
+
+    /// The top-level items after the `kicad_pcb` head. Item `i` sits at child index `i + 1`.
+    pub(crate) fn items(&self) -> &[SExpr] {
+        self.root.args()
+    }
+
+    /// Removes the top-level item at child `index`.
+    pub(crate) fn remove_item_at(&mut self, index: usize) {
+        if let Some(items) = self.root.items_mut()
+            && index > 0
+            && index < items.len()
+        {
+            items.remove(index);
+        }
+    }
+
+    /// Inserts a top-level node at child `index`, clamped to the end.
+    pub(crate) fn insert_item_at(&mut self, index: usize, node: SExpr) {
+        if let Some(items) = self.root.items_mut() {
+            items.insert(index.clamp(1, items.len()), node);
+        }
+    }
+
+    /// The child index a new footprint is inserted at: after the last footprint, else before
+    /// the first board graphic, track, zone, or group, else at the end. KiCad writes
+    /// footprints in that place.
+    pub(crate) fn footprint_insert_index(&self) -> usize {
+        let items = self.items();
+        if let Some(last) = items
+            .iter()
+            .rposition(|item| item.head() == Some("footprint"))
+        {
+            return last + 2;
+        }
+        items
+            .iter()
+            .position(follows_footprints)
+            .map_or(items.len() + 1, |position| position + 1)
+    }
+
     /// Checks that every typed coordinate fits KiCad's 32-bit nanometer range, naming the
     /// first item that doesn't.
     pub fn check_export_bounds(&self) -> Result<(), String> {
@@ -412,6 +458,27 @@ impl Board {
         }
         Ok(())
     }
+}
+
+/// Top-level items KiCad writes after the footprints.
+const AFTER_FOOTPRINTS: [&str; 11] = [
+    "dimension",
+    "image",
+    "target",
+    "segment",
+    "arc",
+    "via",
+    "zone",
+    "group",
+    "generated",
+    "embedded_fonts",
+    "embedded_files",
+];
+
+/// Whether KiCad writes the top-level `node` after the footprints.
+fn follows_footprints(node: &SExpr) -> bool {
+    let head = node.head().unwrap_or_default();
+    head.starts_with("gr_") || AFTER_FOOTPRINTS.contains(&head)
 }
 
 /// The `(layers)` table of a new board with `copper` copper layers: the copper layers in

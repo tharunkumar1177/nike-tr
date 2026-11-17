@@ -266,6 +266,10 @@ impl Project {
         &self.board
     }
 
+    pub(crate) fn board_mut(&mut self) -> &mut Board {
+        &mut self.board
+    }
+
     pub fn manifest_path(&self) -> PathBuf {
         self.dir.join(MANIFEST_FILE)
     }

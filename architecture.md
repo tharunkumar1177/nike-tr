@@ -70,6 +70,8 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 - Simulation result vectors stay in Rust. The UI fetches only the signals and the x range it shows, capped at a point budget, and Rust reduces the data by min-max decimation so peaks survive.
 - Measurements and cursor readouts are computed in Rust over the full-resolution vectors, never from the decimated samples the UI holds.
 - An AC run's vectors are complex. The UI asks for a real quantity of them (magnitude in dB, or unwrapped phase in degrees), and Rust reduces, measures, and interpolates it on log frequency. An AC quantity has no average or RMS.
+- The project snapshot carries the whole board: footprints with their pads at board positions, the outline, the stackup, and the ratsnest. Viewport-scoped board reads come with routing. A diff carries every footprint, the outline, or the stackup when they change. For the ratsnest it carries only the nets whose pads changed, and the UI replaces those nets' lines.
+- Updating the board from the schematic takes two commands. `plan_board_update` returns a review stamped with the document revision. `apply_board_update(base_revision)` applies it as one undo step, and fails with `boardUpdateConflict` if the document changed after the review.
 - Request and response types are defined in Rust and exported to TypeScript, so the two sides cannot drift.
 
 ### Connectivity and netlist
@@ -102,7 +104,7 @@ The user starts a simulation. `core` derives the netlist, `sim` exports a SPICE 
 
 ### Schematic to board
 
-The user runs "Update board". `core` diffs the netlist against the board, the UI shows the proposed additions and removals, and the user accepts. `core` then applies a single undoable command.
+The user runs "Update board". `core` matches each symbol to the footprint whose `path` ends in its UUID and diffs the netlist against the board. Footprint definitions come from the component library index. The UI shows the proposed additions, removals, replacements, text and pad-net changes, and the symbols that can't be placed, and the user accepts. `core` then applies a single undoable command. New footprints are packed in rows below the board outline.
 
 ### AI generation with verification
 
@@ -120,6 +122,7 @@ The user describes a circuit. `ai` asks the model for circuit DSL source, compil
 
 - GitHub Actions is the only build authority. Lockfiles (`Cargo.lock`, `package-lock.json`) are generated in CI and committed from CI artifacts, never written by hand.
 - Dependency versions are declared explicitly and checked against crates.io and npm.
+- `core` uses `spade` for the ratsnest's Delaunay triangulation. Its R-Tree is reserved for DRC.
 - Third-party binaries (`libngspice`, a JRE for freerouting) are downloaded in CI from pinned URLs with pinned SHA-256 checksums.
 
 ## Blueprints

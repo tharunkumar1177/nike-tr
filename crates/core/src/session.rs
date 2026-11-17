@@ -8,6 +8,7 @@ use std::path::Path;
 
 use uuid::Uuid;
 
+use crate::board_update::{self, BoardUpdateOptions, UPDATE_BOARD_LABEL};
 use crate::erc::{RuleSeverities, Violation};
 use crate::error::CoreError;
 use crate::kicad::{
@@ -87,6 +88,13 @@ pub enum Command {
         removed: Vec<(usize, SExpr)>,
         inserted: Vec<(usize, SExpr)>,
     },
+    /// Top-level board nodes (footprints, outline graphics, the layer table, or the setup)
+    /// were replaced, with indices recorded the same way as for [`Command::EditItems`].
+    EditBoard {
+        label: String,
+        removed: Vec<(usize, SExpr)>,
+        inserted: Vec<(usize, SExpr)>,
+    },
     /// The `.kicad_pro` settings were replaced.
     SetKicadProject {
         before: Box<ProjectFile>,
@@ -120,7 +128,9 @@ impl Command {
             Command::MoveSymbols { .. } => "Move Symbol",
             Command::TransformSymbols { .. } => "Transform Symbol",
             Command::SetKicadProject { .. } => "Project Settings",
-            Command::EditItems { label, .. } | Command::Group { label, .. } => label,
+            Command::EditItems { label, .. }
+            | Command::EditBoard { label, .. }
+            | Command::Group { label, .. } => label,
         }
     }
 
@@ -172,6 +182,15 @@ impl Command {
                 removed,
                 inserted,
             } => Command::EditItems {
+                label: label.clone(),
+                removed: inserted.clone(),
+                inserted: removed.clone(),
+            },
+            Command::EditBoard {
+                label,
+                removed,
+                inserted,
+            } => Command::EditBoard {
                 label: label.clone(),
                 removed: inserted.clone(),
                 inserted: removed.clone(),
@@ -269,6 +288,20 @@ impl Command {
                 }
                 changes.wiring = true;
             }
+            Command::EditBoard {
+                removed, inserted, ..
+            } => {
+                let board = project.board_mut();
+                for (index, _) in removed.iter().rev() {
+                    board.remove_item_at(*index);
+                }
+                for (index, node) in inserted {
+                    board.insert_item_at(*index, node.clone());
+                }
+                for (_, node) in removed.iter().chain(inserted) {
+                    changes.note_board_node(node);
+                }
+            }
             Command::SetKicadProject { after, .. } => {
                 project.set_kicad_project((**after).clone());
                 changes.erc_settings = true;
@@ -297,6 +330,12 @@ pub struct Changes {
     pub erc_settings: bool,
     /// The simulation analysis in `tron.json` changed.
     pub analysis: bool,
+    /// Board footprints were added, moved, transformed, renamed, rewired, or removed.
+    pub footprints: bool,
+    /// Graphics on `Edge.Cuts` changed.
+    pub board_outline: bool,
+    /// The board's `(layers)` table, `setup` (with its stackup), or thickness changed.
+    pub stackup: bool,
 }
 
 impl Changes {
@@ -308,6 +347,23 @@ impl Changes {
             || self.wiring
             || self.erc_settings
             || self.analysis
+            || self.footprints
+            || self.board_outline
+            || self.stackup
+    }
+
+    /// Records what kind of board item a replaced top-level `node` is.
+    fn note_board_node(&mut self, node: &SExpr) {
+        match node.head().unwrap_or_default() {
+            "footprint" => self.footprints = true,
+            "layers" | "setup" | "general" => self.stackup = true,
+            head if head.starts_with("gr_") => {
+                if crate::kicad_value::child_text(node, "layer") == Some("Edge.Cuts") {
+                    self.board_outline = true;
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1021,6 +1077,38 @@ impl Session {
         Ok(())
     }
 
+    /// Updates the board from the schematic as one undo step, carrying out the plan
+    /// [`crate::board_update::plan_board_update`] returns for the same inputs. New
+    /// footprints and the items inside them get UUIDs from `fresh`.
+    pub fn apply_board_update(
+        &mut self,
+        definitions: &HashMap<String, SExpr>,
+        options: BoardUpdateOptions,
+        fresh: &mut impl FnMut() -> Uuid,
+    ) -> Result<Changes, CoreError> {
+        let sheet_file = format!("{}.kicad_sch", self.project.name());
+        let (removed, inserted) = board_update::board_edits(
+            self.project.schematic(),
+            self.project.board(),
+            definitions,
+            options,
+            &sheet_file,
+            fresh,
+        )
+        .map_err(CoreError::InvalidEdit)?;
+        if removed.is_empty() && inserted.is_empty() {
+            return Ok(Changes::default());
+        }
+        Ok(self.execute(Command::Group {
+            label: UPDATE_BOARD_LABEL.to_owned(),
+            commands: vec![Command::EditBoard {
+                label: UPDATE_BOARD_LABEL.to_owned(),
+                removed,
+                inserted,
+            }],
+        }))
+    }
+
     pub fn undo(&mut self) -> Result<Changes, CoreError> {
         let entry = self.undo.pop().ok_or(CoreError::NothingToUndo)?;
         let mut changes = Changes::default();
@@ -1334,11 +1422,7 @@ mod tests {
             Changes {
                 title_block: true,
                 grid_size: true,
-                symbols: false,
-                definitions: false,
-                wiring: false,
-                erc_settings: false,
-                analysis: false,
+                ..Changes::default()
             }
         );
         let edited = session.project().clone();
@@ -1495,13 +1579,9 @@ mod tests {
         assert_eq!(
             changes,
             Changes {
-                title_block: false,
-                grid_size: false,
                 symbols: true,
                 definitions: true,
-                wiring: false,
-                erc_settings: false,
-                analysis: false,
+                ..Changes::default()
             }
         );
         let schematic = session.project().schematic();

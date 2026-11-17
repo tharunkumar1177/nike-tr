@@ -5,7 +5,7 @@
 //! untouched.
 
 use crate::kicad::{deg_text, mm_text, read_at};
-use crate::kicad_value::{child_text, children, property, text_arg};
+use crate::kicad_value::{angle, child_text, children, property, text_arg};
 use crate::sexpr::SExpr;
 use crate::units::{Angle, Nm, Point};
 use uuid::Uuid;
@@ -208,6 +208,158 @@ impl Footprint {
     }
 }
 
+/// The footprint node rotated about its own origin by `by`. Its `(at ...)` angle and those
+/// of its pads and texts turn with it; offsets are stored unrotated, so they stay.
+pub(crate) fn rotate_node(node: &SExpr, by: Angle) -> SExpr {
+    let mut next = node.clone();
+    for item in next.items_mut().into_iter().flatten().skip(1) {
+        match item.head() {
+            Some("at") => *item = turned_at(item, by),
+            Some("pad" | "property" | "fp_text" | "fp_text_box") => {
+                for child in item.items_mut().into_iter().flatten().skip(1) {
+                    if child.head() == Some("at") {
+                        *child = turned_at(child, by);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    next
+}
+
+/// The footprint node flipped to the other side of the board the way KiCad flips top to
+/// bottom about the footprint origin: child offsets mirror vertically, angles negate, `F.`
+/// layers swap with `B.` layers, and texts toggle mirroring. 3D models follow the side
+/// without edits, and zones are left as they are.
+pub(crate) fn flip_node(node: &SExpr) -> SExpr {
+    let mut next = node.clone();
+    for item in next.items_mut().into_iter().flatten().skip(1) {
+        match item.head() {
+            Some("at") => *item = flipped_at(item, false),
+            Some("model" | "zone") => {}
+            _ => flip_child(item),
+        }
+    }
+    next
+}
+
+/// Flips one child of a footprint node, and everything below it, in place.
+fn flip_child(node: &mut SExpr) {
+    match node.head() {
+        Some("at") => *node = flipped_at(node, true),
+        Some("start" | "end" | "mid" | "center" | "xy" | "offset") => {
+            if let Some(y) = node.items_mut().and_then(|items| items.get_mut(2)) {
+                *y = negated(y);
+            }
+        }
+        Some("layer" | "layers") => {
+            for name in node.items_mut().into_iter().flatten().skip(1) {
+                if let SExpr::Str(text) = name {
+                    *text = flipped_layer(text);
+                }
+            }
+        }
+        Some("effects") => toggle_mirror(node),
+        Some("model" | "zone") => {}
+        _ => {
+            for child in node.items_mut().into_iter().flatten().skip(1) {
+                flip_child(child);
+            }
+        }
+    }
+}
+
+/// `(at x y [angle])` with its angle turned by `by`. The angle is written when the node had
+/// one or the result isn't zero; trailing flags such as `unlocked` are kept.
+fn turned_at(at: &SExpr, by: Angle) -> SExpr {
+    let args = at.args();
+    let current = match args.len() {
+        0..=2 => Angle::ZERO,
+        _ => match angle(at, 2) {
+            Ok(current) => current,
+            Err(_) => return at.clone(),
+        },
+    };
+    with_angle(at, current.rotate(by))
+}
+
+/// `(at x y [angle])` with its angle negated, and its y offset too when `mirror` is set.
+fn flipped_at(at: &SExpr, mirror: bool) -> SExpr {
+    let current = match at.args().len() {
+        0..=2 => Angle::ZERO,
+        _ => match angle(at, 2) {
+            Ok(current) => current,
+            Err(_) => return at.clone(),
+        },
+    };
+    let mut next = with_angle(at, Angle::from_decidegrees(-current.decidegrees()));
+    if mirror && let Some(y) = next.items_mut().and_then(|items| items.get_mut(2)) {
+        *y = negated(y);
+    }
+    next
+}
+
+/// `(at x y ...)` with `angle` as its third argument, written only when the node had an
+/// angle or `angle` isn't zero.
+fn with_angle(at: &SExpr, angle: Angle) -> SExpr {
+    let args = at.args();
+    let mut items = vec![SExpr::atom("at")];
+    items.extend(args.iter().take(2).cloned());
+    if args.len() > 2 || angle != Angle::ZERO {
+        items.push(SExpr::atom(deg_text(angle)));
+    }
+    items.extend(args.iter().skip(3).cloned());
+    SExpr::List(items)
+}
+
+/// A number atom with its sign flipped, keeping KiCad's decimal text. Zero stays `0`.
+fn negated(value: &SExpr) -> SExpr {
+    let Some(text) = value.text() else {
+        return value.clone();
+    };
+    match text.strip_prefix('-') {
+        Some(positive) => SExpr::atom(positive),
+        None if text.trim_start_matches(['0', '.']).is_empty() => value.clone(),
+        None => SExpr::atom(format!("-{text}")),
+    }
+}
+
+/// The layer on the other side: `F.SilkS` for `B.SilkS` and back. Layers without a side,
+/// such as `*.Cu` or `In1.Cu`, stay.
+fn flipped_layer(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix("F.") {
+        format!("B.{rest}")
+    } else if let Some(rest) = name.strip_prefix("B.") {
+        format!("F.{rest}")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// Toggles `mirror` in a text's `(effects ... (justify ...))`, dropping an emptied
+/// `(justify)`.
+fn toggle_mirror(effects: &mut SExpr) {
+    let Some(items) = effects.items_mut() else {
+        return;
+    };
+    let is_mirror = |item: &SExpr| matches!(item, SExpr::Atom(atom) if atom == "mirror");
+    let justify = items.iter().position(|item| item.head() == Some("justify"));
+    match justify {
+        Some(index) => {
+            if let Some(parts) = items[index].items_mut() {
+                if parts.iter().any(is_mirror) {
+                    parts.retain(|part| !is_mirror(part));
+                } else {
+                    parts.push(SExpr::atom("mirror"));
+                }
+            }
+        }
+        None => items.push(SExpr::node("justify", vec![SExpr::atom("mirror")])),
+    }
+    items.retain(|item| item.head() != Some("justify") || !item.args().is_empty());
+}
+
 /// The net name of a `(net "Name")` or `(net 3 "Name")` node. The unnamed net `""`, KiCad's
 /// "no net", reads as `None`.
 pub(crate) fn net_name(node: &SExpr) -> Option<&str> {
@@ -241,8 +393,11 @@ pub(crate) fn board_at_node(position: Point, rotation: Angle) -> SExpr {
     SExpr::node("at", args)
 }
 
-/// The `(uuid ...)` of a footprint node.
-fn footprint_uuid(node: &SExpr) -> Option<Uuid> {
+/// The `(uuid ...)` of a `(footprint ...)` node.
+pub(crate) fn footprint_uuid(node: &SExpr) -> Option<Uuid> {
+    if node.head() != Some("footprint") {
+        return None;
+    }
     child_text(node, "uuid").and_then(|text| Uuid::parse_str(text).ok())
 }
 
@@ -437,6 +592,42 @@ mod tests {
         let (front, inner) = ("(layer \"F.Cu\")", "(layer \"In1.Cu\")");
         assert!(typed(&source.replace(front, inner)).is_none());
         assert!(typed(&source.replace(FOOTPRINT_UUID, "not-a-uuid")).is_none());
+    }
+
+    #[test]
+    fn rotating_turns_the_footprint_pads_and_texts() {
+        let node = rotate_node(&resistor_node(), Angle::from_decidegrees(900));
+        let footprint = Footprint::read(&node).unwrap();
+        assert_eq!(footprint.rotation, Angle::from_decidegrees(1800));
+        assert_eq!(footprint.pads[0].rotation, Angle::from_decidegrees(1800));
+        assert_eq!(footprint.pads[0].position, Point::new(Nm(-825_000), Nm(0)));
+        let text = node.to_pretty_string();
+        assert!(text.contains("(at 0 -1.43 180)"), "{text}");
+        let back = rotate_node(&node, Angle::from_decidegrees(2700));
+        assert_eq!(back, resistor_node());
+    }
+
+    #[test]
+    fn flipping_moves_the_footprint_to_the_back() {
+        let node = flip_node(&resistor_node());
+        let footprint = Footprint::read(&node).unwrap();
+        assert_eq!(footprint.side, Side::Back);
+        assert_eq!(footprint.rotation, Angle::from_decidegrees(2700));
+        assert_eq!(
+            footprint.pad_position(&footprint.pads[0]),
+            Point::new(Nm(100_000_000), Nm(49_175_000))
+        );
+        let text = node.to_pretty_string();
+        assert!(
+            text.contains("(layers \"B.Cu\" \"B.Mask\" \"B.Paste\")"),
+            "{text}"
+        );
+        assert!(text.contains("(at -0.825 0 270)"), "{text}");
+        assert!(text.contains("(at 0 1.43 270)"), "{text}");
+        assert!(text.contains("(layer \"B.SilkS\")"), "{text}");
+        assert!(text.contains("(justify mirror)"), "{text}");
+        assert!(text.contains("(start -0.8 0.4125)"), "{text}");
+        assert_eq!(flip_node(&node), resistor_node());
     }
 
     #[test]

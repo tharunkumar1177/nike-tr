@@ -465,6 +465,22 @@ fn unknown_ids_return_nothing() {
     assert_eq!(index.symbol(9_999).unwrap(), None);
     assert_eq!(index.footprint(9_999).unwrap(), None);
     assert_eq!(index.footprint_definition(9_999).unwrap(), None);
+    let named = index.footprint_definition_named("Resistor_SMD", "R_9999");
+    assert_eq!(named.unwrap(), None);
+}
+
+#[test]
+fn footprints_are_found_by_library_and_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = fixture_index(dir.path());
+    let id = index.search("R_0603_1608Metric", 1).unwrap()[0].id;
+    let by_id = index.footprint_definition(id).unwrap().unwrap();
+    let by_name = index
+        .footprint_definition_named("Resistor_SMD", "R_0603_1608Metric")
+        .unwrap();
+    assert_eq!(by_name, Some(by_id));
+    let wrong_library = index.footprint_definition_named("LED_THT", "R_0603_1608Metric");
+    assert_eq!(wrong_library.unwrap(), None);
 }
 
 #[test]
