@@ -202,10 +202,7 @@ impl Stackup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutlineShape {
     /// A straight segment.
-    Line {
-        start: Point,
-        end: Point,
-    },
+    Line { start: Point, end: Point },
     /// A circular arc through three points.
     Arc {
         start: Point,
@@ -213,19 +210,11 @@ pub enum OutlineShape {
         end: Point,
     },
     /// An axis-aligned rectangle between opposite corners.
-    Rect {
-        start: Point,
-        end: Point,
-    },
+    Rect { start: Point, end: Point },
     /// A circle through `end` around `center`.
-    Circle {
-        center: Point,
-        end: Point,
-    },
+    Circle { center: Point, end: Point },
     /// A closed polygon through its corners.
-    Polygon {
-        points: Vec<Point>,
-    },
+    Polygon { points: Vec<Point> },
 }
 
 impl OutlineShape {
