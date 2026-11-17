@@ -1,7 +1,9 @@
 //! Design document model and geometry primitives shared by every Tron component.
 
+pub mod board;
 pub mod erc;
 pub mod error;
+pub mod footprint;
 pub mod kicad;
 pub mod kicad_value;
 pub mod manifest;
@@ -14,8 +16,12 @@ pub mod symbol;
 pub mod units;
 pub mod wiring;
 
+pub use board::{
+    Board, BoardGraphic, Layer, LayerKind, OutlineShape, Stackup, StackupLayer, layer_ordinal,
+};
 pub use erc::{ERC_RULES, ErcRule, RuleSeverities, RuleSeverity, Severity, Violation};
 pub use error::CoreError;
+pub use footprint::{Footprint, Pad, Side};
 pub use kicad::{
     MANDATORY_FIELDS, Mirror, PageSize, PinConnection, PlacedPin, PlacedSymbol, Placement,
     SymbolProperty, TITLE_BLOCK_COMMENTS, TitleBlock,
