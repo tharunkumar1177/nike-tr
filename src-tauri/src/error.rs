@@ -62,6 +62,8 @@ pub enum AppErrorKind {
     SimCancelled,
     /// The requested results or signal no longer exist.
     SimNotFound,
+    /// The schematic or board changed after the board update was reviewed.
+    BoardUpdateConflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]

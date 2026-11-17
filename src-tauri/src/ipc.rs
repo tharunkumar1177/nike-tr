@@ -9,12 +9,18 @@ use tron_core::kicad_value::text_arg;
 use tron_core::sexpr::SExpr;
 use tron_core::{
     AnalysisSettings, Changes, ERC_RULES, FieldEdit, Junction, Label, LabelKind, LabelShape,
-    Mirror, Nm, NoConnect, PlacedSymbol, Placement, Point, Project, RuleSeverities, RuleSeverity,
-    Session, Severity, SymbolPreview, TITLE_BLOCK_COMMENTS, TitleBlock, Violation, Wire, Xy,
+    Mirror, Nm, NoConnect, PlacedSymbol, Placement, Point, Project, Ratsnest, RuleSeverities,
+    RuleSeverity, Session, Severity, SymbolPreview, TITLE_BLOCK_COMMENTS, TitleBlock, Violation,
+    Wire, Xy, plan_board_update as plan_update, required_footprints,
 };
 use ts_rs::TS;
 use uuid::Uuid;
 
+use crate::board::{
+    BoardFootprint, BoardStackup, BoardUpdateReview, BoardUpdateSettings, OutlineGraphic,
+    RatsnestSegment, RatsnestUpdate, board_footprints, board_outline, board_stackup,
+    footprint_definitions, ratsnest_segments,
+};
 use crate::error::{AppError, AppErrorKind};
 use crate::library::{LibraryState, read_index};
 use crate::settings::{self, Settings};
@@ -140,6 +146,12 @@ pub struct ProjectSnapshot {
     pub no_connects: Vec<NoConnectFlag>,
     /// The analysis saved in `tron.json`, or `null` when none is set.
     pub simulation_settings: Option<AnalysisSettings>,
+    /// Every footprint on the board.
+    pub footprints: Vec<BoardFootprint>,
+    pub board_outline: Vec<OutlineGraphic>,
+    pub stackup: BoardStackup,
+    /// Every ratsnest line on the board.
+    pub ratsnest: Vec<RatsnestSegment>,
     pub history: HistoryStatus,
 }
 
@@ -147,6 +159,7 @@ impl ProjectSnapshot {
     fn new(session: &Session, revision: u32) -> ProjectSnapshot {
         let project = session.project();
         let page = project.page_size();
+        let board = project.board();
         ProjectSnapshot {
             revision,
             name: project.name().to_owned(),
@@ -164,6 +177,10 @@ impl ProjectSnapshot {
             labels: net_labels(project),
             no_connects: no_connect_flags(project),
             simulation_settings: project.analysis(),
+            footprints: board_footprints(board),
+            board_outline: board_outline(board),
+            stackup: board_stackup(board),
+            ratsnest: ratsnest_segments(Ratsnest::new(board).lines()),
             history: HistoryStatus::from(session),
         }
     }
@@ -220,7 +237,7 @@ fn no_connect_flags(project: &Project) -> Vec<NoConnectFlag> {
 
 /// The parts of the document that changed between two revisions.
 /// Fields that didn't change are `null`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct DocumentDiff {
@@ -243,6 +260,13 @@ pub struct DocumentDiff {
     pub erc_settings: bool,
     /// The analysis changed; `get_analysis_settings` returns the new one.
     pub simulation_settings_changed: bool,
+    /// Every footprint when any footprint changed.
+    pub footprints: Option<Vec<BoardFootprint>>,
+    /// Every outline graphic when the outline changed.
+    pub board_outline: Option<Vec<OutlineGraphic>>,
+    pub stackup: Option<BoardStackup>,
+    /// The ratsnest of the nets whose pads moved, appeared, or disappeared.
+    pub ratsnest: Option<RatsnestUpdate>,
     pub history: HistoryStatus,
 }
 
@@ -254,6 +278,7 @@ fn document_diff(
     changes: Changes,
 ) -> DocumentDiff {
     let project = session.project();
+    let board = project.board();
     DocumentDiff {
         base_revision,
         revision,
@@ -269,6 +294,10 @@ fn document_diff(
         no_connects: changes.wiring.then(|| no_connect_flags(project)),
         erc_settings: changes.erc_settings,
         simulation_settings_changed: changes.analysis,
+        footprints: changes.footprints.then(|| board_footprints(board)),
+        board_outline: changes.board_outline.then(|| board_outline(board)),
+        stackup: changes.stackup.then(|| board_stackup(board)),
+        ratsnest: None,
         history: HistoryStatus::from(session),
     }
 }
@@ -706,6 +735,8 @@ struct Inner {
     /// Increases on every change, across projects, so a diff meant for one
     /// project can never apply to another.
     revision: u32,
+    /// The open board's ratsnest, kept so each change recomputes only the nets it touched.
+    ratsnest: Ratsnest,
 }
 
 impl AppState {
@@ -740,7 +771,14 @@ impl Inner {
         let base_revision = self.revision;
         self.revision = self.revision.wrapping_add(1);
         let session = self.session.as_ref().ok_or_else(AppError::no_project)?;
-        let diff = document_diff(session, base_revision, self.revision, changes);
+        let mut diff = document_diff(session, base_revision, self.revision, changes);
+        if changes.footprints {
+            let nets = self.ratsnest.update(session.project().board());
+            if !nets.is_empty() {
+                let lines = ratsnest_segments(self.ratsnest.net_lines(&nets));
+                diff.ratsnest = Some(RatsnestUpdate { nets, lines });
+            }
+        }
         app.emit(DOCUMENT_CHANGED_EVENT, &diff)
             .map_err(AppError::window)?;
         shell::sync_session(app, Some(session)).map_err(AppError::window)
@@ -751,6 +789,7 @@ impl Inner {
         app.state::<SimState>().invalidate();
         self.revision = self.revision.wrapping_add(1);
         let snapshot = ProjectSnapshot::new(&session, self.revision);
+        self.ratsnest = Ratsnest::new(session.project().board());
         self.session = Some(session);
         shell::sync_session(app, self.session.as_ref()).map_err(AppError::window)?;
         Ok(snapshot)
@@ -868,6 +907,7 @@ pub fn close_project(app: AppHandle, state: State<'_, AppState>) -> Result<(), A
     let mut inner = state.lock();
     app.state::<SimState>().invalidate();
     inner.session = None;
+    inner.ratsnest = Ratsnest::default();
     inner.revision = inner.revision.wrapping_add(1);
     shell::sync_session(&app, None).map_err(AppError::window)
 }
@@ -901,6 +941,79 @@ pub fn redo(app: AppHandle, state: State<'_, AppState>) -> Result<(), AppError> 
     let mut inner = state.lock();
     let changes = inner.session_mut()?.redo()?;
     inner.publish(&app, changes)
+}
+
+/// Plans Update Board from Schematic for the user to review. Footprint definitions come
+/// from the cached library index. The review carries the revision it describes, and
+/// `apply_board_update` refuses it once the document has moved on.
+#[tauri::command]
+pub fn plan_board_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    library: State<'_, LibraryState>,
+    settings: BoardUpdateSettings,
+) -> Result<BoardUpdateReview, AppError> {
+    let (required, revision) = {
+        let inner = state.lock();
+        let session = inner.session.as_ref().ok_or_else(AppError::no_project)?;
+        let required = required_footprints(session.project().schematic());
+        (required, inner.revision)
+    };
+    let definitions = footprint_definitions(&app, &library, &required)?;
+    let inner = state.lock();
+    let session = inner.session.as_ref().ok_or_else(AppError::no_project)?;
+    let project = session.project();
+    let options = settings.into();
+    let plan = plan_update(project.schematic(), project.board(), &definitions, options);
+    let plan = plan.map_err(|error| {
+        AppError::new(
+            AppErrorKind::InvalidEdit,
+            "The schematic's connections could not be worked out.",
+            Some(error),
+        )
+    })?;
+    Ok(BoardUpdateReview::new(plan, revision))
+}
+
+/// Applies the update reviewed at `base_revision` as one undo step. Fails with
+/// `boardUpdateConflict` when the document changed after the review.
+#[tauri::command]
+pub fn apply_board_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    library: State<'_, LibraryState>,
+    base_revision: u32,
+    settings: BoardUpdateSettings,
+) -> Result<(), AppError> {
+    let required = {
+        let inner = state.lock();
+        let session = inner.session.as_ref().ok_or_else(AppError::no_project)?;
+        if inner.revision != base_revision {
+            return Err(board_update_conflict());
+        }
+        required_footprints(session.project().schematic())
+    };
+    let definitions = footprint_definitions(&app, &library, &required)?;
+    let mut inner = state.lock();
+    if inner.revision != base_revision {
+        return Err(board_update_conflict());
+    }
+    let session = inner.session_mut()?;
+    let options = settings.into();
+    let changes = session.apply_board_update(&definitions, options, &mut Uuid::new_v4)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// The error for an update reviewed at a revision the document has since moved past.
+fn board_update_conflict() -> AppError {
+    AppError::new(
+        AppErrorKind::BoardUpdateConflict,
+        "The schematic or board changed after the update was reviewed. Review it again.",
+        None,
+    )
 }
 
 /// Places a library symbol on the schematic as one undo step. The definition comes from

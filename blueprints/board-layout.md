@@ -8,7 +8,9 @@ The user turns a schematic into a physical board. They pull footprints and nets 
 
 **Status:** In progress
 
-7a is done: the index stores footprint sources ([PR #29](https://github.com/tharunkumar1177/tron/pull/29)), and release `library-kicad-10.0.7-r3` is pinned ([PR #30](https://github.com/tharunkumar1177/tron/pull/30)). 7b is green in CI. `crates/core/src/board.rs` types the `(layers)` table, `setup.stackup`, and the `Edge.Cuts` outline, and `crates/core/src/footprint.rs` types footprints and pads. Opening an older board upgrades it in memory: it gets the KiCad 10 header and layer ordinals, and numbered nets become named nets. New projects get KiCad's 2-layer table and stackup, and saving refuses coordinates outside KiCad's 32-bit nanometer range. Next is 7c.
+7a is done: the index stores footprint sources ([PR #29](https://github.com/tharunkumar1177/tron/pull/29)), and release `library-kicad-10.0.7-r3` is pinned ([PR #30](https://github.com/tharunkumar1177/tron/pull/30)). 7b merged in [PR #31](https://github.com/tharunkumar1177/tron/pull/31). `crates/core/src/board.rs` types the `(layers)` table, `setup.stackup`, and the `Edge.Cuts` outline, and `crates/core/src/footprint.rs` types footprints and pads. Opening an older board upgrades it in memory: it gets the KiCad 10 header and layer ordinals, and numbered nets become named nets. New projects get KiCad's 2-layer table and stackup, and saving refuses coordinates outside KiCad's 32-bit nanometer range.
+
+7c is green in CI. `crates/core/src/board_update.rs` plans and applies Update Board from Schematic. It matches by `path` UUID, groups multi-unit symbols by reference, and skips power symbols, `(on_board no)` symbols, and symbols with an empty `Footprint`. It reports unannotated symbols and footprints missing from the library as problems, keeps `board_only` footprints, and packs new footprints in 150 mm rows with 2.54 mm gaps, 10 mm below the outline. Replacing a footprint keeps its position, rotation, and side. `crates/core/src/ratsnest.rs` builds each net's minimum spanning tree over a `spade` Delaunay triangulation and recomputes only nets whose pads changed. Core also has `move_footprints` and `transform_footprints` (rotate and flip) as single undo steps, ready for 7d. The IPC has `plan_board_update` and `apply_board_update(base_revision)` with `boardUpdateConflict`, the board in the snapshot, and the board fields and changed-net ratsnest in the diff. `Index::footprint_definition_named` looks footprints up by library and name. Next is 7d.
 
 ## Architecture dependencies
 
@@ -70,7 +72,11 @@ The whole board is sent in the snapshot when a project opens. Viewport-scoped bo
 
 - `crates/core/src/board.rs`, `crates/core/src/footprint.rs` — Implemented (7b), with unit tests for the upgrade, round trip, layers, stackups, outline shapes, and footprint edits
 - `crates/core/tests/project_files.rs` — Implemented: an upgraded board reopens unchanged, and an out-of-range board is not saved
-- `ui/src` — Planned
+- `crates/core/src/board_update.rs`, `crates/core/src/ratsnest.rs` — Implemented (7c), with unit tests for reference order, row packing, courtyard extents, spanning trees (square, collinear, stacked, 40 points), and incremental ratsnest updates
+- `crates/core/tests/board_update.rs` — Implemented: the golden divider with the real KiCad 10 `R_0603_1608Metric` footprint gets three footprints with their nets, the `/OUT` ratsnest line, undo and redo, a no-op re-plan, save and reopen, value changes, removal, missing footprints, and footprint move, rotate, and flip. The KiCad 10 comparison test is ignored until the golden board exists.
+- `src-tauri/src/board.rs`, `src-tauri/src/ipc.rs` — Implemented (7c): board IPC types and the plan and apply commands, with serialization tests
+- `ui/src/documentDiff.ts` — Implemented: applies the board fields and replaces the changed nets' ratsnest lines
+- `ui/src` board view — Planned (7d)
 
 ## Acceptance or verification criteria
 

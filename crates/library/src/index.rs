@@ -122,6 +122,9 @@ WHERE id = ?1";
 
 const SELECT_FOOTPRINT_SOURCE: &str = "SELECT lib, name, source FROM footprints WHERE id = ?1";
 
+const SELECT_NAMED_FOOTPRINT_SOURCE: &str =
+    "SELECT source FROM footprints WHERE lib = ?1 AND name = ?2";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ItemKind {
     Symbol,
@@ -413,14 +416,34 @@ impl Index {
         let Some((lib, name, source)) = row else {
             return Ok(None);
         };
-        let invalid = |message: String| LibraryError::FootprintDefinition {
-            lib: lib.clone(),
-            name: name.clone(),
-            message,
-        };
-        let root = parse_source(&source).map_err(invalid)?;
-        board_definition(&lib, &root).map(Some).map_err(invalid)
+        footprint_board_definition(&lib, &name, &source).map(Some)
     }
+
+    /// The footprint `<lib>:<name>` as a board embeds it, like
+    /// [`Index::footprint_definition`]. Returns `None` when the index has no such footprint.
+    pub fn footprint_definition_named(
+        &self,
+        lib: &str,
+        name: &str,
+    ) -> Result<Option<SExpr>, LibraryError> {
+        let mut select = self.conn.prepare_cached(SELECT_NAMED_FOOTPRINT_SOURCE)?;
+        let row = select.query_row([lib, name], |row| row.get::<_, String>(0));
+        let Some(source) = row.optional()? else {
+            return Ok(None);
+        };
+        footprint_board_definition(lib, name, &source).map(Some)
+    }
+}
+
+/// Parses the stored source of footprint `<lib>:<name>` into the form a board embeds.
+fn footprint_board_definition(lib: &str, name: &str, source: &str) -> Result<SExpr, LibraryError> {
+    let invalid = |message: String| LibraryError::FootprintDefinition {
+        lib: lib.to_owned(),
+        name: name.to_owned(),
+        message,
+    };
+    let root = parse_source(source).map_err(invalid)?;
+    board_definition(lib, &root).map_err(invalid)
 }
 
 /// A symbol's own definition and the symbol it extends, if any.
