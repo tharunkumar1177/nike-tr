@@ -1,4 +1,6 @@
+import type { BoardStackup } from "./bindings/BoardStackup";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
+import type { StackupEntry } from "./bindings/StackupEntry";
 import type { SymbolInstance } from "./bindings/SymbolInstance";
 import type { SymbolPreview } from "./bindings/SymbolPreview";
 
@@ -26,6 +28,10 @@ export function projectSnapshot(
     labels: [],
     noConnects: [],
     simulationSettings: null,
+    footprints: [],
+    boardOutline: [],
+    stackup: newBoardStackup(),
+    ratsnest: [],
     history: {
       dirty: false,
       canUndo: false,
@@ -34,6 +40,43 @@ export function projectSnapshot(
       redoLabel: null,
     },
     ...overrides,
+  };
+}
+
+/** The 2-layer, 1.6 mm stackup the core gives a new board. */
+export function newBoardStackup(): BoardStackup {
+  const layer = (
+    name: string,
+    kind: string,
+    thicknessNm: number | null,
+  ): StackupEntry => ({
+    name,
+    kind,
+    thicknessNm,
+    material: null,
+    epsilonR: null,
+    lossTangent: null,
+  });
+  return {
+    copperLayers: 2,
+    thicknessNm: 1_600_000,
+    layers: [
+      layer("F.SilkS", "Top Silk Screen", null),
+      layer("F.Paste", "Top Solder Paste", null),
+      layer("F.Mask", "Top Solder Mask", 10_000),
+      layer("F.Cu", "copper", 35_000),
+      {
+        ...layer("dielectric 1", "core", 1_510_000),
+        material: "FR4",
+        epsilonR: 4.5,
+        lossTangent: 0.02,
+      },
+      layer("B.Cu", "copper", 35_000),
+      layer("B.Mask", "Bottom Solder Mask", 10_000),
+      layer("B.Paste", "Bottom Solder Paste", null),
+      layer("B.SilkS", "Bottom Silk Screen", null),
+    ],
+    copperFinish: "None",
   };
 }
 

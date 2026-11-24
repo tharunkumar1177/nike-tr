@@ -1,3 +1,4 @@
+mod board;
 mod error;
 mod ipc;
 mod library;
@@ -70,6 +71,8 @@ pub fn run() {
             ipc::get_symbol_fields,
             ipc::edit_symbol_fields,
             ipc::set_symbol_field,
+            ipc::plan_board_update,
+            ipc::apply_board_update,
             ipc::list_recent_projects,
             ipc::remove_recent_project,
             ipc::close_window,
