@@ -13,6 +13,8 @@ import type { ErcRuleSeverity } from "./bindings/ErcRuleSeverity";
 import type { ProjectProperties } from "./bindings/ProjectProperties";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
+import { fitBoard } from "./board";
+import { BoardUpdateDialog } from "./components/BoardUpdateDialog";
 import { EditorShell } from "./components/EditorShell";
 import { ErcSeveritiesDialog } from "./components/ErcSeveritiesDialog";
 import { ErrorDialog } from "./components/ErrorDialog";
@@ -20,6 +22,7 @@ import { LibraryDialog } from "./components/LibraryDialog";
 import { ProjectLocationDialog } from "./components/ProjectLocationDialog";
 import { ProjectPropertiesDialog } from "./components/ProjectPropertiesDialog";
 import { SimulationSettingsDialog } from "./components/SimulationSettingsDialog";
+import type { EditorView } from "./components/Toolbar";
 import { UnsavedChangesDialog } from "./components/UnsavedChangesDialog";
 import { type RecentState, WelcomeScreen } from "./components/WelcomeScreen";
 import {
@@ -70,6 +73,7 @@ type ModalState =
   | { type: "properties" }
   | { type: "ercSeverities" }
   | { type: "simulationSettings" }
+  | { type: "boardUpdate" }
   | { type: "unsaved"; next: LeaveAction }
   | {
       type: "error";
@@ -86,6 +90,11 @@ export function App() {
   const [recent, setRecent] = useState<RecentState>({ status: "loading" });
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [viewport, setViewport] = useState<Viewport | null>(null);
+  const [view, setView] = useState<EditorView>("schematic");
+  const [boardViewport, setBoardViewport] = useState<Viewport | null>(null);
+  /** Refit the board once footprints arrive, after updating an empty board. */
+  const [boardFitPending, setBoardFitPending] = useState(false);
+  const [boardNotice, setBoardNotice] = useState<string | null>(null);
   const [canvasSize, setCanvasSize] = useState<Size>({ width: 0, height: 0 });
   const [library, adoptLibraryStatus] = useLibraryStatus();
   const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
@@ -137,12 +146,41 @@ export function App() {
     }
   }, [project, viewport, canvasSize]);
 
+  useEffect(() => {
+    if (
+      !project ||
+      view !== "board" ||
+      canvasSize.width <= 0 ||
+      canvasSize.height <= 0
+    ) {
+      return;
+    }
+    const refit = boardFitPending && project.footprints.length > 0;
+    if (boardViewport === null || refit) {
+      setBoardViewport(
+        fitBoard(canvasSize, project.footprints, project.boardOutline),
+      );
+      setBoardFitPending(false);
+    }
+  }, [project, view, boardViewport, boardFitPending, canvasSize]);
+
   const updateViewport = useCallback(
     (update: (current: Viewport) => Viewport) => {
       setViewport((current) => (current ? update(current) : current));
     },
     [],
   );
+
+  const updateBoardViewport = useCallback(
+    (update: (current: Viewport) => Viewport) => {
+      setBoardViewport((current) => (current ? update(current) : current));
+    },
+    [],
+  );
+
+  /** Updates the viewport of the view on screen. */
+  const updateShownViewport =
+    view === "board" ? updateBoardViewport : updateViewport;
 
   async function withBusy<T>(label: string, task: () => Promise<T>) {
     setBusy(label);
@@ -159,6 +197,10 @@ export function App() {
 
   function adoptProject(snapshot: ProjectSnapshot) {
     setViewport(null);
+    setBoardViewport(null);
+    setBoardFitPending(false);
+    setBoardNotice(null);
+    setView("schematic");
     setProject(snapshot);
     setModal(null);
   }
@@ -355,15 +397,32 @@ export function App() {
   }
 
   function zoomBy(factor: number) {
-    updateViewport((current) =>
+    updateShownViewport((current) =>
       zoomAt(current, factor, canvasSize.width / 2, canvasSize.height / 2),
     );
   }
 
   function zoomToFit() {
-    if (project && canvasSize.width > 0 && canvasSize.height > 0) {
+    if (!project || canvasSize.width <= 0 || canvasSize.height <= 0) {
+      return;
+    }
+    if (view === "board") {
+      setBoardViewport(
+        fitBoard(canvasSize, project.footprints, project.boardOutline),
+      );
+    } else {
       setViewport(fitToSheet(canvasSize, project.sheet));
     }
+  }
+
+  /** Closes the update dialog and shows the board it changed. */
+  function boardUpdated() {
+    if (project && project.footprints.length === 0) {
+      setBoardFitPending(true);
+    }
+    setModal(null);
+    setView("board");
+    setBoardNotice("Board updated from schematic");
   }
 
   function handleMenu(id: string) {
@@ -418,7 +477,13 @@ export function App() {
         zoomToFit();
         return;
       case "zoom-actual":
-        updateViewport((current) => zoomToLevel(current, 1, canvasSize));
+        updateShownViewport((current) => zoomToLevel(current, 1, canvasSize));
+        return;
+      case "switch-view":
+        setView((current) => (current === "board" ? "schematic" : "board"));
+        return;
+      case "update-board":
+        setModal({ type: "boardUpdate" });
         return;
       case "annotate-schematic":
         setAnnotateTicket((ticket) => ticket + 1);
@@ -515,6 +580,14 @@ export function App() {
             onCancel={dismiss}
           />
         ) : null;
+      case "boardUpdate":
+        return project ? (
+          <BoardUpdateDialog
+            onApplied={boardUpdated}
+            onDownloadLibrary={() => setLibraryDialogOpen(true)}
+            onClose={dismiss}
+          />
+        ) : null;
       case "unsaved":
         return (
           <UnsavedChangesDialog
@@ -582,7 +655,14 @@ export function App() {
     content = (
       <EditorShell
         project={project}
+        view={view}
+        onViewChange={setView}
         viewport={viewport}
+        boardViewport={boardViewport}
+        onBoardViewportChange={updateBoardViewport}
+        onUpdateBoard={() => setModal({ type: "boardUpdate" })}
+        boardNotice={boardNotice}
+        onBoardNoticeConsumed={() => setBoardNotice(null)}
         controlsDisabled={modal !== null || busy !== null || libraryDialogOpen}
         library={library}
         annotateTicket={annotateTicket}

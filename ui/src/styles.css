@@ -17,6 +17,10 @@
   --color-grid-line: rgba(255, 255, 255, 0.05);
   --color-grid-line-major: rgba(255, 255, 255, 0.1);
   --color-backdrop: rgba(0, 0, 0, 0.6);
+  --color-board-edge: #ffb74d;
+  --color-pad-front: #d96666;
+  --color-pad-back: #4db6ac;
+  --color-ratsnest: #a8b3c5;
 
   --space-0: 0.125rem;
   --space-1: 0.25rem;
@@ -353,6 +357,46 @@ body,
   font-variant-numeric: tabular-nums;
   text-align: right;
   color: var(--color-text-secondary);
+}
+
+.view-switch {
+  display: inline-flex;
+  padding: var(--space-0);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg);
+}
+
+.view-switch__button {
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) ease;
+}
+
+.view-switch__button:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+
+.view-switch__button--active {
+  background-color: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+}
+
+.view-switch__button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.view-switch__button:disabled {
+  cursor: default;
+  opacity: 0.35;
 }
 
 .icon-button {
@@ -1284,6 +1328,52 @@ button.sim-row:focus-visible {
 
 .modal__action--start {
   margin-right: auto;
+}
+
+.board-update__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.board-update__review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.board-update__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.board-update__heading {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.board-update__heading--warning {
+  color: var(--color-text-warning);
+}
+
+.board-update__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-update__row {
+  padding: var(--space-0) 0;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
 }
 
 .busy-overlay {

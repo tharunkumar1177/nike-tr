@@ -209,3 +209,28 @@ export function EyeIcon() {
     </Icon>
   );
 }
+
+/** A board with an arrow coming in: Update Board from Schematic. */
+export function BoardUpdateIcon() {
+  return (
+    <Icon>
+      <rect x="9" y="4" width="12" height="16" rx="1" />
+      <path d="M2 12h9" />
+      <path d="m8 9 3 3-3 3" />
+      <circle cx="16" cy="9" r="1" />
+      <circle cx="16" cy="15" r="1" />
+    </Icon>
+  );
+}
+
+/** Pads joined by thin lines: the ratsnest. */
+export function RatsnestIcon() {
+  return (
+    <Icon>
+      <circle cx="5" cy="6" r="2" />
+      <circle cx="19" cy="8" r="2" />
+      <circle cx="9" cy="18" r="2" />
+      <path d="M7 6.3 17 7.7M17.6 9.4 10.4 16.6" />
+    </Icon>
+  );
+}

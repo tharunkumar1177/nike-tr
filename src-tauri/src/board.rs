@@ -8,9 +8,11 @@ use tauri::AppHandle;
 use tron_core::sexpr::SExpr;
 use tron_core::{
     Board, BoardGraphic, BoardUpdateIssue, BoardUpdateOptions, BoardUpdatePlan, FieldChange,
-    Footprint, FootprintField, FootprintReplacement, OutlineShape, PadNetChange, PlannedFootprint,
-    RatsnestLine, Side, StackupLayer, Xy,
+    Footprint, FootprintField, FootprintReplacement, Nm, OutlineShape, Pad, PadNetChange,
+    PlannedFootprint, Point, RatsnestLine, Side, StackupLayer, Xy,
 };
+use tron_library::kicad_mod::placed_geometry;
+use tron_library::preview::{Pad as LibraryPad, PadShape};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -45,6 +47,25 @@ pub struct BoardPad {
     /// Board nanometers, after the footprint's rotation and side are applied.
     pub position: Xy,
     pub net: Option<String>,
+    pub shape: PadShape,
+    /// Width and height before rotation; zero when the pad's shape doesn't read.
+    pub size: Xy,
+    /// Tenths of a degree, counterclockwise, the footprint's rotation included.
+    pub rotation: i32,
+    /// Zero unless the shape is a rounded rectangle.
+    #[ts(type = "number")]
+    pub corner_radius_nm: i64,
+    /// Drill width and height for a pad with a hole.
+    pub drill: Option<Xy>,
+}
+
+/// The smallest axis-aligned box around a footprint on the board.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BoardBounds {
+    pub min: Xy,
+    pub max: Xy,
 }
 
 /// A footprint placed on the board.
@@ -62,19 +83,19 @@ pub struct BoardFootprint {
     pub reference: String,
     pub value: String,
     pub pads: Vec<BoardPad>,
+    /// Around the courtyard, or the pads and graphics without one; just the origin when the
+    /// footprint has neither.
+    pub bounds: BoardBounds,
 }
 
-impl From<&Footprint> for BoardFootprint {
-    /// The IPC form of a typed footprint.
-    fn from(footprint: &Footprint) -> BoardFootprint {
+impl BoardFootprint {
+    /// The IPC form of `footprint`, read from the board file node `node`.
+    fn new(footprint: &Footprint, node: &SExpr) -> BoardFootprint {
+        let geometry = placed_geometry(node);
         let pads = footprint
             .pads
             .iter()
-            .map(|pad| BoardPad {
-                number: pad.number.clone(),
-                position: Xy::from(footprint.pad_position(pad)),
-                net: pad.net.clone(),
-            })
+            .map(|pad| board_pad(footprint, pad, &geometry.pads))
             .collect();
         BoardFootprint {
             uuid: footprint.uuid,
@@ -85,8 +106,57 @@ impl From<&Footprint> for BoardFootprint {
             reference: footprint.reference.clone(),
             value: footprint.value.clone(),
             pads,
+            bounds: board_bounds(footprint, geometry.extent),
         }
     }
+}
+
+/// The IPC form of `pad`, with the shape of the read pad at the same number and offset.
+fn board_pad(footprint: &Footprint, pad: &Pad, shapes: &[LibraryPad]) -> BoardPad {
+    let offset = Xy::from(pad.position);
+    let shape = shapes
+        .iter()
+        .find(|shape| shape.number == pad.number && shape.center == offset);
+    BoardPad {
+        number: pad.number.clone(),
+        position: Xy::from(footprint.pad_position(pad)),
+        net: pad.net.clone(),
+        shape: shape.map_or(PadShape::Rect, |shape| shape.shape),
+        size: shape.map_or(Xy(0, 0), |shape| shape.size),
+        rotation: pad.rotation.decidegrees(),
+        corner_radius_nm: shape.map_or(0, |shape| shape.corner_radius),
+        drill: shape.and_then(|shape| shape.drill),
+    }
+}
+
+/// The board box around the footprint-frame `extent` turned and moved with the footprint.
+fn board_bounds(footprint: &Footprint, extent: Option<(Xy, Xy)>) -> BoardBounds {
+    let Some((min, max)) = extent else {
+        let origin = Xy::from(footprint.position);
+        return BoardBounds {
+            min: origin,
+            max: origin,
+        };
+    };
+    let corners = [min, Xy(max.0, min.1), max, Xy(min.0, max.1)];
+    let point = |Xy(x, y): Xy| footprint.board_point(Point::new(Nm(x), Nm(y)));
+    let points = corners.map(point);
+    let xs = points.map(|point| point.x.0);
+    let ys = points.map(|point| point.y.0);
+    BoardBounds {
+        min: Xy(min_of(xs), min_of(ys)),
+        max: Xy(max_of(xs), max_of(ys)),
+    }
+}
+
+/// The smallest of four values.
+fn min_of(values: [i64; 4]) -> i64 {
+    values.into_iter().fold(i64::MAX, i64::min)
+}
+
+/// The largest of four values.
+fn max_of(values: [i64; 4]) -> i64 {
+    values.into_iter().fold(i64::MIN, i64::max)
 }
 
 /// The geometry of one `Edge.Cuts` graphic.
@@ -241,8 +311,11 @@ pub struct RatsnestUpdate {
 
 /// Every footprint on the board, in file order.
 pub(crate) fn board_footprints(board: &Board) -> Vec<BoardFootprint> {
-    let footprints = board.footprints();
-    footprints.iter().map(BoardFootprint::from).collect()
+    let footprints = board.footprint_nodes();
+    footprints
+        .iter()
+        .map(|(footprint, node)| BoardFootprint::new(footprint, node))
+        .collect()
 }
 
 /// Every graphic of the board outline, in file order.
@@ -490,27 +563,25 @@ pub(crate) fn footprint_definitions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tron_core::{Angle, Nm, Pad, Point};
+
+    /// A back-side `R_0603_1608Metric` turned a quarter, as a board file holds it.
+    const BACK_RESISTOR: &str = "(kicad_pcb (version 20260206) \
+        (footprint \"Resistor_SMD:R_0603_1608Metric\" (layer \"B.Cu\") \
+        (uuid \"00000000-0000-0000-0000-000000000000\") (at 100 50 90) \
+        (property \"Reference\" \"R1\" (at 0 1.43 90) (layer \"B.SilkS\")) \
+        (property \"Value\" \"10k\" (at 0 -1.43 90) (layer \"B.Fab\")) \
+        (fp_rect (start -1.48 -0.73) (end 1.48 0.73) (stroke (width 0.05)) (layer \"B.CrtYd\")) \
+        (pad \"1\" smd roundrect (at -0.825 0 90) (size 0.8 0.95) (layers \"B.Cu\") \
+        (roundrect_rratio 0.25) (net \"GND\")) \
+        (pad \"2\" thru_hole circle (at 0.825 0 90) (size 1.6 1.6) (drill 0.8) \
+        (layers \"*.Cu\"))))";
 
     #[test]
-    fn footprints_serialize_with_board_pad_positions() {
-        let footprint = Footprint {
-            uuid: Uuid::nil(),
-            lib_id: "Resistor_SMD:R_0603_1608Metric".to_owned(),
-            position: Point::new(Nm(100_000_000), Nm(50_000_000)),
-            rotation: Angle::from_decidegrees(900),
-            side: Side::Back,
-            reference: "R1".to_owned(),
-            value: "10k".to_owned(),
-            path: None,
-            pads: vec![Pad {
-                number: "1".to_owned(),
-                position: Point::new(Nm(-825_000), Nm(0)),
-                rotation: Angle::ZERO,
-                net: Some("GND".to_owned()),
-            }],
-        };
-        let json = serde_json::to_value(BoardFootprint::from(&footprint)).unwrap();
+    fn footprints_serialize_with_board_pad_geometry_and_bounds() {
+        let board = Board::parse(BACK_RESISTOR).unwrap();
+        let footprint = board.footprint(Uuid::nil()).unwrap();
+        let json = serde_json::to_value(board_footprints(&board)).unwrap();
+        let json = &json[0];
         assert_eq!(json["libId"], "Resistor_SMD:R_0603_1608Metric");
         assert_eq!(
             json["position"],
@@ -518,10 +589,37 @@ mod tests {
         );
         assert_eq!(json["rotation"], 900);
         assert_eq!(json["side"], "back");
+        let (min, max) = (
+            serde_json::json!([99_270_000, 48_520_000]),
+            serde_json::json!([100_730_000, 51_480_000]),
+        );
+        assert_eq!(json["bounds"]["min"], min);
+        assert_eq!(json["bounds"]["max"], max);
         let pad = &json["pads"][0];
         assert_eq!(pad["net"], "GND");
         let expected = Xy::from(footprint.pad_position(&footprint.pads[0]));
         assert_eq!(pad["position"], serde_json::to_value(expected).unwrap());
+        assert_eq!(pad["shape"], "round_rect");
+        assert_eq!(pad["size"], serde_json::json!([800_000, 950_000]));
+        assert_eq!(pad["rotation"], 900);
+        assert_eq!(pad["cornerRadiusNm"], 200_000);
+        assert_eq!(pad["drill"], serde_json::Value::Null);
+        let hole = &json["pads"][1];
+        assert_eq!(hole["shape"], "circle");
+        assert_eq!(hole["drill"], serde_json::json!([800_000, 800_000]));
+    }
+
+    #[test]
+    fn footprints_without_geometry_are_bounded_by_their_origin() {
+        let board = Board::parse(
+            "(kicad_pcb (version 20260206) (footprint \"X:Y\" (layer \"F.Cu\") \
+            (uuid \"00000000-0000-0000-0000-000000000000\") (at 3 4)))",
+        )
+        .unwrap();
+        let json = serde_json::to_value(board_footprints(&board)).unwrap();
+        let origin = serde_json::json!([3_000_000, 4_000_000]);
+        assert_eq!(json[0]["bounds"]["min"], origin);
+        assert_eq!(json[0]["bounds"]["max"], origin);
     }
 
     #[test]

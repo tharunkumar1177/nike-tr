@@ -7,6 +7,7 @@ import type { ProbeTarget } from "../bindings/ProbeTarget";
 import type { ProjectSnapshot } from "../bindings/ProjectSnapshot";
 import type { SimulationProgress } from "../bindings/SimulationProgress";
 import type { Xy } from "../bindings/Xy";
+import { BOARD_GRID_NM } from "../board";
 import { failedAnnouncement, finishedAnnouncement } from "../convergence";
 import {
   SIMULATION_PROGRESS_EVENT,
@@ -27,6 +28,7 @@ import {
   type Viewport,
   formatZoom,
 } from "../viewport";
+import { BoardCanvas } from "./BoardCanvas";
 import { ErcPanel } from "./ErcPanel";
 import { LibraryPanel } from "./LibraryPanel";
 import { SimPanel, type SimRun } from "./SimPanel";
@@ -36,7 +38,7 @@ import {
   SchematicCanvas,
 } from "./SchematicCanvas";
 import { StatusBar, type StatusHint } from "./StatusBar";
-import { Toolbar } from "./Toolbar";
+import { type EditorView, Toolbar } from "./Toolbar";
 import type { Trace } from "./WaveformViewer";
 
 /** The last ERC run, and the document revision it checked. */
@@ -74,7 +76,15 @@ function ercSummary(violations: ErcViolation[]): string {
 
 interface EditorShellProps {
   project: ProjectSnapshot;
+  view: EditorView;
+  onViewChange: (view: EditorView) => void;
   viewport: Viewport | null;
+  boardViewport: Viewport | null;
+  onBoardViewportChange: (update: (viewport: Viewport) => Viewport) => void;
+  onUpdateBoard: () => void;
+  /** A one-off board message, such as the result of an update. */
+  boardNotice: string | null;
+  onBoardNoticeConsumed: () => void;
   controlsDisabled: boolean;
   library: LibraryStatusState;
   /** Counts annotation requests from the menu; each increase runs one. */
@@ -97,7 +107,14 @@ interface EditorShellProps {
 
 export function EditorShell({
   project,
+  view,
+  onViewChange,
   viewport,
+  boardViewport,
+  onBoardViewportChange,
+  onUpdateBoard,
+  boardNotice,
+  onBoardNoticeConsumed,
   controlsDisabled,
   library,
   annotateTicket,
@@ -134,7 +151,10 @@ export function EditorShell({
   const [noConnectMode, setNoConnectMode] = useState(false);
   const [probeMode, setProbeMode] = useState(false);
   const [toolRequest, setToolRequest] = useState<CanvasTool | null>(null);
-  const zoomLabel = viewport ? formatZoom(viewport.zoom) : "—";
+  const [ratsnestVisible, setRatsnestVisible] = useState(true);
+  const board = view === "board";
+  const shownViewport = board ? boardViewport : viewport;
+  const zoomLabel = shownViewport ? formatZoom(shownViewport.zoom) : "—";
 
   const results =
     ercResults && ercResults.directory === project.directory
@@ -354,19 +374,26 @@ export function EditorShell({
         event.key.toLowerCase() === "l"
       ) {
         event.preventDefault();
-        setLibraryOpen((open) => !open);
+        if (!board) {
+          setLibraryOpen((open) => !open);
+        }
       } else if (event.key === "Escape" && simActionsRef.current.simRunning) {
         simActionsRef.current.cancelRun();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [controlsDisabled]);
+  }, [controlsDisabled, board]);
 
   return (
     <div className="editor">
       <h1 className="visually-hidden">{project.name}</h1>
       <Toolbar
+        view={view}
+        onViewChange={onViewChange}
+        onUpdateBoard={onUpdateBoard}
+        ratsnestVisible={ratsnestVisible}
+        onToggleRatsnest={() => setRatsnestVisible((shown) => !shown)}
         history={project.history}
         zoomLabel={zoomLabel}
         disabled={controlsDisabled}
@@ -389,96 +416,117 @@ export function EditorShell({
         annotationsVisible={annotationsVisible}
         onToggleAnnotations={() => setAnnotationsVisible((shown) => !shown)}
       />
-      <main className="editor__workspace">
-        {libraryOpen && (
-          <LibraryPanel
-            library={library}
-            onDownload={onDownloadLibrary}
-            onPlaceSymbol={(hit) => setPlacementRequest({ hit, at: null })}
-            onSymbolDragStart={setSymbolDrag}
-            onSymbolDragEnd={() => setSymbolDrag(null)}
-          />
-        )}
-        <div className="editor__center">
-          <SchematicCanvas
-            label={`Schematic sheet of ${project.name}`}
-            viewport={viewport}
-            gridSizeNm={project.gridSizeNm}
-            sheet={project.sheet}
-            definitions={project.definitions}
-            instances={project.instances}
-            wires={project.wires}
-            junctions={project.junctions}
-            labels={project.labels}
-            noConnects={project.noConnects}
-            wireMode={wireMode}
-            onWireModeChange={setWireMode}
-            onNoConnectModeChange={setNoConnectMode}
-            onProbeModeChange={setProbeMode}
-            onProbe={probe}
-            annotateTicket={annotateTicket}
-            library={library}
-            onDownloadLibrary={onDownloadLibrary}
-            onOpenLibrary={() => setLibraryOpen(true)}
-            toolRequest={toolRequest}
-            onToolRequestConsumed={() => setToolRequest(null)}
-            placementRequest={placementRequest}
-            onPlacementRequestConsumed={() => setPlacementRequest(null)}
-            symbolDrag={symbolDrag}
-            onSymbolDrop={(hit, at) => {
-              setSymbolDrag(null);
-              setPlacementRequest({ hit, at });
-            }}
-            ercMarkers={ercMarkers}
-            ercStale={ercStale}
-            selectedMarkerId={ercOpen ? selectedViolation : null}
-            onSelectMarker={setSelectedViolation}
-            opAnnotations={shownAnnotations}
-            focusRequest={focusRequest}
-            onFocusRequestConsumed={() => setFocusRequest(null)}
-            onHintChange={setHint}
-            onViewportChange={onViewportChange}
-            onResize={onCanvasResize}
-            onCursorMove={setCursor}
-          />
-          {ercOpen && (
-            <ErcPanel
-              violations={results?.violations ?? null}
-              stale={ercStale}
-              running={ercRunning}
-              error={ercError}
-              selectedId={selectedViolation}
-              announcement={ercAnnouncement}
-              onRun={runCheck}
-              onOpenSeverities={onOpenErcSeverities}
-              onSelect={(violation) => setSelectedViolation(violation.id)}
-              onJump={jumpTo}
-              onClose={() => setErcOpen(false)}
+      {board ? (
+        <main className="editor__workspace">
+          <div className="editor__center">
+            <BoardCanvas
+              label={`Board of ${project.name}`}
+              viewport={boardViewport}
+              footprints={project.footprints}
+              outline={project.boardOutline}
+              ratsnest={project.ratsnest}
+              ratsnestVisible={ratsnestVisible}
+              notice={boardNotice}
+              onNoticeConsumed={onBoardNoticeConsumed}
+              onHintChange={setHint}
+              onViewportChange={onBoardViewportChange}
+              onResize={onCanvasResize}
+              onCursorMove={setCursor}
+            />
+          </div>
+        </main>
+      ) : (
+        <main className="editor__workspace">
+          {libraryOpen && (
+            <LibraryPanel
+              library={library}
+              onDownload={onDownloadLibrary}
+              onPlaceSymbol={(hit) => setPlacementRequest({ hit, at: null })}
+              onSymbolDragStart={setSymbolDrag}
+              onSymbolDragEnd={() => setSymbolDrag(null)}
             />
           )}
-          {simOpen && (
-            <SimPanel
-              run={run}
-              stale={simStale}
-              announcement={simAnnouncement}
-              traces={traces}
-              onRemoveTrace={(vector) =>
-                setTraces((shown) =>
-                  shown.filter((trace) => trace.vector !== vector),
-                )
-              }
-              onRun={runSimulation}
-              onCancel={cancelRun}
-              onOpenSettings={onOpenSimulationSettings}
-              onJumpToSymbol={jumpToSymbol}
-              onClose={() => setSimOpen(false)}
+          <div className="editor__center">
+            <SchematicCanvas
+              label={`Schematic sheet of ${project.name}`}
+              viewport={viewport}
+              gridSizeNm={project.gridSizeNm}
+              sheet={project.sheet}
+              definitions={project.definitions}
+              instances={project.instances}
+              wires={project.wires}
+              junctions={project.junctions}
+              labels={project.labels}
+              noConnects={project.noConnects}
+              wireMode={wireMode}
+              onWireModeChange={setWireMode}
+              onNoConnectModeChange={setNoConnectMode}
+              onProbeModeChange={setProbeMode}
+              onProbe={probe}
+              annotateTicket={annotateTicket}
+              library={library}
+              onDownloadLibrary={onDownloadLibrary}
+              onOpenLibrary={() => setLibraryOpen(true)}
+              toolRequest={toolRequest}
+              onToolRequestConsumed={() => setToolRequest(null)}
+              placementRequest={placementRequest}
+              onPlacementRequestConsumed={() => setPlacementRequest(null)}
+              symbolDrag={symbolDrag}
+              onSymbolDrop={(hit, at) => {
+                setSymbolDrag(null);
+                setPlacementRequest({ hit, at });
+              }}
+              ercMarkers={ercMarkers}
+              ercStale={ercStale}
+              selectedMarkerId={ercOpen ? selectedViolation : null}
+              onSelectMarker={setSelectedViolation}
+              opAnnotations={shownAnnotations}
+              focusRequest={focusRequest}
+              onFocusRequestConsumed={() => setFocusRequest(null)}
+              onHintChange={setHint}
+              onViewportChange={onViewportChange}
+              onResize={onCanvasResize}
+              onCursorMove={setCursor}
             />
-          )}
-        </div>
-      </main>
+            {ercOpen && (
+              <ErcPanel
+                violations={results?.violations ?? null}
+                stale={ercStale}
+                running={ercRunning}
+                error={ercError}
+                selectedId={selectedViolation}
+                announcement={ercAnnouncement}
+                onRun={runCheck}
+                onOpenSeverities={onOpenErcSeverities}
+                onSelect={(violation) => setSelectedViolation(violation.id)}
+                onJump={jumpTo}
+                onClose={() => setErcOpen(false)}
+              />
+            )}
+            {simOpen && (
+              <SimPanel
+                run={run}
+                stale={simStale}
+                announcement={simAnnouncement}
+                traces={traces}
+                onRemoveTrace={(vector) =>
+                  setTraces((shown) =>
+                    shown.filter((trace) => trace.vector !== vector),
+                  )
+                }
+                onRun={runSimulation}
+                onCancel={cancelRun}
+                onOpenSettings={onOpenSimulationSettings}
+                onJumpToSymbol={jumpToSymbol}
+                onClose={() => setSimOpen(false)}
+              />
+            )}
+          </div>
+        </main>
+      )}
       <StatusBar
         cursor={cursor}
-        gridSizeNm={project.gridSizeNm}
+        gridSizeNm={board ? BOARD_GRID_NM : project.gridSizeNm}
         zoomLabel={zoomLabel}
         hint={hint}
       />

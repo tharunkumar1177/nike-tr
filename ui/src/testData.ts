@@ -1,3 +1,4 @@
+import type { BoardFootprint } from "./bindings/BoardFootprint";
 import type { BoardStackup } from "./bindings/BoardStackup";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { StackupEntry } from "./bindings/StackupEntry";
@@ -77,6 +78,34 @@ export function newBoardStackup(): BoardStackup {
       layer("B.SilkS", "Bottom Silk Screen", null),
     ],
     copperFinish: "None",
+  };
+}
+
+/** An R_0603_1608Metric placed on the front at (20, 20) mm, as the core reports it. */
+export function resistorFootprint(
+  overrides: Partial<BoardFootprint> = {},
+): BoardFootprint {
+  const pad = (number: string, x: number, net: string) => ({
+    number,
+    position: [x, 20_000_000] as [number, number],
+    net,
+    shape: "round_rect" as const,
+    size: [800_000, 950_000] as [number, number],
+    rotation: 0,
+    cornerRadiusNm: 200_000,
+    drill: null,
+  });
+  return {
+    uuid: "footprint-1",
+    libId: "Resistor_SMD:R_0603_1608Metric",
+    position: [20_000_000, 20_000_000],
+    rotation: 0,
+    side: "front",
+    reference: "R1",
+    value: "10k",
+    pads: [pad("1", 19_175_000, "GND"), pad("2", 20_825_000, "/OUT")],
+    bounds: { min: [18_520_000, 19_270_000], max: [21_480_000, 20_730_000] },
+    ...overrides,
   };
 }
 
