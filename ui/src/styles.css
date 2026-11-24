@@ -1376,6 +1376,71 @@ button.sim-row:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.field__hint--warning {
+  color: var(--color-text-warning);
+}
+
+.vertex-grid {
+  display: grid;
+  grid-template-columns: 2rem 1fr 1fr 2rem;
+  align-items: center;
+  gap: var(--space-2);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.vertex-grid__header {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.vertex-grid__index {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+.stackup-preview {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.stackup-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.stackup-table th,
+.stackup-table td {
+  padding: var(--space-1) var(--space-2);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.stackup-table thead th {
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.stackup-table th:first-child,
+.stackup-table td:nth-child(2),
+.stackup-table td:nth-child(3) {
+  text-align: left;
+}
+
+.stackup-table tbody th {
+  font-weight: 400;
+}
+
+.stackup-total {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
 .busy-overlay {
   position: fixed;
   inset: 0;

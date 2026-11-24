@@ -287,6 +287,16 @@ export function transformFootprints(
   return invoke<void>("transform_footprints", { uuids, transform });
 }
 
+/** Replaces the board outline with one closed polygon as one undo step. */
+export function editBoardOutline(points: Xy[]): Promise<void> {
+  return invoke<void>("edit_board_outline", { points });
+}
+
+/** Gives the board `copperLayers` copper layers with KiCad's default stackup. */
+export function editStackup(copperLayers: number): Promise<void> {
+  return invoke<void>("edit_stackup", { copperLayers });
+}
+
 export function listRecentProjects(): Promise<RecentProject[]> {
   return invoke<RecentProject[]>("list_recent_projects");
 }

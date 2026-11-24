@@ -101,6 +101,8 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         Some("F8"),
         false,
     )?;
+    let board_outline = item(app, "board-outline", "&Board Outline...", None, false)?;
+    let layer_stackup = item(app, "layer-stackup", "&Layer Stackup...", None, false)?;
     let annotate_schematic = item(
         app,
         "annotate-schematic",
@@ -160,6 +162,8 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         .build()?;
     let tools = SubmenuBuilder::new(app, "&Tools")
         .item(&update_board)
+        .item(&board_outline)
+        .item(&layer_stackup)
         .separator()
         .item(&annotate_schematic)
         .item(&electrical_rules)
@@ -188,6 +192,8 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
             zoom_actual,
             switch_view,
             update_board,
+            board_outline,
+            layer_stackup,
             annotate_schematic,
             electrical_rules,
             erc_severities,

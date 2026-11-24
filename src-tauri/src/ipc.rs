@@ -1074,6 +1074,40 @@ pub fn transform_footprints(
     Ok(())
 }
 
+/// Replaces the board outline with one closed polygon through `points` as one undo step.
+#[tauri::command]
+pub fn edit_board_outline(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    points: Vec<Xy>,
+) -> Result<(), AppError> {
+    let points: Vec<Point> = points.into_iter().map(to_point).collect();
+    let mut inner = state.lock();
+    let session = inner.session_mut()?;
+    let changes = session.edit_board_outline(&points, &mut Uuid::new_v4)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Gives the board `copper_layers` copper layers with KiCad's default stackup as one
+/// undo step.
+#[tauri::command]
+pub fn edit_stackup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    copper_layers: u32,
+) -> Result<(), AppError> {
+    let copper = usize::try_from(copper_layers).unwrap_or(usize::MAX);
+    let mut inner = state.lock();
+    let changes = inner.session_mut()?.edit_stackup(copper)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
 /// Places a library symbol on the schematic as one undo step. The definition comes from
 /// the cached library index, so raw KiCad text never crosses IPC.
 #[tauri::command]
@@ -1758,6 +1792,36 @@ mod tests {
         assert_eq!(label["shape"], "triState");
         assert_eq!(label["position"], serde_json::json!([2_540_000, 0]));
         assert_eq!(label["rotation"], 900);
+    }
+
+    #[test]
+    fn a_diff_carries_the_edited_outline_and_stackup() {
+        let mut session = session();
+        let corners = [
+            Point::ORIGIN,
+            Point::new(Nm(50_000_000), Nm::ZERO),
+            Point::new(Nm(50_000_000), Nm(40_000_000)),
+        ];
+        let changes = session
+            .edit_board_outline(&corners, &mut Uuid::new_v4)
+            .unwrap();
+        let json = serde_json::to_value(document_diff(&session, 1, 2, changes)).unwrap();
+        let geometry = &json["boardOutline"][0]["geometry"];
+        assert_eq!(geometry["type"], "polygon");
+        assert_eq!(
+            geometry["points"][2],
+            serde_json::json!([50_000_000, 40_000_000])
+        );
+        assert_eq!(json["boardOutline"][0]["widthNm"], 50_000);
+        assert_eq!(json["stackup"], serde_json::Value::Null);
+        assert_eq!(json["history"]["undoLabel"], "Edit Board Outline");
+
+        let changes = session.edit_stackup(4).unwrap();
+        let json = serde_json::to_value(document_diff(&session, 2, 3, changes)).unwrap();
+        assert_eq!(json["stackup"]["copperLayers"], 4);
+        assert_eq!(json["stackup"]["thicknessNm"], 1_600_000);
+        assert_eq!(json["boardOutline"], serde_json::Value::Null);
+        assert_eq!(json["history"]["undoLabel"], "Edit Stackup");
     }
 
     #[test]

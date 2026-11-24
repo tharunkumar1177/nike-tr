@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { HistoryStatus } from "../bindings/HistoryStatus";
 import type { CanvasTool } from "./SchematicCanvas";
 import {
+  BoardOutlineIcon,
   BoardUpdateIcon,
   ErcIcon,
   EyeIcon,
@@ -16,6 +17,7 @@ import {
   RatsnestIcon,
   RedoIcon,
   SettingsIcon,
+  StackupIcon,
   StopIcon,
   UndoIcon,
   WireIcon,
@@ -95,6 +97,8 @@ interface ToolbarProps {
   view: EditorView;
   onViewChange: (view: EditorView) => void;
   onUpdateBoard: () => void;
+  onEditOutline: () => void;
+  onEditStackup: () => void;
   ratsnestVisible: boolean;
   onToggleRatsnest: () => void;
   history: HistoryStatus;
@@ -125,6 +129,8 @@ export function Toolbar({
   view,
   onViewChange,
   onUpdateBoard,
+  onEditOutline,
+  onEditStackup,
   ratsnestVisible,
   onToggleRatsnest,
   history,
@@ -206,6 +212,20 @@ export function Toolbar({
             onClick={onUpdateBoard}
           >
             <BoardUpdateIcon />
+          </IconButton>
+          <IconButton
+            label="Board Outline"
+            disabled={disabled}
+            onClick={onEditOutline}
+          >
+            <BoardOutlineIcon />
+          </IconButton>
+          <IconButton
+            label="Layer Stackup"
+            disabled={disabled}
+            onClick={onEditStackup}
+          >
+            <StackupIcon />
           </IconButton>
         </div>
         <div className="toolbar__group">

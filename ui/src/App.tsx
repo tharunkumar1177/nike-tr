@@ -10,14 +10,18 @@ import {
 import type { AnalysisSettings } from "./bindings/AnalysisSettings";
 import type { AppInfo } from "./bindings/AppInfo";
 import type { ErcRuleSeverity } from "./bindings/ErcRuleSeverity";
+import type { OutlineGraphic } from "./bindings/OutlineGraphic";
 import type { ProjectProperties } from "./bindings/ProjectProperties";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
+import type { Xy } from "./bindings/Xy";
 import { fitBoard } from "./board";
+import { BoardOutlineDialog } from "./components/BoardOutlineDialog";
 import { BoardUpdateDialog } from "./components/BoardUpdateDialog";
 import { EditorShell } from "./components/EditorShell";
 import { ErcSeveritiesDialog } from "./components/ErcSeveritiesDialog";
 import { ErrorDialog } from "./components/ErrorDialog";
+import { LayerStackupDialog } from "./components/LayerStackupDialog";
 import { LibraryDialog } from "./components/LibraryDialog";
 import { ProjectLocationDialog } from "./components/ProjectLocationDialog";
 import { ProjectPropertiesDialog } from "./components/ProjectPropertiesDialog";
@@ -35,8 +39,10 @@ import {
   closeWindow,
   createProject,
   editAnalysisSettings,
+  editBoardOutline,
   editErcSeverities,
   editProjectProperties,
+  editStackup,
   getAppInfo,
   listRecentProjects,
   openProject,
@@ -74,6 +80,8 @@ type ModalState =
   | { type: "ercSeverities" }
   | { type: "simulationSettings" }
   | { type: "boardUpdate" }
+  | { type: "boardOutline" }
+  | { type: "layerStackup" }
   | { type: "unsaved"; next: LeaveAction }
   | {
       type: "error";
@@ -95,6 +103,10 @@ export function App() {
   /** Refit the board once footprints arrive, after updating an empty board. */
   const [boardFitPending, setBoardFitPending] = useState(false);
   const [boardNotice, setBoardNotice] = useState<string | null>(null);
+  /** The outline an edit replaced; the board refits once it changes. */
+  const [outlineFitFrom, setOutlineFitFrom] = useState<
+    OutlineGraphic[] | null
+  >(null);
   const [canvasSize, setCanvasSize] = useState<Size>({ width: 0, height: 0 });
   const [library, adoptLibraryStatus] = useLibraryStatus();
   const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
@@ -164,6 +176,22 @@ export function App() {
     }
   }, [project, view, boardViewport, boardFitPending, canvasSize]);
 
+  useEffect(() => {
+    if (
+      !project ||
+      outlineFitFrom === null ||
+      project.boardOutline === outlineFitFrom ||
+      canvasSize.width <= 0 ||
+      canvasSize.height <= 0
+    ) {
+      return;
+    }
+    setBoardViewport(
+      fitBoard(canvasSize, project.footprints, project.boardOutline),
+    );
+    setOutlineFitFrom(null);
+  }, [project, outlineFitFrom, canvasSize]);
+
   const updateViewport = useCallback(
     (update: (current: Viewport) => Viewport) => {
       setViewport((current) => (current ? update(current) : current));
@@ -199,6 +227,7 @@ export function App() {
     setViewport(null);
     setBoardViewport(null);
     setBoardFitPending(false);
+    setOutlineFitFrom(null);
     setBoardNotice(null);
     setView("schematic");
     setProject(snapshot);
@@ -425,6 +454,36 @@ export function App() {
     setBoardNotice("Board updated from schematic");
   }
 
+  /** Replaces the board outline, then shows the board fitted to it. */
+  async function applyOutline(points: Xy[]): Promise<ErrorReport | null> {
+    const replaced = project ? project.boardOutline : null;
+    try {
+      await editBoardOutline(points);
+    } catch (error) {
+      return toErrorReport(error);
+    }
+    setOutlineFitFrom(replaced);
+    setModal(null);
+    setView("board");
+    setBoardNotice("Board outline updated.");
+    return null;
+  }
+
+  /** Changes the copper layer count, then shows the board. */
+  async function applyStackup(
+    copperLayers: number,
+  ): Promise<ErrorReport | null> {
+    try {
+      await editStackup(copperLayers);
+    } catch (error) {
+      return toErrorReport(error);
+    }
+    setModal(null);
+    setView("board");
+    setBoardNotice("Layer stackup updated.");
+    return null;
+  }
+
   function handleMenu(id: string) {
     if (busy !== null || modal !== null || libraryDialogOpen) {
       return;
@@ -484,6 +543,12 @@ export function App() {
         return;
       case "update-board":
         setModal({ type: "boardUpdate" });
+        return;
+      case "board-outline":
+        setModal({ type: "boardOutline" });
+        return;
+      case "layer-stackup":
+        setModal({ type: "layerStackup" });
         return;
       case "annotate-schematic":
         setAnnotateTicket((ticket) => ticket + 1);
@@ -588,6 +653,23 @@ export function App() {
             onClose={dismiss}
           />
         ) : null;
+      case "boardOutline":
+        return project ? (
+          <BoardOutlineDialog
+            outline={project.boardOutline}
+            footprints={project.footprints}
+            onApply={applyOutline}
+            onCancel={dismiss}
+          />
+        ) : null;
+      case "layerStackup":
+        return project ? (
+          <LayerStackupDialog
+            stackup={project.stackup}
+            onApply={applyStackup}
+            onCancel={dismiss}
+          />
+        ) : null;
       case "unsaved":
         return (
           <UnsavedChangesDialog
@@ -661,6 +743,8 @@ export function App() {
         boardViewport={boardViewport}
         onBoardViewportChange={updateBoardViewport}
         onUpdateBoard={() => setModal({ type: "boardUpdate" })}
+        onEditOutline={() => setModal({ type: "boardOutline" })}
+        onEditStackup={() => setModal({ type: "layerStackup" })}
         boardNotice={boardNotice}
         onBoardNoticeConsumed={() => setBoardNotice(null)}
         controlsDisabled={modal !== null || busy !== null || libraryDialogOpen}

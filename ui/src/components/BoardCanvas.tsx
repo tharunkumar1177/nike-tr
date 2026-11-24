@@ -31,7 +31,8 @@ import type { StatusHint } from "./StatusBar";
 const DRAG_THRESHOLD_PX = 4;
 const SELECTION_HINT =
   "Footprint selected. Drag to move. R: Rotate. F: Flip side. Esc: Deselect";
-const EMPTY_HINT = "Board is empty. F8 updates it from the schematic.";
+const EMPTY_HINT =
+  "Board is empty. Set the outline (Tools > Board Outline), then F8 updates it from the schematic.";
 
 /** A footprint being dragged, and its snapped offset so far. */
 interface Drag {
