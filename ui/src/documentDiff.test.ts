@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { BoardFootprint } from "./bindings/BoardFootprint";
 import type { DocumentDiff } from "./bindings/DocumentDiff";
 import { applyDiff } from "./documentDiff";
-import { projectSnapshot, resistorInstance, resistorPreview } from "./testData";
+import {
+  projectSnapshot,
+  resistorFootprint,
+  resistorInstance,
+  resistorPreview,
+} from "./testData";
 
 describe("applyDiff", () => {
   it("applies a diff made against the current revision", () => {
@@ -100,19 +105,7 @@ describe("applyDiff", () => {
         { net: "GND", from: [0, 1_000_000], to: [5_000_000, 1_000_000] },
       ],
     });
-    const footprint: BoardFootprint = {
-      uuid: "footprint-1",
-      libId: "Resistor_SMD:R_0603_1608Metric",
-      position: [1_480_000, 10_730_000],
-      rotation: 0,
-      side: "front",
-      reference: "R1",
-      value: "10k",
-      pads: [
-        { number: "1", position: [655_000, 10_730_000], net: "+5V" },
-        { number: "2", position: [2_305_000, 10_730_000], net: "/OUT" },
-      ],
-    };
+    const footprint: BoardFootprint = resistorFootprint();
     const diff: DocumentDiff = {
       baseRevision: 4,
       revision: 5,

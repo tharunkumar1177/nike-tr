@@ -87,6 +87,20 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         Some("CmdOrCtrl+1"),
         false,
     )?;
+    let switch_view = item(
+        app,
+        "switch-view",
+        "S&witch Schematic/Board",
+        Some("CmdOrCtrl+Tab"),
+        false,
+    )?;
+    let update_board = item(
+        app,
+        "update-board",
+        "&Update Board from Schematic...",
+        Some("F8"),
+        false,
+    )?;
     let annotate_schematic = item(
         app,
         "annotate-schematic",
@@ -141,8 +155,12 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         .separator()
         .item(&zoom_fit)
         .item(&zoom_actual)
+        .separator()
+        .item(&switch_view)
         .build()?;
     let tools = SubmenuBuilder::new(app, "&Tools")
+        .item(&update_board)
+        .separator()
         .item(&annotate_schematic)
         .item(&electrical_rules)
         .item(&erc_severities)
@@ -168,6 +186,8 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
             zoom_out,
             zoom_fit,
             zoom_actual,
+            switch_view,
+            update_board,
             annotate_schematic,
             electrical_rules,
             erc_severities,

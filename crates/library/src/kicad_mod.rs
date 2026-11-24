@@ -157,6 +157,96 @@ pub fn board_definition(lib: &str, root: &SExpr) -> Result<SExpr, String> {
     Ok(SExpr::List(items))
 }
 
+/// The shapes of a footprint placed on a board, in the footprint's own frame: offsets as the
+/// board file stores them, already mirrored for a back-side footprint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacedGeometry {
+    /// Every pad that reads, in file order. Pad angles include the footprint's rotation.
+    pub pads: Vec<Pad>,
+    /// The smallest axis-aligned box `(min, max)` around the courtyard, or around the pads
+    /// and graphics when the footprint has no courtyard. `None` when nothing has extent.
+    pub extent: Option<(Xy, Xy)>,
+}
+
+/// Reads the pads and extent of a `(footprint ...)` node from a board. Pads and graphics
+/// that don't read are left out rather than failing the footprint.
+pub fn placed_geometry(node: &SExpr) -> PlacedGeometry {
+    let pads: Vec<Pad> = children_named(node, "pad")
+        .filter_map(|item| read_pad(item).ok())
+        .collect();
+    let mut courtyard = Extent::default();
+    let mut outline = Extent::default();
+    for item in node.args() {
+        let Ok(Some(shape)) = read_shape(item) else {
+            continue;
+        };
+        let target = match child_text(item, "layer") {
+            Some("F.CrtYd" | "B.CrtYd") => &mut courtyard,
+            _ => &mut outline,
+        };
+        target.add_shape(&shape);
+    }
+    for pad in &pads {
+        let half = pad.size.0.max(pad.size.1) / 2;
+        outline.add(Xy(pad.center.0 - half, pad.center.1 - half));
+        outline.add(Xy(pad.center.0 + half, pad.center.1 + half));
+    }
+    PlacedGeometry {
+        pads,
+        extent: courtyard.bounds.or(outline.bounds),
+    }
+}
+
+/// The direct children of `node` whose head is `head`.
+fn children_named<'a>(node: &'a SExpr, head: &'a str) -> impl Iterator<Item = &'a SExpr> {
+    node.args()
+        .iter()
+        .filter(move |item| item.head() == Some(head))
+}
+
+/// A growing axis-aligned box of points.
+#[derive(Debug, Default)]
+struct Extent {
+    /// `(min, max)`, or `None` until a point is added.
+    bounds: Option<(Xy, Xy)>,
+}
+
+impl Extent {
+    /// Grows the box to include `point`.
+    fn add(&mut self, point: Xy) {
+        self.bounds = Some(match self.bounds {
+            None => (point, point),
+            Some((min, max)) => (
+                Xy(min.0.min(point.0), min.1.min(point.1)),
+                Xy(max.0.max(point.0), max.1.max(point.1)),
+            ),
+        });
+    }
+
+    /// Grows the box to include `shape`. Arcs and curves count by their defining points,
+    /// which is close enough for picking and fitting.
+    fn add_shape(&mut self, shape: &Shape) {
+        match shape {
+            Shape::Polyline { points, .. }
+            | Shape::Polygon { points, .. }
+            | Shape::Bezier { points, .. } => points.iter().for_each(|point| self.add(*point)),
+            Shape::Rect { start, end, .. } => {
+                self.add(*start);
+                self.add(*end);
+            }
+            Shape::Circle { center, radius, .. } => {
+                self.add(Xy(center.0 - radius, center.1 - radius));
+                self.add(Xy(center.0 + radius, center.1 + radius));
+            }
+            Shape::Arc { start, mid, end, .. } => {
+                self.add(*start);
+                self.add(*mid);
+                self.add(*end);
+            }
+        }
+    }
+}
+
 fn graphic_layer(name: &str) -> Option<Layer> {
     match name {
         "F.SilkS" => Some(Layer::Silkscreen),
@@ -301,6 +391,43 @@ mod tests {
         assert_eq!(drill_size(&oval), Ok(Some(Xy(1_000_000, 2_500_000))));
         let offset = parse("(drill (offset 0 0.5))").unwrap();
         assert_eq!(drill_size(&offset), Ok(None));
+    }
+
+    #[test]
+    fn placed_footprints_read_pads_and_the_courtyard_extent() {
+        let node = parse(
+            "(footprint \"R:R\" (layer \"B.Cu\") (at 10 20 90) \
+            (fp_rect (start -1.5 -0.7) (end 1.5 0.7) (stroke (width 0.05)) (layer \"B.CrtYd\")) \
+            (fp_line (start -3 0) (end 3 0) (stroke (width 0.1)) (layer \"B.SilkS\")) \
+            (pad \"1\" smd roundrect (at -0.825 0 270) (size 0.8 0.95) \
+            (roundrect_rratio 0.25)) \
+            (pad \"2\" smd mystery (at 0.825 0 270) (size 0.8 0.95)) \
+            (pad \"\" np_thru_hole circle (at 0 0) (size 1 1) (drill 1)))",
+        )
+        .unwrap();
+        let geometry = placed_geometry(&node);
+        assert_eq!(geometry.pads.len(), 2);
+        assert_eq!(geometry.pads[0].number, "1");
+        assert_eq!(geometry.pads[1].number, "");
+        assert_eq!(geometry.pads[0].rotation, 2700);
+        assert_eq!(geometry.pads[0].corner_radius, 200_000);
+        assert_eq!(geometry.pads[1].drill, Some(Xy(1_000_000, 1_000_000)));
+        let extent = (Xy(-1_500_000, -700_000), Xy(1_500_000, 700_000));
+        assert_eq!(geometry.extent, Some(extent));
+    }
+
+    #[test]
+    fn placed_footprints_without_a_courtyard_span_their_pads_and_graphics() {
+        let node = parse(
+            "(footprint \"R:R\" (layer \"F.Cu\") (at 0 0) \
+            (fp_circle (center 0 -2) (end 0.5 -2) (stroke (width 0.1)) (layer \"F.SilkS\")) \
+            (pad \"1\" smd rect (at 1 0) (size 1 2)))",
+        )
+        .unwrap();
+        let extent = (Xy(-500_000, -2_500_000), Xy(2_000_000, 1_000_000));
+        assert_eq!(placed_geometry(&node).extent, Some(extent));
+        let bare = parse("(footprint \"R:R\" (layer \"F.Cu\") (at 0 0))").unwrap();
+        assert_eq!(placed_geometry(&bare).extent, None);
     }
 
     #[test]

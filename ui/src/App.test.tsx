@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import type { BoardUpdateReview } from "./bindings/BoardUpdateReview";
 import type { DocumentDiff } from "./bindings/DocumentDiff";
 import type { ErcRuleSetting } from "./bindings/ErcRuleSetting";
 import type { ErcRuleSeverity } from "./bindings/ErcRuleSeverity";
@@ -20,9 +21,21 @@ import type { LibraryStatus } from "./bindings/LibraryStatus";
 import type { LibrarySymbol } from "./bindings/LibrarySymbol";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
+import { BOARD_GRID_NM, fitBoard } from "./board";
 import { snapToGrid } from "./symbols";
-import { projectSnapshot, resistorInstance, resistorPreview } from "./testData";
-import { fitToSheet, pxPerNm, screenToWorld, worldToScreen } from "./viewport";
+import {
+  projectSnapshot,
+  resistorFootprint,
+  resistorInstance,
+  resistorPreview,
+} from "./testData";
+import {
+  fitToSheet,
+  formatZoom,
+  pxPerNm,
+  screenToWorld,
+  worldToScreen,
+} from "./viewport";
 
 type Args = Record<string, unknown>;
 type Handlers = Record<string, (args: Args) => unknown>;
@@ -1823,5 +1836,385 @@ describe("Wiring", () => {
     fireEvent.keyDown(canvas, { key: "Escape" });
     expect(await screen.findByText("Probe mode ended.")).toBeTruthy();
     expect(button.getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+describe("Board view", () => {
+  const FOOTPRINT_CENTER: [number, number] = [20_000_000, 20_000_000];
+
+  function argsOf(calls: { cmd: string; args: Args }[], cmd: string): Args[] {
+    return calls.filter((call) => call.cmd === cmd).map((call) => call.args);
+  }
+
+  function boardCanvas(): HTMLElement {
+    const surface = screen.getByRole("img", { name: "Board of amp" });
+    const container = surface.parentElement;
+    if (!container) {
+      throw new Error("board canvas container not found");
+    }
+    return container;
+  }
+
+  async function openBoard(handlers: Handlers, snapshot: ProjectSnapshot) {
+    const calls = mockCore({
+      ...core,
+      get_project: () => snapshot,
+      ...handlers,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "amp" });
+    fireEvent.click(screen.getByRole("button", { name: "Board" }));
+    const viewport = fitBoard(
+      CANVAS_SIZE,
+      snapshot.footprints,
+      snapshot.boardOutline,
+    );
+    // Pointer coordinates need the fitted board viewport.
+    expect(
+      await screen.findByText(`Zoom ${formatZoom(viewport.zoom)}`),
+    ).toBeTruthy();
+    return { calls, canvas: boardCanvas(), viewport };
+  }
+
+  function placedBoard(): ProjectSnapshot {
+    return projectSnapshot({
+      footprints: [resistorFootprint()],
+      ratsnest: [
+        {
+          net: "/OUT",
+          from: [20_825_000, 20_000_000],
+          to: [30_000_000, 20_000_000],
+        },
+      ],
+    });
+  }
+
+  it("switches between the schematic and the board", async () => {
+    await openBoard({}, placedBoard());
+
+    const boardButton = screen.getByRole("button", { name: "Board" });
+    expect(boardButton.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Draw wire" })).toBeNull();
+    expect(
+      screen.getByText("R1 Resistor_SMD:R_0603_1608Metric, front side"),
+    ).toBeTruthy();
+    expect(screen.getByText("Grid 0.635 mm")).toBeTruthy();
+    const ratsnest = screen.getByRole("button", { name: "Show ratsnest" });
+    expect(ratsnest.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(ratsnest);
+    expect(ratsnest.getAttribute("aria-pressed")).toBe("false");
+
+    await emitFromCore("menu-action", "switch-view");
+    expect(
+      await screen.findByRole("img", { name: "Schematic sheet of amp" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Draw wire" })).toBeTruthy();
+    expect(screen.getByText("Grid 1.27 mm")).toBeTruthy();
+  });
+
+  it("selects, drags, rotates, and flips a footprint", async () => {
+    const { calls, canvas, viewport } = await openBoard(
+      { move_footprints: () => null, transform_footprints: () => null },
+      placedBoard(),
+    );
+    const at = worldToScreen(viewport, ...FOOTPRINT_CENTER);
+    const press = { pointerId: 1, clientX: at.x, clientY: at.y, button: 0 };
+    fireEvent.pointerDown(canvas, press);
+    fireEvent.pointerUp(canvas, press);
+
+    expect(await screen.findByText("Footprint selected")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Footprint selected. Drag to move. R: Rotate. F: Flip side. Esc: Deselect",
+      ),
+    ).toBeTruthy();
+
+    fireEvent.pointerDown(canvas, press);
+    fireEvent.pointerMove(canvas, { ...press, clientX: at.x + 2 });
+    fireEvent.pointerUp(canvas, { ...press, clientX: at.x + 2 });
+    expect(argsOf(calls, "move_footprints")).toEqual([]);
+
+    fireEvent.pointerDown(canvas, press);
+    fireEvent.pointerMove(canvas, { ...press, clientX: at.x + 200 });
+    fireEvent.pointerUp(canvas, { ...press, clientX: at.x + 200 });
+    const dxNm = snapToGrid(200 / pxPerNm(viewport.zoom), BOARD_GRID_NM);
+    expect(dxNm).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(argsOf(calls, "move_footprints")).toEqual([
+        { uuids: ["footprint-1"], dxNm, dyNm: 0 },
+      ]),
+    );
+
+    fireEvent.keyDown(canvas, { key: "r" });
+    fireEvent.keyDown(canvas, { key: "f" });
+    await waitFor(() =>
+      expect(argsOf(calls, "transform_footprints")).toEqual([
+        {
+          uuids: ["footprint-1"],
+          transform: { type: "rotate", steps: 3 },
+        },
+        { uuids: ["footprint-1"], transform: { type: "flip" } },
+      ]),
+    );
+
+    fireEvent.keyDown(canvas, { key: "Escape" });
+    expect(await screen.findByText("Selection cleared")).toBeTruthy();
+    fireEvent.keyDown(canvas, { key: "r" });
+    expect(argsOf(calls, "transform_footprints")).toHaveLength(2);
+  });
+
+  it("says how to fill an empty board", async () => {
+    await openBoard({}, projectSnapshot());
+    expect(
+      screen.getByText("Board is empty. F8 updates it from the schematic."),
+    ).toBeTruthy();
+  });
+});
+
+describe("Update Board dialog", () => {
+  function review(
+    overrides: Partial<BoardUpdateReview> = {},
+  ): BoardUpdateReview {
+    return {
+      revision: 1,
+      hasChanges: true,
+      additions: [
+        {
+          uuid: null,
+          reference: "R1",
+          value: "10k",
+          libId: "Resistor_SMD:R_0603_1608Metric",
+        },
+      ],
+      removals: [
+        {
+          uuid: "footprint-9",
+          reference: "R9",
+          value: "1k",
+          libId: "Resistor_SMD:R_0402_1005Metric",
+        },
+      ],
+      replacements: [
+        {
+          uuid: "footprint-2",
+          reference: "R2",
+          from: "Device:R",
+          to: "Resistor_SMD:R_0603_1608Metric",
+        },
+      ],
+      textChanges: [
+        {
+          uuid: "footprint-5",
+          reference: "R5",
+          field: "value",
+          from: "10k",
+          to: "22k",
+        },
+      ],
+      netChanges: [
+        {
+          uuid: "footprint-4",
+          reference: "R4",
+          pad: "1",
+          from: null,
+          to: "VCC",
+        },
+      ],
+      problems: [{ reference: "R3", message: "R3 has no footprint assigned." }],
+      ...overrides,
+    };
+  }
+
+  /** The Apply Changes button once a review has made it clickable. */
+  async function enabledApply(dialog: HTMLElement): Promise<HTMLElement> {
+    return waitFor(() => {
+      const button = within(dialog).getByRole("button", {
+        name: "Apply Changes",
+      });
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+      return button;
+    });
+  }
+
+  function coreError(kind: string, message: string): Error {
+    return Object.assign(new Error(message), { kind, detail: null });
+  }
+
+  async function openDialog(handlers: Handlers, library = readyLibrary) {
+    const calls = mockCore({
+      ...core,
+      get_project: () => projectSnapshot(),
+      get_library_status: () => library,
+      ...handlers,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "amp" });
+    await emitFromCore("menu-action", "update-board");
+    const dialog = await screen.findByRole("dialog", {
+      name: "Update Board from Schematic",
+    });
+    return { calls, dialog };
+  }
+
+  function argsOf(calls: { cmd: string; args: Args }[], cmd: string): Args[] {
+    return calls.filter((call) => call.cmd === cmd).map((call) => call.args);
+  }
+
+  it("reviews every change, re-plans on an option, and applies", async () => {
+    const { calls, dialog } = await openDialog({
+      plan_board_update: () => review(),
+      apply_board_update: () => null,
+    });
+
+    expect(
+      await within(dialog).findByText(
+        "R1 10k — Resistor_SMD:R_0603_1608Metric",
+      ),
+    ).toBeTruthy();
+    for (const row of [
+      "R3 has no footprint assigned.",
+      "R9 1k — Resistor_SMD:R_0402_1005Metric",
+      "R2: Device:R → Resistor_SMD:R_0603_1608Metric",
+      "R5 Value: 10k → 22k",
+      "R4 pad 1: no net → VCC",
+    ]) {
+      expect(within(dialog).getByText(row)).toBeTruthy();
+    }
+    expect(within(dialog).getByText("Problems (1)")).toBeTruthy();
+    expect(argsOf(calls, "plan_board_update")).toEqual([
+      { settings: { deleteExtra: true, replaceFootprints: true } },
+    ]);
+
+    fireEvent.click(
+      within(dialog).getByRole("checkbox", {
+        name: "Delete footprints with no symbols",
+      }),
+    );
+    await waitFor(() =>
+      expect(argsOf(calls, "plan_board_update")).toHaveLength(2),
+    );
+    expect(argsOf(calls, "plan_board_update")[1]).toEqual({
+      settings: { deleteExtra: false, replaceFootprints: true },
+    });
+
+    fireEvent.click(await enabledApply(dialog));
+    await waitFor(() =>
+      expect(argsOf(calls, "apply_board_update")).toEqual([
+        {
+          baseRevision: 1,
+          settings: { deleteExtra: false, replaceFootprints: true },
+        },
+      ]),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Update Board from Schematic" }),
+      ).toBeNull(),
+    );
+    expect(
+      await screen.findByRole("img", { name: "Board of amp" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Board updated from schematic")).toBeTruthy();
+  });
+
+  it("says when the board is already up to date", async () => {
+    const { dialog } = await openDialog({
+      plan_board_update: () =>
+        review({
+          hasChanges: false,
+          additions: [],
+          removals: [],
+          replacements: [],
+          textChanges: [],
+          netChanges: [],
+          problems: [],
+        }),
+    });
+    expect(
+      await within(dialog).findByText(
+        "Board is up to date. No changes to apply.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: "Apply Changes" }),
+    ).toBeNull();
+  });
+
+  it("re-plans a review the document has moved past", async () => {
+    let revision = 1;
+    const { calls, dialog } = await openDialog({
+      plan_board_update: () => review({ revision }),
+      apply_board_update: () => {
+        revision = 2;
+        throw coreError(
+          "boardUpdateConflict",
+          "The schematic or board changed after the update was reviewed. Review it again.",
+        );
+      },
+    });
+
+    fireEvent.click(await enabledApply(dialog));
+    expect(
+      await within(dialog).findByText(
+        "The document changed after this review. The review was refreshed.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(argsOf(calls, "plan_board_update")).toHaveLength(2),
+    );
+    fireEvent.click(await enabledApply(dialog));
+    await waitFor(() =>
+      expect(argsOf(calls, "apply_board_update")[1]).toEqual({
+        baseRevision: 2,
+        settings: { deleteExtra: true, replaceFootprints: true },
+      }),
+    );
+  });
+
+  it("offers the library when footprints need it", async () => {
+    const { dialog } = await openDialog(
+      {
+        plan_board_update: () => {
+          throw coreError("libraryNotReady", "The library is missing.");
+        },
+      },
+      missingLibrary("declined"),
+    );
+
+    expect(
+      await within(dialog).findByText(
+        "The component library is needed to place footprints.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Download Library" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Component Library" }),
+    ).toBeTruthy();
+  });
+
+  it("shows a failed apply in the dialog and lets the user retry", async () => {
+    let fail = true;
+    const { calls, dialog } = await openDialog({
+      plan_board_update: () => review(),
+      apply_board_update: () => {
+        if (fail) {
+          fail = false;
+          throw coreError("io", "The board file couldn't be written.");
+        }
+        return null;
+      },
+    });
+
+    fireEvent.click(await enabledApply(dialog));
+    expect(
+      await within(dialog).findByText("The board file couldn't be written."),
+    ).toBeTruthy();
+    fireEvent.click(await enabledApply(dialog));
+    await waitFor(() =>
+      expect(argsOf(calls, "apply_board_update")).toHaveLength(2),
+    );
+    expect(await screen.findByText("Board updated from schematic")).toBeTruthy();
   });
 });

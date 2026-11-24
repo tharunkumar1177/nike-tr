@@ -4,9 +4,12 @@ import type { AcQuantity } from "./bindings/AcQuantity";
 import type { AnalysisSettings } from "./bindings/AnalysisSettings";
 import type { AppErrorKind } from "./bindings/AppErrorKind";
 import type { AppInfo } from "./bindings/AppInfo";
+import type { BoardUpdateReview } from "./bindings/BoardUpdateReview";
+import type { BoardUpdateSettings } from "./bindings/BoardUpdateSettings";
 import type { ErcRuleSetting } from "./bindings/ErcRuleSetting";
 import type { ErcRuleSeverity } from "./bindings/ErcRuleSeverity";
 import type { ErcViolation } from "./bindings/ErcViolation";
+import type { FootprintTransform } from "./bindings/FootprintTransform";
 import type { LabelPlacement } from "./bindings/LabelPlacement";
 import type { LibraryFootprint } from "./bindings/LibraryFootprint";
 import type { LibraryHit } from "./bindings/LibraryHit";
@@ -244,6 +247,44 @@ export function resolveProbe(
   target: ProbeTarget,
 ): Promise<ProbeResult> {
   return invoke<ProbeResult>("resolve_probe", { runId, target });
+}
+
+/**
+ * Compares the schematic with the board under `settings` without changing either. The
+ * review carries the document revision it was planned against.
+ */
+export function planBoardUpdate(
+  settings: BoardUpdateSettings,
+): Promise<BoardUpdateReview> {
+  return invoke<BoardUpdateReview>("plan_board_update", { settings });
+}
+
+/**
+ * Applies the update reviewed at `baseRevision` as one undo step; fails with
+ * `boardUpdateConflict` when the document has moved past that revision.
+ */
+export function applyBoardUpdate(
+  baseRevision: number,
+  settings: BoardUpdateSettings,
+): Promise<void> {
+  return invoke<void>("apply_board_update", { baseRevision, settings });
+}
+
+/** Moves every footprint in `uuids` by the same offset as one undo step. */
+export function moveFootprints(
+  uuids: string[],
+  dxNm: number,
+  dyNm: number,
+): Promise<void> {
+  return invoke<void>("move_footprints", { uuids, dxNm, dyNm });
+}
+
+/** Rotates or flips every footprint in `uuids` about its own origin as one undo step. */
+export function transformFootprints(
+  uuids: string[],
+  transform: FootprintTransform,
+): Promise<void> {
+  return invoke<void>("transform_footprints", { uuids, transform });
 }
 
 export function listRecentProjects(): Promise<RecentProject[]> {

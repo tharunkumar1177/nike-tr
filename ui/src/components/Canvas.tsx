@@ -58,7 +58,8 @@ interface CanvasProps {
   label: string;
   viewport: Viewport | null;
   gridSizeNm: number;
-  sheet: SheetDimensions;
+  /** The page to draw, or `null` for a canvas without one, such as the board. */
+  sheet: SheetDimensions | null;
   /** When given, used instead of the internal ref so callers can focus the canvas. */
   containerRef?: RefObject<HTMLDivElement | null>;
   /** Draws scene content above the grid, in screen space. */
@@ -93,7 +94,7 @@ function drawSheet(
   size: Size,
   viewport: Viewport,
   gridSizeNm: number,
-  sheet: SheetDimensions,
+  sheet: SheetDimensions | null,
 ): CanvasRenderingContext2D | null {
   const context = canvas.getContext("2d");
   if (!context) {
@@ -114,23 +115,28 @@ function drawSheet(
   context.fillStyle = color("--color-canvas");
   context.fillRect(0, 0, size.width, size.height);
 
-  const topLeft = worldToScreen(viewport, 0, 0);
-  const bottomRight = worldToScreen(viewport, sheet.widthNm, sheet.heightNm);
-  context.fillStyle = color("--color-sheet");
-  context.fillRect(
-    topLeft.x,
-    topLeft.y,
-    bottomRight.x - topLeft.x,
-    bottomRight.y - topLeft.y,
-  );
-
-  const step = visibleGridStep(gridSizeNm, viewport.zoom);
   const visibleMin = screenToWorld(viewport, 0, 0);
   const visibleMax = screenToWorld(viewport, size.width, size.height);
-  const minX = Math.max(0, visibleMin.x);
-  const maxX = Math.min(sheet.widthNm, visibleMax.x);
-  const minY = Math.max(0, visibleMin.y);
-  const maxY = Math.min(sheet.heightNm, visibleMax.y);
+  // Without a sheet the grid covers the whole canvas.
+  const topLeft = sheet ? worldToScreen(viewport, 0, 0) : { x: 0, y: 0 };
+  const bottomRight = sheet
+    ? worldToScreen(viewport, sheet.widthNm, sheet.heightNm)
+    : { x: size.width, y: size.height };
+  if (sheet) {
+    context.fillStyle = color("--color-sheet");
+    context.fillRect(
+      topLeft.x,
+      topLeft.y,
+      bottomRight.x - topLeft.x,
+      bottomRight.y - topLeft.y,
+    );
+  }
+
+  const step = visibleGridStep(gridSizeNm, viewport.zoom);
+  const minX = sheet ? Math.max(0, visibleMin.x) : visibleMin.x;
+  const maxX = sheet ? Math.min(sheet.widthNm, visibleMax.x) : visibleMax.x;
+  const minY = sheet ? Math.max(0, visibleMin.y) : visibleMin.y;
+  const maxY = sheet ? Math.min(sheet.heightNm, visibleMax.y) : visibleMax.y;
   const top = Math.max(0, topLeft.y);
   const bottom = Math.min(size.height, bottomRight.y);
   const left = Math.max(0, topLeft.x);
@@ -156,6 +162,9 @@ function drawSheet(
   context.strokeStyle = color("--color-grid-line-major");
   context.stroke(major);
 
+  if (!sheet) {
+    return context;
+  }
   context.strokeStyle = color("--color-sheet-border");
   context.strokeRect(
     Math.round(topLeft.x) + 0.5,

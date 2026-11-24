@@ -146,7 +146,13 @@ impl Footprint {
     /// moved to the footprint position. Quarter turns are exact; other angles round to the
     /// nearest nanometer.
     pub fn pad_position(&self, pad: &Pad) -> Point {
-        let (x, y) = rotate((pad.position.x.0, pad.position.y.0), self.rotation);
+        self.board_point(pad.position)
+    }
+
+    /// Where `offset`, a point in the footprint's own frame as the file stores it, sits on
+    /// the board. Rounds like [`Footprint::pad_position`].
+    pub fn board_point(&self, offset: Point) -> Point {
+        let (x, y) = rotate((offset.x.0, offset.y.0), self.rotation);
         self.position.offset(Nm(x), Nm(y))
     }
 

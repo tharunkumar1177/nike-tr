@@ -715,6 +715,27 @@ pub enum SymbolTransform {
     },
 }
 
+/// The `transform_footprints` argument, applied to each footprint about its own origin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(export)]
+pub enum FootprintTransform {
+    /// Quarter turns counterclockwise on screen (the KiCad angle convention).
+    Rotate { steps: i32 },
+    /// Moves the footprint to the opposite board side, mirroring it left to right.
+    Flip,
+}
+
+impl From<FootprintTransform> for tron_core::FootprintTransform {
+    /// Maps the IPC transform onto the session's.
+    fn from(transform: FootprintTransform) -> Self {
+        match transform {
+            FootprintTransform::Rotate { steps } => Self::Rotate(steps),
+            FootprintTransform::Flip => Self::Flip,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -1014,6 +1035,43 @@ fn board_update_conflict() -> AppError {
         "The schematic or board changed after the update was reviewed. Review it again.",
         None,
     )
+}
+
+/// Moves every footprint in `uuids` by the same offset as one undo step.
+#[tauri::command]
+pub fn move_footprints(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuids: Vec<Uuid>,
+    dx_nm: i64,
+    dy_nm: i64,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let changes = inner
+        .session_mut()?
+        .move_footprints(&uuids, Nm(dx_nm), Nm(dy_nm))?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Rotates or flips every footprint in `uuids` about its own origin as one undo step.
+#[tauri::command]
+pub fn transform_footprints(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuids: Vec<Uuid>,
+    transform: FootprintTransform,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let changes = inner
+        .session_mut()?
+        .transform_footprints(&uuids, transform.into())?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
 }
 
 /// Places a library symbol on the schematic as one undo step. The definition comes from
@@ -1532,6 +1590,17 @@ mod tests {
             SymbolTransform::Mirror {
                 axis: MirrorAxis::Y
             }
+        );
+
+        let rotate: FootprintTransform =
+            serde_json::from_value(serde_json::json!({ "type": "rotate", "steps": 1 })).unwrap();
+        assert_eq!(rotate, FootprintTransform::Rotate { steps: 1 });
+        let flip: FootprintTransform =
+            serde_json::from_value(serde_json::json!({ "type": "flip" })).unwrap();
+        assert_eq!(flip, FootprintTransform::Flip);
+        assert_eq!(
+            tron_core::FootprintTransform::from(flip),
+            tron_core::FootprintTransform::Flip
         );
     }
 

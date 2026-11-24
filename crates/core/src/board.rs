@@ -338,6 +338,16 @@ impl Board {
             .collect()
     }
 
+    /// Every readable footprint with the file node it was read from, in file order, for
+    /// readers of the children the typed footprint passes through, such as pad shapes.
+    pub fn footprint_nodes(&self) -> Vec<(Footprint, &SExpr)> {
+        self.root
+            .args()
+            .iter()
+            .filter_map(|node| Some((Footprint::read(node)?, node)))
+            .collect()
+    }
+
     /// The footprint with `uuid`, if present and readable.
     pub fn footprint(&self, uuid: Uuid) -> Option<Footprint> {
         self.root.args().iter().find_map(|item| {

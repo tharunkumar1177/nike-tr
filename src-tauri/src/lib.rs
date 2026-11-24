@@ -73,6 +73,8 @@ pub fn run() {
             ipc::set_symbol_field,
             ipc::plan_board_update,
             ipc::apply_board_update,
+            ipc::move_footprints,
+            ipc::transform_footprints,
             ipc::list_recent_projects,
             ipc::remove_recent_project,
             ipc::close_window,
