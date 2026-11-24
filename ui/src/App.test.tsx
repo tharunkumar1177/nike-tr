@@ -2331,7 +2331,9 @@ describe("Board setup dialogs", () => {
     ).toBeTruthy();
     type(dialog, "Vertex 3 X (mm)", "0");
     type(dialog, "Vertex 4 X (mm)", "100");
-    expect(within(dialog).getByText("The outline crosses itself.")).toBeTruthy();
+    expect(
+      within(dialog).getByText("The outline crosses itself."),
+    ).toBeTruthy();
     expect(applyButton(dialog).disabled).toBe(true);
     type(dialog, "Vertex 3 X (mm)", "100");
     type(dialog, "Vertex 4 X (mm)", "0");
@@ -2340,7 +2342,9 @@ describe("Board setup dialogs", () => {
     expect(within(dialog).getByText("Vertex added, 5 vertices")).toBeTruthy();
     const added = within(dialog).getByLabelText("Vertex 5 Y (mm)");
     expect((added as HTMLInputElement).value).toBe("50");
-    expect(within(dialog).queryByText("The outline crosses itself.")).toBeNull();
+    expect(
+      within(dialog).queryByText("The outline crosses itself."),
+    ).toBeNull();
 
     for (const name of ["Remove vertex 5", "Remove vertex 4"]) {
       fireEvent.click(within(dialog).getByRole("button", { name }));

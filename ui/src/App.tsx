@@ -104,9 +104,9 @@ export function App() {
   const [boardFitPending, setBoardFitPending] = useState(false);
   const [boardNotice, setBoardNotice] = useState<string | null>(null);
   /** The outline an edit replaced; the board refits once it changes. */
-  const [outlineFitFrom, setOutlineFitFrom] = useState<
-    OutlineGraphic[] | null
-  >(null);
+  const [outlineFitFrom, setOutlineFitFrom] = useState<OutlineGraphic[] | null>(
+    null,
+  );
   const [canvasSize, setCanvasSize] = useState<Size>({ width: 0, height: 0 });
   const [library, adoptLibraryStatus] = useLibraryStatus();
   const [libraryDialogOpen, setLibraryDialogOpen] = useState(false);
