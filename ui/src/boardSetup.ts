@@ -296,6 +296,18 @@ function selfIntersects(corners: Xy[]): boolean {
 }
 
 /**
+ * Whether every corner lies on one line, so the polygon encloses no area. Any
+ * other polygon with zero area crosses itself.
+ */
+function collinear(corners: Xy[]): boolean {
+  const [first, second] = corners;
+  if (first === undefined || second === undefined) {
+    return true;
+  }
+  return corners.every((point) => cross(first, second, point) === 0n);
+}
+
+/**
  * Why `points` can't be the board outline, or `null` when they form one
  * simple closed polygon.
  */
@@ -304,12 +316,7 @@ export function polygonProblem(points: Xy[]): string | null {
   if (corners.length < 3) {
     return "The outline needs at least 3 distinct points.";
   }
-  let area = 0n;
-  corners.forEach((a, index) => {
-    const b = corners[(index + 1) % corners.length] ?? a;
-    area += BigInt(a[0]) * BigInt(b[1]) - BigInt(b[0]) * BigInt(a[1]);
-  });
-  if (area === 0n) {
+  if (collinear(corners)) {
     return "The outline has zero area.";
   }
   if (selfIntersects(corners)) {

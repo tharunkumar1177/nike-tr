@@ -207,11 +207,7 @@ fn growing_the_stackup_keeps_other_layers_and_settings() {
 
     session.edit_stackup(6).unwrap();
     let board = session.project().board();
-    let names: Vec<String> = board
-        .layers()
-        .into_iter()
-        .map(|entry| entry.name)
-        .collect();
+    let names: Vec<String> = board.layers().into_iter().map(|entry| entry.name).collect();
     assert_eq!(
         names,
         [

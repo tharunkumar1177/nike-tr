@@ -48,7 +48,7 @@ pub fn validate_polygon(points: &[Point]) -> Result<Vec<Point>, String> {
             mm_text(MAX_COORDINATE)
         ));
     }
-    if twice_area(&corners) == 0 {
+    if collinear(&corners) {
         return Err("The board outline must enclose an area.".to_owned());
     }
     if self_intersects(&corners) {
@@ -84,14 +84,11 @@ fn fits(point: Point) -> bool {
     point.x.0.unsigned_abs() <= limit && point.y.0.unsigned_abs() <= limit
 }
 
-/// Twice the signed area of the polygon through `corners`.
-fn twice_area(corners: &[Point]) -> i128 {
-    let mut sum = 0i128;
-    for (index, a) in corners.iter().enumerate() {
-        let b = corners[(index + 1) % corners.len()];
-        sum += i128::from(a.x.0) * i128::from(b.y.0) - i128::from(b.x.0) * i128::from(a.y.0);
-    }
-    sum
+/// Whether every corner lies on one line, so the polygon encloses no area. Any other
+/// polygon with zero area crosses itself, which `self_intersects` reports.
+fn collinear(corners: &[Point]) -> bool {
+    let (first, second) = (corners[0], corners[1]);
+    corners.iter().all(|&p| cross(first, second, p) == 0)
 }
 
 /// The cross product of `a - o` and `b - o`: positive when `o`, `a`, `b` turn

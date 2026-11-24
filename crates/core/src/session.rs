@@ -1172,8 +1172,7 @@ impl Session {
         points: &[Point],
         fresh: &mut impl FnMut() -> Uuid,
     ) -> Result<Changes, CoreError> {
-        let corners = outline::validate_polygon(points)
-            .map_err(CoreError::InvalidEdit)?;
+        let corners = outline::validate_polygon(points).map_err(CoreError::InvalidEdit)?;
         let board = self.project.board();
         let removed: NodeEdits = board
             .items()
