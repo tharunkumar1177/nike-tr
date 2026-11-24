@@ -151,11 +151,7 @@ export function Toolbar({
 }: ToolbarProps) {
   const common = (
     <>
-      <ViewSwitch
-        view={view}
-        disabled={disabled}
-        onViewChange={onViewChange}
-      />
+      <ViewSwitch view={view} disabled={disabled} onViewChange={onViewChange} />
       <span className="toolbar__separator" aria-hidden="true" />
       <IconButton
         label={history.undoLabel ? `Undo ${history.undoLabel}` : "Undo"}

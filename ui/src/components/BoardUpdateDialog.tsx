@@ -142,6 +142,14 @@ function ReviewSections({ review }: { review: BoardUpdateReview }) {
   );
 }
 
+/**
+ * What the live region says after a failure. Other failures are shown in an
+ * alert, which screen readers already announce.
+ */
+function failureAnnouncement(error: ErrorReport): string {
+  return error.kind === "libraryNotReady" ? error.message : "";
+}
+
 /** An error message with its optional detail, announced as an alert. */
 function ErrorMessage({ error }: { error: ErrorReport }) {
   return (
@@ -194,7 +202,7 @@ export function BoardUpdateDialog({
             ? { status: "libraryNotReady" }
             : { status: "planFailed", error },
         );
-        setAnnouncement(error.message);
+        setAnnouncement(failureAnnouncement(error));
       },
     );
   }, []);
@@ -240,7 +248,7 @@ export function BoardUpdateDialog({
             ? { status: "libraryNotReady" }
             : { status: "applyFailed", review, error },
         );
-        setAnnouncement(error.message);
+        setAnnouncement(failureAnnouncement(error));
       },
     );
   };
@@ -360,9 +368,7 @@ export function BoardUpdateDialog({
             <input
               type="checkbox"
               checked={settings.deleteExtra}
-              onChange={(event) =>
-                toggle("deleteExtra", event.target.checked)
-              }
+              onChange={(event) => toggle("deleteExtra", event.target.checked)}
             />
             Delete footprints with no symbols
           </label>

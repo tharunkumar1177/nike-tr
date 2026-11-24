@@ -24,12 +24,7 @@ export const BOARD_GRID_NM = 635_000;
 export const EMPTY_BOARD_NM = 100 * NM_PER_MM;
 
 /** Grows `bounds` to include the point (x, y), widened by `pad` on every side. */
-function include(
-  bounds: Bounds | null,
-  x: number,
-  y: number,
-  pad = 0,
-): Bounds {
+function include(bounds: Bounds | null, x: number, y: number, pad = 0): Bounds {
   if (bounds === null) {
     return { minX: x - pad, minY: y - pad, maxX: x + pad, maxY: y + pad };
   }

@@ -1840,6 +1840,10 @@ describe("Wiring", () => {
 });
 
 describe("Board view", () => {
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+  });
+
   const FOOTPRINT_CENTER: [number, number] = [20_000_000, 20_000_000];
 
   function argsOf(calls: { cmd: string; args: Args }[], cmd: string): Args[] {
@@ -2215,6 +2219,8 @@ describe("Update Board dialog", () => {
     await waitFor(() =>
       expect(argsOf(calls, "apply_board_update")).toHaveLength(2),
     );
-    expect(await screen.findByText("Board updated from schematic")).toBeTruthy();
+    expect(
+      await screen.findByText("Board updated from schematic"),
+    ).toBeTruthy();
   });
 });

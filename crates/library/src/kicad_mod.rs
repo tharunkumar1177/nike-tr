@@ -238,7 +238,9 @@ impl Extent {
                 self.add(Xy(center.0 - radius, center.1 - radius));
                 self.add(Xy(center.0 + radius, center.1 + radius));
             }
-            Shape::Arc { start, mid, end, .. } => {
+            Shape::Arc {
+                start, mid, end, ..
+            } => {
                 self.add(*start);
                 self.add(*mid);
                 self.add(*end);
