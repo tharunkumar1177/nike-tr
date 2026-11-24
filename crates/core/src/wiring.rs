@@ -578,13 +578,15 @@ pub fn polyline_segments(points: &[Point]) -> Result<Vec<(Point, Point)>, String
     Ok(segments)
 }
 
-fn xy_node(point: Point) -> SExpr {
+/// `(xy <x> <y>)` in millimeters.
+pub(crate) fn xy_node(point: Point) -> SExpr {
     let x = SExpr::atom(mm_text(point.x));
     let y = SExpr::atom(mm_text(point.y));
     SExpr::node("xy", vec![x, y])
 }
 
-fn uuid_node(uuid: Uuid) -> SExpr {
+/// `(uuid "<uuid>")`.
+pub(crate) fn uuid_node(uuid: Uuid) -> SExpr {
     SExpr::node("uuid", vec![SExpr::string(uuid.to_string())])
 }
 

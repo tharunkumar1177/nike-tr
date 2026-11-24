@@ -6,8 +6,9 @@
 //! KiCad 10 form when they are read: the header names format `20260206`, layer ordinals use
 //! KiCad 10's numbering, and nets are referenced by name instead of through a numbered table.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use crate::board_update::NodeEdits;
 use crate::footprint::{Footprint, footprint_uuid, net_name, net_node};
 use crate::kicad::{FileError, GENERATOR, mm_text, parse_kind};
 use crate::kicad_value::{child_text, children, length, number, point, points, stroke_width};
@@ -438,6 +439,83 @@ impl Board {
             .map_or(items.len() + 1, |position| position + 1)
     }
 
+    /// The names of the copper layers in the `(layers)` table, in table order.
+    pub fn copper_layer_names(&self) -> Vec<String> {
+        self.layers()
+            .into_iter()
+            .filter(Layer::is_copper)
+            .map(|layer| layer.name)
+            .collect()
+    }
+
+    /// The first of `names` that a board item puts something on: a footprint, pad, track,
+    /// via, zone, or graphic. The layer table and the setup are not items.
+    pub(crate) fn first_used_layer(&self, names: &[String]) -> Option<String> {
+        self.items()
+            .iter()
+            .filter(|item| !matches!(item.head(), Some("layers" | "setup")))
+            .find_map(|item| used_layer(item, names))
+    }
+
+    /// The node edits that give the board `copper` copper layers with KiCad's default
+    /// stackup: the `(layers)` table, `setup`, and `general` are replaced where they are, or
+    /// inserted in KiCad's header order when missing.
+    pub(crate) fn stackup_edits(&self, copper: usize) -> (NodeEdits, NodeEdits) {
+        let items = self.items();
+        let existing = |head: &str| items.iter().find(|item| item.head() == Some(head));
+        let replacements = [
+            ("general", general_with_thickness(existing("general"))),
+            ("layers", layers_with_copper(existing("layers"), copper)),
+            ("setup", setup_with_stackup(existing("setup"), copper)),
+        ];
+        let head_of = |slot: &Slot| match slot {
+            Slot::Kept(index) => items[*index].head().map(str::to_owned),
+            Slot::New(node) => node.head().map(str::to_owned),
+        };
+        let mut next: Vec<Slot> = (0..items.len()).map(Slot::Kept).collect();
+        for (head, node) in replacements {
+            let position = next
+                .iter()
+                .position(|slot| head_of(slot).as_deref() == Some(head));
+            if let Some(position) = position {
+                next[position] = Slot::New(node);
+                continue;
+            }
+            let rank = header_rank(head);
+            let earlier = |slot: &Slot| {
+                let slot_rank = head_of(slot).as_deref().and_then(header_rank);
+                slot_rank.is_some() && slot_rank < rank
+            };
+            let at = next
+                .iter()
+                .rposition(earlier)
+                .map_or(0, |position| position + 1);
+            next.insert(at, Slot::New(node));
+        }
+        let kept: HashSet<usize> = next
+            .iter()
+            .filter_map(|slot| match slot {
+                Slot::Kept(index) => Some(*index),
+                Slot::New(_) => None,
+            })
+            .collect();
+        let removed = items
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !kept.contains(index))
+            .map(|(index, node)| (index + 1, node.clone()))
+            .collect();
+        let inserted = next
+            .into_iter()
+            .enumerate()
+            .filter_map(|(position, slot)| match slot {
+                Slot::New(node) => Some((position + 1, node)),
+                Slot::Kept(_) => None,
+            })
+            .collect();
+        (removed, inserted)
+    }
+
     /// Checks that every typed coordinate fits KiCad's 32-bit nanometer range, naming the
     /// first item that doesn't.
     pub fn check_export_bounds(&self) -> Result<(), String> {
@@ -494,19 +572,9 @@ fn follows_footprints(node: &SExpr) -> bool {
 /// The `(layers)` table of a new board with `copper` copper layers: the copper layers in
 /// stack order, then KiCad's technical and user layers.
 pub(crate) fn default_layers(copper: usize) -> SExpr {
-    let entry = |name: &str, kind: &str, user_name: Option<&str>| {
-        let ordinal = layer_ordinal(name).unwrap_or_default();
-        let mut items = vec![
-            SExpr::atom(ordinal.to_string()),
-            SExpr::string(name),
-            SExpr::atom(kind),
-        ];
-        items.extend(user_name.map(SExpr::string));
-        SExpr::List(items)
-    };
     let mut layers = Vec::new();
     for name in copper_names(copper) {
-        layers.push(entry(&name, "signal", None));
+        layers.push(layer_entry(&name, "signal", None));
     }
     let technical = [
         ("F.Adhes", Some("F.Adhesive")),
@@ -529,9 +597,139 @@ pub(crate) fn default_layers(copper: usize) -> SExpr {
         ("B.Fab", None),
     ];
     for (name, user_name) in technical {
-        layers.push(entry(name, "user", user_name));
+        layers.push(layer_entry(name, "user", user_name));
     }
     SExpr::node("layers", layers)
+}
+
+/// One `(layers)` entry: `(<ordinal> "<name>" <kind> ["<user name>"])`.
+fn layer_entry(name: &str, kind: &str, user_name: Option<&str>) -> SExpr {
+    let ordinal = layer_ordinal(name).unwrap_or_default();
+    let mut items = vec![
+        SExpr::atom(ordinal.to_string()),
+        SExpr::string(name),
+        SExpr::atom(kind),
+    ];
+    items.extend(user_name.map(SExpr::string));
+    SExpr::List(items)
+}
+
+/// The layer name of a `(layers)` entry.
+fn entry_name(entry: &SExpr) -> Option<&str> {
+    let SExpr::List(items) = entry else {
+        return None;
+    };
+    items.get(1)?.text()
+}
+
+/// The `(layers)` table with `copper` copper layers. Copper layers the board keeps stay as
+/// they are, new ones are signal layers, and every other entry is kept in order. A board
+/// without a table gets KiCad's default one.
+fn layers_with_copper(existing: Option<&SExpr>, copper: usize) -> SExpr {
+    let Some(existing) = existing else {
+        return default_layers(copper);
+    };
+    let entries = existing.args();
+    let mut layers = Vec::new();
+    for name in copper_names(copper) {
+        let kept = entries
+            .iter()
+            .find(|entry| entry_name(entry) == Some(name.as_str()));
+        let entry = match kept {
+            Some(entry) => entry.clone(),
+            None => layer_entry(&name, "signal", None),
+        };
+        layers.push(entry);
+    }
+    let is_copper = |entry: &&SExpr| entry_name(entry).is_some_and(|name| name.ends_with(".Cu"));
+    layers.extend(entries.iter().filter(|entry| !is_copper(entry)).cloned());
+    SExpr::node("layers", layers)
+}
+
+/// `setup` with KiCad's default stackup for `copper` copper layers in place of its own,
+/// keeping its other settings and the copper finish.
+fn setup_with_stackup(existing: Option<&SExpr>, copper: usize) -> SExpr {
+    let mut stackup = default_stackup(copper);
+    let finish = existing
+        .and_then(|setup| setup.child("stackup"))
+        .and_then(|stackup| stackup.child("copper_finish"));
+    if let Some(finish) = finish {
+        stackup = with_child(&stackup, finish.clone());
+    }
+    match existing {
+        Some(setup) => with_child(setup, stackup),
+        None => SExpr::node("setup", vec![stackup]),
+    }
+}
+
+/// `general` with the thickness of a default stackup.
+fn general_with_thickness(existing: Option<&SExpr>) -> SExpr {
+    let value = SExpr::atom(mm_text(Nm(BOARD_THICKNESS)));
+    let thickness = SExpr::node("thickness", vec![value]);
+    match existing {
+        Some(general) => with_child(general, thickness),
+        None => SExpr::node("general", vec![thickness]),
+    }
+}
+
+/// A copy of `node` whose child with `child`'s head is replaced by `child`, or with `child`
+/// added as its first child when it has none.
+fn with_child(node: &SExpr, child: SExpr) -> SExpr {
+    let mut node = node.clone();
+    let head = child.head().unwrap_or_default().to_owned();
+    if let Some(items) = node.items_mut() {
+        let position = items
+            .iter()
+            .skip(1)
+            .position(|item| item.head() == Some(head.as_str()));
+        match position {
+            Some(position) => items[position + 1] = child,
+            None => items.insert(items.len().min(1), child),
+        }
+    }
+    node
+}
+
+/// The first of `names` that `node`, or a node below it, names in a `(layer ...)` or
+/// `(layers ...)` child.
+fn used_layer(node: &SExpr, names: &[String]) -> Option<String> {
+    if matches!(node.head(), Some("layer" | "layers")) {
+        let found = node
+            .args()
+            .iter()
+            .filter_map(SExpr::text)
+            .find(|text| names.iter().any(|name| name == *text));
+        if let Some(found) = found {
+            return Some(found.to_owned());
+        }
+    }
+    node.args()
+        .iter()
+        .find_map(|child| used_layer(child, names))
+}
+
+/// The top-level nodes KiCad writes at the start of a board, in order.
+const HEADER_ORDER: [&str; 8] = [
+    "version",
+    "generator",
+    "generator_version",
+    "general",
+    "paper",
+    "title_block",
+    "layers",
+    "setup",
+];
+
+/// Where `head` comes in [`HEADER_ORDER`].
+fn header_rank(head: &str) -> Option<usize> {
+    HEADER_ORDER.iter().position(|name| *name == head)
+}
+
+/// A top-level item of a board being edited: one the board already has, by index, or a
+/// new node.
+enum Slot {
+    Kept(usize),
+    New(SExpr),
 }
 
 /// The `(stackup)` of a new 1.6 mm board with `copper` copper layers: 0.035 mm copper,
@@ -597,7 +795,7 @@ pub(crate) fn default_stackup(copper: usize) -> SExpr {
 }
 
 /// The copper layer names of a `copper`-layer board, top to bottom.
-fn copper_names(copper: usize) -> Vec<String> {
+pub(crate) fn copper_names(copper: usize) -> Vec<String> {
     let inner = copper.saturating_sub(2);
     let mut names = vec!["F.Cu".to_owned()];
     names.extend((1..=inner).map(|n| format!("In{n}.Cu")));

@@ -82,6 +82,8 @@ interface EditorShellProps {
   boardViewport: Viewport | null;
   onBoardViewportChange: (update: (viewport: Viewport) => Viewport) => void;
   onUpdateBoard: () => void;
+  onEditOutline: () => void;
+  onEditStackup: () => void;
   /** A one-off board message, such as the result of an update. */
   boardNotice: string | null;
   onBoardNoticeConsumed: () => void;
@@ -113,6 +115,8 @@ export function EditorShell({
   boardViewport,
   onBoardViewportChange,
   onUpdateBoard,
+  onEditOutline,
+  onEditStackup,
   boardNotice,
   onBoardNoticeConsumed,
   controlsDisabled,
@@ -392,6 +396,8 @@ export function EditorShell({
         view={view}
         onViewChange={onViewChange}
         onUpdateBoard={onUpdateBoard}
+        onEditOutline={onEditOutline}
+        onEditStackup={onEditStackup}
         ratsnestVisible={ratsnestVisible}
         onToggleRatsnest={() => setRatsnestVisible((shown) => !shown)}
         history={project.history}

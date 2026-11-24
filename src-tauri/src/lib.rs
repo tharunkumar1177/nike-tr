@@ -75,6 +75,8 @@ pub fn run() {
             ipc::apply_board_update,
             ipc::move_footprints,
             ipc::transform_footprints,
+            ipc::edit_board_outline,
+            ipc::edit_stackup,
             ipc::list_recent_projects,
             ipc::remove_recent_project,
             ipc::close_window,

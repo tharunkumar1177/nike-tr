@@ -8,6 +8,7 @@ use std::path::Path;
 
 use uuid::Uuid;
 
+use crate::board::{BoardGraphic, OutlineShape, copper_names};
 use crate::board_update::{self, BoardUpdateOptions, UPDATE_BOARD_LABEL};
 use crate::erc::{RuleSeverities, Violation};
 use crate::error::CoreError;
@@ -15,8 +16,9 @@ use crate::footprint::{Footprint, flip_node, footprint_uuid, rotate_node};
 use crate::kicad::{
     MANDATORY_FIELDS, Mirror, PlacedSymbol, Placement, Schematic, SymbolProperty, TitleBlock,
 };
-use crate::kicad_value::text_arg;
+use crate::kicad_value::{child_text, text_arg};
 use crate::manifest::{AnalysisSettings, MAX_GRID, MIN_GRID};
+use crate::outline;
 use crate::project::Project;
 use crate::project_file::ProjectFile;
 use crate::sexpr::SExpr;
@@ -37,6 +39,8 @@ pub const ANALYSIS_LABEL: &str = "Simulation Settings";
 pub const MOVE_FOOTPRINTS_LABEL: &str = "Move Footprint";
 pub const ROTATE_FOOTPRINTS_LABEL: &str = "Rotate Footprint";
 pub const FLIP_FOOTPRINTS_LABEL: &str = "Flip Footprint";
+pub const EDIT_OUTLINE_LABEL: &str = "Edit Board Outline";
+pub const EDIT_STACKUP_LABEL: &str = "Edit Stackup";
 /// The longest field value, such as a datasheet URL.
 pub const MAX_FIELD_VALUE_CHARS: usize = 4096;
 
@@ -370,11 +374,7 @@ impl Changes {
         match node.head().unwrap_or_default() {
             "footprint" => self.footprints = true,
             "layers" | "setup" | "general" => self.stackup = true,
-            head if head.starts_with("gr_")
-                && crate::kicad_value::child_text(node, "layer") == Some("Edge.Cuts") =>
-            {
-                self.board_outline = true;
-            }
+            _ if is_edge_cut(node) => self.board_outline = true,
             _ => {}
         }
     }
@@ -1164,6 +1164,74 @@ impl Session {
         }))
     }
 
+    /// Replaces every `Edge.Cuts` graphic with one closed polygon through `points` as one
+    /// undo step. The polygon takes the place of the first graphic it replaces, or goes
+    /// after the footprints. Fails when the points don't form one simple closed polygon.
+    pub fn edit_board_outline(
+        &mut self,
+        points: &[Point],
+        fresh: &mut impl FnMut() -> Uuid,
+    ) -> Result<Changes, CoreError> {
+        let corners = outline::validate_polygon(points).map_err(CoreError::InvalidEdit)?;
+        let board = self.project.board();
+        let removed: NodeEdits = board
+            .items()
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| is_edge_cut(node))
+            .map(|(position, node)| (position + 1, node.clone()))
+            .collect();
+        let unchanged = matches!(
+            board.edge_cuts().as_slice(),
+            [BoardGraphic { shape: OutlineShape::Polygon { points }, .. }] if *points == corners
+        );
+        if unchanged && removed.len() == 1 {
+            return Ok(Changes::default());
+        }
+        let index = removed
+            .first()
+            .map_or_else(|| board.footprint_insert_index(), |(index, _)| *index);
+        let node = outline::outline_node(&corners, fresh());
+        Ok(self.execute(Command::EditBoard {
+            label: EDIT_OUTLINE_LABEL.to_owned(),
+            removed,
+            inserted: vec![(index, node)],
+        }))
+    }
+
+    /// Gives the board `copper` copper layers with KiCad's default stackup as one undo
+    /// step. The count must be even, from 2 to 8; the current count changes nothing. Fails
+    /// when an item is still on an inner layer the new count removes.
+    pub fn edit_stackup(&mut self, copper: usize) -> Result<Changes, CoreError> {
+        if !(2..=8).contains(&copper) || !copper.is_multiple_of(2) {
+            return Err(CoreError::InvalidEdit(
+                "The copper layer count must be an even number between 2 and 8.".to_owned(),
+            ));
+        }
+        let board = self.project.board();
+        let current = board.copper_layer_names();
+        if current.len() == copper {
+            return Ok(Changes::default());
+        }
+        let kept = copper_names(copper);
+        let dropped: Vec<String> = current
+            .into_iter()
+            .filter(|name| !kept.contains(name))
+            .collect();
+        if let Some(name) = board.first_used_layer(&dropped) {
+            return Err(CoreError::InvalidEdit(format!(
+                "The {name} layer is still used by a footprint, track, via, zone, or graphic. \
+                 Remove those items first."
+            )));
+        }
+        let (removed, inserted) = board.stackup_edits(copper);
+        Ok(self.execute(Command::EditBoard {
+            label: EDIT_STACKUP_LABEL.to_owned(),
+            removed,
+            inserted,
+        }))
+    }
+
     /// Updates the board from the schematic as one undo step, carrying out the plan
     /// [`crate::board_update::plan_board_update`] returns for the same inputs. New
     /// footprints and the items inside them get UUIDs from `fresh`.
@@ -1422,6 +1490,12 @@ fn quarter_turns(steps: i32) -> Angle {
 
 fn missing_symbol() -> CoreError {
     CoreError::InvalidEdit("A symbol in the selection is not placed on the schematic.".to_owned())
+}
+
+/// Whether the top-level board `node` is a graphic on `Edge.Cuts`.
+fn is_edge_cut(node: &SExpr) -> bool {
+    node.head().is_some_and(|head| head.starts_with("gr_"))
+        && child_text(node, "layer") == Some("Edge.Cuts")
 }
 
 /// The error for a selection naming a footprint the board doesn't have.

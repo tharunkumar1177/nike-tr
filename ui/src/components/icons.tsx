@@ -223,6 +223,30 @@ export function BoardUpdateIcon() {
   );
 }
 
+/** A rectangle with handles on its corners: the board outline. */
+export function BoardOutlineIcon() {
+  return (
+    <Icon>
+      <rect x="5" y="6" width="14" height="12" />
+      <circle cx="5" cy="6" r="1.5" />
+      <circle cx="19" cy="6" r="1.5" />
+      <circle cx="19" cy="18" r="1.5" />
+      <circle cx="5" cy="18" r="1.5" />
+    </Icon>
+  );
+}
+
+/** Three stacked bars: the layer stackup. */
+export function StackupIcon() {
+  return (
+    <Icon>
+      <rect x="4" y="5" width="16" height="3" rx="0.5" />
+      <rect x="4" y="10.5" width="16" height="3" rx="0.5" />
+      <rect x="4" y="16" width="16" height="3" rx="0.5" />
+    </Icon>
+  );
+}
+
 /** Pads joined by thin lines: the ratsnest. */
 export function RatsnestIcon() {
   return (

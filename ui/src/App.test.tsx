@@ -24,6 +24,7 @@ import type { RecentProject } from "./bindings/RecentProject";
 import { BOARD_GRID_NM, fitBoard } from "./board";
 import { snapToGrid } from "./symbols";
 import {
+  newBoardStackup,
   projectSnapshot,
   resistorFootprint,
   resistorInstance,
@@ -1970,7 +1971,9 @@ describe("Board view", () => {
   it("says how to fill an empty board", async () => {
     await openBoard({}, projectSnapshot());
     expect(
-      screen.getByText("Board is empty. F8 updates it from the schematic."),
+      screen.getByText(
+        "Board is empty. Set the outline (Tools > Board Outline), then F8 updates it from the schematic.",
+      ),
     ).toBeTruthy();
   });
 });
@@ -2222,5 +2225,197 @@ describe("Update Board dialog", () => {
     expect(
       await screen.findByText("Board updated from schematic"),
     ).toBeTruthy();
+  });
+});
+
+describe("Board setup dialogs", () => {
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+  });
+
+  const MM = 1_000_000;
+
+  function coreError(kind: string, message: string): Error {
+    return Object.assign(new Error(message), { kind, detail: null });
+  }
+
+  function argsOf(calls: { cmd: string; args: Args }[], cmd: string): Args[] {
+    return calls.filter((call) => call.cmd === cmd).map((call) => call.args);
+  }
+
+  /** Opens the project and one of the Tools menu's board dialogs. */
+  async function openDialog(
+    menuId: string,
+    title: string,
+    handlers: Handlers,
+    project: ProjectSnapshot,
+  ) {
+    const calls = mockCore({
+      ...core,
+      get_project: () => project,
+      ...handlers,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { level: 1, name: "amp" });
+    await emitFromCore("menu-action", menuId);
+    const dialog = await screen.findByRole("dialog", { name: title });
+    return { calls, dialog };
+  }
+
+  /** Opens the Board Outline dialog on a board without an outline. */
+  function openOutline(handlers: Handlers) {
+    const project = projectSnapshot();
+    return openDialog("board-outline", "Board Outline", handlers, project);
+  }
+
+  /** Opens the Layer Stackup dialog on a board with `copperLayers` layers. */
+  function openStackup(handlers: Handlers, copperLayers = 2) {
+    const stackup = { ...newBoardStackup(), copperLayers };
+    const project = projectSnapshot({ stackup });
+    return openDialog("layer-stackup", "Layer Stackup", handlers, project);
+  }
+
+  /** Types into a labelled field of the dialog. */
+  function type(dialog: HTMLElement, label: string, value: string) {
+    fireEvent.change(within(dialog).getByLabelText(label), {
+      target: { value },
+    });
+  }
+
+  function applyButton(dialog: HTMLElement): HTMLButtonElement {
+    const button = within(dialog).getByRole("button", { name: "Apply" });
+    return button as HTMLButtonElement;
+  }
+
+  it("draws a rectangular outline on a board without one", async () => {
+    const { calls, dialog } = await openOutline({
+      edit_board_outline: () => null,
+    });
+
+    const width = within(dialog).getByLabelText("Width (mm)");
+    expect((width as HTMLInputElement).value).toBe("100");
+    type(dialog, "Width (mm)", "abc");
+    expect(within(dialog).getByText("Invalid millimeter number.")).toBeTruthy();
+    expect(applyButton(dialog).disabled).toBe(true);
+    type(dialog, "Width (mm)", "0");
+    expect(within(dialog).getByText("Must be greater than 0.")).toBeTruthy();
+    type(dialog, "Width (mm)", "80");
+
+    fireEvent.click(applyButton(dialog));
+    await waitFor(() =>
+      expect(argsOf(calls, "edit_board_outline")).toEqual([
+        {
+          points: [
+            [0, 0],
+            [80 * MM, 0],
+            [80 * MM, 100 * MM],
+            [0, 100 * MM],
+          ],
+        },
+      ]),
+    );
+    expect(await screen.findByText("Board outline updated.")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Board Outline" })).toBeNull();
+  });
+
+  it("edits the outline as a polygon of typed corners", async () => {
+    const { calls, dialog } = await openOutline({
+      edit_board_outline: () => null,
+    });
+
+    fireEvent.click(
+      within(dialog).getByRole("radio", { name: "Custom polygon" }),
+    );
+    expect(
+      within(dialog).getByText("Custom polygon mode, 4 vertices"),
+    ).toBeTruthy();
+    type(dialog, "Vertex 3 X (mm)", "0");
+    type(dialog, "Vertex 4 X (mm)", "100");
+    expect(
+      within(dialog).getByText("The outline crosses itself."),
+    ).toBeTruthy();
+    expect(applyButton(dialog).disabled).toBe(true);
+    type(dialog, "Vertex 3 X (mm)", "100");
+    type(dialog, "Vertex 4 X (mm)", "0");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add Vertex" }));
+    expect(within(dialog).getByText("Vertex added, 5 vertices")).toBeTruthy();
+    const added = within(dialog).getByLabelText("Vertex 5 Y (mm)");
+    expect((added as HTMLInputElement).value).toBe("50");
+    expect(
+      within(dialog).queryByText("The outline crosses itself."),
+    ).toBeNull();
+
+    for (const name of ["Remove vertex 5", "Remove vertex 4"]) {
+      fireEvent.click(within(dialog).getByRole("button", { name }));
+    }
+    expect(within(dialog).getByText("Vertex removed, 3 vertices")).toBeTruthy();
+    const removeFirst = within(dialog).getByRole("button", {
+      name: "Remove vertex 1",
+    });
+    expect((removeFirst as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(applyButton(dialog));
+    await waitFor(() =>
+      expect(argsOf(calls, "edit_board_outline")).toEqual([
+        {
+          points: [
+            [0, 0],
+            [100 * MM, 0],
+            [100 * MM, 100 * MM],
+          ],
+        },
+      ]),
+    );
+  });
+
+  it("keeps the outline dialog open on a refused edit", async () => {
+    const message = "The board outline must not cross itself.";
+    const { dialog } = await openOutline({
+      edit_board_outline: () => {
+        throw coreError("invalidInput", message);
+      },
+    });
+
+    fireEvent.click(applyButton(dialog));
+    expect(await within(dialog).findByText(message)).toBeTruthy();
+    expect(applyButton(dialog).disabled).toBe(false);
+  });
+
+  it("previews and applies a new copper layer count", async () => {
+    const { calls, dialog } = await openStackup({
+      edit_stackup: () => null,
+    });
+
+    expect(applyButton(dialog).disabled).toBe(true);
+    expect(within(dialog).queryByText("In1.Cu")).toBeNull();
+    type(dialog, "Copper layers", "4");
+    for (const layer of ["In1.Cu", "In2.Cu", "dielectric 3"]) {
+      expect(within(dialog).getByText(layer)).toBeTruthy();
+    }
+    expect(within(dialog).getByText("Total thickness: 1.6 mm")).toBeTruthy();
+
+    fireEvent.click(applyButton(dialog));
+    await waitFor(() =>
+      expect(argsOf(calls, "edit_stackup")).toEqual([{ copperLayers: 4 }]),
+    );
+    expect(await screen.findByText("Layer stackup updated.")).toBeTruthy();
+  });
+
+  it("shows why the core kept the copper layers", async () => {
+    const message =
+      "The In1.Cu layer is still used by a footprint, track, via, zone, or graphic. Remove those items first.";
+    const { dialog } = await openStackup(
+      {
+        edit_stackup: () => {
+          throw coreError("invalidInput", message);
+        },
+      },
+      4,
+    );
+
+    type(dialog, "Copper layers", "2");
+    fireEvent.click(applyButton(dialog));
+    expect(await within(dialog).findByText(message)).toBeTruthy();
   });
 });

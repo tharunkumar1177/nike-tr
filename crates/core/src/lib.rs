@@ -9,6 +9,7 @@ pub mod kicad;
 pub mod kicad_value;
 pub mod manifest;
 pub mod netlist;
+pub mod outline;
 pub mod project;
 pub mod project_file;
 pub mod ratsnest;
