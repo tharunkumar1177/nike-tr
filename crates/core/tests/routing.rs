@@ -249,7 +249,10 @@ fn design_rules_are_saved_in_the_project_file_and_undo() {
     session.save().unwrap();
     let path = temp.path().join("bench/divider.kicad_pro");
     let text = fs::read_to_string(path).unwrap();
-    assert!(text.contains("\"min_copper_edge_clearance\": 0.5"), "{text}");
+    assert!(
+        text.contains("\"min_copper_edge_clearance\": 0.5"),
+        "{text}"
+    );
     let reopened = Session::new(Project::load(&temp.path().join("bench")).unwrap());
     assert_eq!(reopened.design_rules(), rules);
 

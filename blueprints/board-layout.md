@@ -22,6 +22,8 @@ The user turns a schematic into a physical board. They pull footprints and nets 
 - [Coordinate and unit representation](../architecture.md#coordinate-and-unit-representation)
 - [Design document ownership](../architecture.md#design-document-ownership)
 - [IPC contract](../architecture.md#ipc-contract)
+- [Connectivity and netlist](../architecture.md#connectivity-and-netlist)
+- [File format](../architecture.md#file-format)
 
 ## Local rules and implications
 
@@ -35,11 +37,19 @@ All DRC math uses integer nanometers. Clearance checks use an R-Tree broad phase
 
 ### Design document ownership
 
-An interactive route is previewed in the UI and committed as one command when the segment is finished.
+An interactive route is previewed in the UI and committed as one `route_track` command when it is finished. The UI only lays out 45 and 90 degree legs and snaps to copper; Rust validates the geometry and writes the tracks and vias. New tracks and vias take the routing defaults from the design rules. A route below a minimum size is not refused: DRC reports it.
 
 ### IPC contract
 
 DRC runs incrementally on changed items during editing, and fully on demand. Violations are sent to the UI as a list of items with their locations.
+
+### File format
+
+The design rules read KiCad's defaults when the `.kicad_pro` lacks them: 0.2 mm clearance and track width, 0.5 mm minimum via, 0.3 mm minimum drill, 0.1 mm annular ring, 0.5 mm edge clearance, and 0.6 mm vias with 0.3 mm drills. The clearance Tron shows is the larger of the `Default` class clearance and `min_clearance`. Zones read KiCad 10's defaults for missing keys: 0.5 mm clearance, 0.25 mm minimum thickness, 0.5 mm thermal gap and spoke, and thermal relief pad connections.
+
+### Connectivity and netlist
+
+Copper geometry is a core point, segment, or polygon widened by a radius, so distances are exact enough for touching and clearance tests. Oval pads are a segment with a radius, rounded rectangles a shrunk rectangle with a radius, and other shapes their rectangle. The R-Tree over item bounds is the broad phase, and union-find joins touching same-net items into clusters.
 
 ### Slice 7 plan
 
@@ -59,6 +69,15 @@ Approved contract changes, written into [architecture.md](../architecture.md) by
 - Dependencies: `spade` for the Delaunay triangulation, and later its R-Tree for DRC.
 
 The whole board is sent in the snapshot when a project opens. Viewport-scoped board reads wait for slice 8.
+
+### Slice 8 plan
+
+The user asked on 2026-11-25 for slice 8 to go ahead without further approval, with CI run only when a pull request's code is complete. It ships as two pull requests:
+
+1. **8a and 8b. Routing model and the route tool.** `route.rs` types tracks, vias, and zones. Design rules live in the `.kicad_pro`, because KiCad 10 keeps them there and not in the board's `setup`. The ratsnest joins clusters of connected copper. The board view draws copper by layer and adds a Layers panel, a Design Rules dialog, and the route tool. Commands: `edit_design_rules`, `route_track`, and `delete_routes`.
+2. **8c and 8d. Zone fill and DRC.** Zone fill uses `i_overlay`'s 64-bit integer booleans and offsetting: clearance knockouts, thermal spokes, and island removal, checked against golden boards built in tests. DRC checks clearance, track width, annular ring, unrouted nets, and edge clearance, incrementally and on demand through `run_drc`, with a violations panel.
+
+Walkaround routing (a detour computed by a `preview_route` command) is left out of 8b: the user steers around obstacles by hand. `rstar` replaces the planned use of `spade`'s R-Tree, which `spade` doesn't expose.
 
 ## Related blueprints
 
@@ -87,6 +106,11 @@ The whole board is sent in the snapshot when a project opens. Viewport-scoped bo
 - `crates/core/tests/board_setup.rs` — Implemented (7e): drawing, replacing, and re-applying an outline with undo, redo, and save; an in-place replacement that undoes exactly; growing 2 to 4 to 6 layers while keeping user names, non-copper layers, the finish, and `setup` keys; refusing invalid counts and a used inner layer; and a bare board getting its header nodes in order
 - `src-tauri/src/ipc.rs`, `src-tauri/src/shell.rs` — Implemented (7e): `edit_board_outline` and `edit_stackup`, and the Board Outline and Layer Stackup menu items, with a diff serialization test
 - `ui/src/boardSetup.ts`, `ui/src/components/BoardOutlineDialog.tsx`, `ui/src/components/LayerStackupDialog.tsx` — Implemented (7e): reading the current outline, the polygon checks, and the stackup preview, unit tested in `ui/src/boardSetup.test.ts`; both dialogs' validation, apply, and refusal paths are tested in `ui/src/App.test.tsx`
+- `crates/core/src/geometry.rs`, `copper.rs`, `connectivity.rs`, `route.rs`, `design_rules.rs` — Implemented (8a and 8b): copper shapes and exact distances, layer sets, pad copper, the R-Tree index and clusters, typed tracks, vias, and zones, route validation, and the design rules, each with unit tests
+- `crates/core/src/ratsnest.rs`, `session.rs` — Implemented (8a and 8b): the ratsnest over copper clusters, and `edit_design_rules`, `route_track`, and `delete_routes`, with a ratsnest test where a track joins two pads
+- `crates/core/tests/routing.rs` — Implemented (8b): a straight route with undo, redo, and save; a two-layer route with two vias that clears the ratsnest, then a deleted via that brings one line back; every refusal case; and design rules saved to `.kicad_pro` and undone
+- `src-tauri/src/routing.rs`, `src-tauri/src/ipc.rs`, `src-tauri/src/shell.rs` — Implemented (8a and 8b): the copper and rules IPC types, the three commands, and the Design Rules menu item, with a serialization test
+- `ui/src/routing.ts`, `ui/src/boardDraw.ts`, `ui/src/components/BoardCanvas.tsx`, `LayersPanel.tsx`, `DesignRulesDialog.tsx` — Implemented (8a and 8b): route legs, steps, vias, snapping, and picking, unit tested in `ui/src/routing.test.ts`; routing with a via and a refused route, selecting and deleting tracks and vias, the Layers panel, and the Design Rules dialog are tested in `ui/src/App.test.tsx`
 - Board canvas drawing in the installed app — Not verified: jsdom has no canvas, so the drawing needs a manual check in the installer
 
 ## Acceptance or verification criteria
@@ -100,4 +124,6 @@ The whole board is sent in the snapshot when a project opens. Viewport-scoped bo
 ## Remaining gaps and unknowns
 
 - A golden `.kicad_pcb` written by KiCad 10 after Update PCB from Schematic will be supplied by the user later. Until then its comparison test ships ignored, like the `divider.net` netlist test.
-- Push-and-shove interactive routing is out of scope for slice 8. Walkaround routing comes first.
+- Push-and-shove and walkaround routing are both out of scope for slice 8. The route tool goes where the user clicks.
+- Vias are always through vias. Blind and buried vias, arcs in routes, and net classes other than `Default` are not edited.
+- Viewport-scoped board reads are still not needed: the whole board travels in the snapshot.

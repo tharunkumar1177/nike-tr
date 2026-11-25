@@ -133,13 +133,6 @@ fn net_anchors(board: &Board) -> BTreeMap<String, Vec<Anchor>> {
     nets
 }
 
-/// The minimum spanning tree over `anchors`, which must be sorted by position, as pairs of
-/// indices into it. Anchors at the same point join with zero-length lines.
-pub(crate) fn spanning_tree(anchors: &[Point]) -> Vec<(usize, usize)> {
-    let singles: Vec<usize> = (0..anchors.len()).collect();
-    cluster_tree(anchors, &singles)
-}
-
 /// The lines that join the clusters of `anchors`, which must be sorted by position, as
 /// pairs of indices into it. `labels` gives each anchor's cluster; anchors that share one
 /// are already joined and get no line between them.
@@ -223,6 +216,13 @@ mod tests {
 
     fn at(x: i64, y: i64) -> Point {
         Point::new(Nm(x), Nm(y))
+    }
+
+    /// The minimum spanning tree over `anchors`, which must be sorted by position, as
+    /// pairs of indices into it. Anchors at the same point join with zero-length lines.
+    fn spanning_tree(anchors: &[Point]) -> Vec<(usize, usize)> {
+        let singles: Vec<usize> = (0..anchors.len()).collect();
+        cluster_tree(anchors, &singles)
     }
 
     #[test]

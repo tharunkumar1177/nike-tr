@@ -56,10 +56,11 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 ### File format
 
 - Projects are saved as KiCad-compatible S-expression files: `.kicad_sch` for the schematic and `.kicad_pcb` for the board. A `tron.json` project manifest records Tron-only settings, including the simulation analysis settings (`.op`, `.tran`, and `.ac` parameters). Changing an analysis setting is an undoable command that marks the project unsaved. KiCad does not see these settings.
-- Tron reads and writes the ERC section of the KiCad `.kicad_pro` JSON (rule severities and violation exclusions). Every other key is kept and written back unchanged. Changing a severity or an exclusion is an undoable command that marks the project unsaved, like any document edit.
+- Tron reads and writes two parts of the KiCad `.kicad_pro` JSON: the ERC section (rule severities and violation exclusions) and the board design rules (`board.design_settings.rules`, plus the clearance, track width, via diameter, and via drill of the `Default` net class). Every other key is kept and written back unchanged. Changing a severity, an exclusion, or a design rule is an undoable command that marks the project unsaved, like any document edit.
 - Every write is atomic: write to a temporary file in the same directory, flush it, then rename it over the target.
 - Unknown S-expression nodes are kept and written back unchanged, so a round trip never loses data Tron doesn't understand.
 - Tron edits the `.kicad_pcb` and writes it in the KiCad 10 form: format `20260206` with `generator_version "10.0"`, KiCad 10's layer IDs, and nets referenced by name on pads, tracks, vias, and zones, with no numbered net table. Older boards are upgraded when they are read. Tron manages the board's `(layers)` table and `setup.stackup`.
+- Tron types the board's `segment`, `via`, and `zone` nodes. Arcs stay raw. Routes Tron writes are straight `segment` nodes and through vias from `F.Cu` to `B.Cu`.
 - A board is saved only if every typed coordinate fits KiCad's 32-bit nanometer range.
 
 ### IPC contract
@@ -70,7 +71,8 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 - Simulation result vectors stay in Rust. The UI fetches only the signals and the x range it shows, capped at a point budget, and Rust reduces the data by min-max decimation so peaks survive.
 - Measurements and cursor readouts are computed in Rust over the full-resolution vectors, never from the decimated samples the UI holds.
 - An AC run's vectors are complex. The UI asks for a real quantity of them (magnitude in dB, or unwrapped phase in degrees), and Rust reduces, measures, and interpolates it on log frequency. An AC quantity has no average or RMS.
-- The project snapshot carries the whole board: footprints with their pads at board positions (with each pad's shape, size, angle, corner radius, and drill) and their board-space bounds, the outline, the stackup, and the ratsnest. Pad shapes and bounds come from the footprint's own children through `tron_library::kicad_mod::placed_geometry`; the bounds use the courtyard, or the pads and graphics when there is none. Viewport-scoped board reads come with routing. A diff carries every footprint, the outline, or the stackup when they change. For the ratsnest it carries only the nets whose pads changed, and the UI replaces those nets' lines.
+- The project snapshot carries the whole board: footprints with their pads at board positions (with each pad's shape, size, angle, corner radius, and drill) and their board-space bounds, the outline, the stackup, the ratsnest, every track, via, and zone (with its filled polygons), and the design rules. Pad shapes and bounds come from the footprint's own children through `tron_library::kicad_mod::placed_geometry`; the bounds use the courtyard, or the pads and graphics when there is none. A diff carries every footprint, the outline, or the stackup when they change, every track, via, and zone when any of them changes, and the design rules when they change. For the ratsnest it carries only the nets whose pads or copper changed, and the UI replaces those nets' lines.
+- `route_track(route)` commits a finished interactive route as one "Route Track" undo step. A route is its net, track width, via size, the pieces in drawing order, and the via positions. `crates/core/src/route.rs` refuses a route with no pieces or more than 1024 pieces or vias, a width or via size outside (0, 25 mm], a drill not smaller than its via, a layer the board lacks, a coordinate outside KiCad's range, a piece of zero length or at an angle other than 0, 45, or 90 degrees, pieces that don't join end to start, a layer change without a via at that corner, a via off the route's corners, and a net the board doesn't have. `delete_routes(uuids)` removes tracks and vias as one undo step. `edit_design_rules(rules)` stores the rules as one undo step; every rule must be greater than 0 and at most 25 mm, and each drill smaller than its via.
 - Updating the board from the schematic takes two commands. `plan_board_update` returns a review stamped with the document revision. `apply_board_update(base_revision)` applies it as one undo step, and fails with `boardUpdateConflict` if the document changed after the review.
 - `move_footprints(uuids, dx_nm, dy_nm)` and `transform_footprints(uuids, transform)` edit footprints as one undo step each. A transform is `{ type: "rotate", steps }` (counterclockwise quarter turns) or `{ type: "flip" }`. While a footprint is dragged, the UI moves the ratsnest ends on its pads locally, and the diff after the drop carries Rust's recomputed nets.
 - `edit_board_outline(points)` replaces every `Edge.Cuts` graphic with one closed `gr_poly` (0.05 mm stroke) as one undo step. `crates/core/src/outline.rs` drops repeated corners and refuses fewer than three, more than 1024, coordinates outside KiCad's 32-bit range, a zero area, and crossing or touching edges. The UI checks the same rules before sending.
@@ -84,6 +86,7 @@ Dependency direction: `ui` talks to `src-tauri` over IPC only. `src-tauri` depen
 - A net takes its name from its highest-priority driver, in KiCad's order: global label, then power symbol, then local label, then a pin. Nets driven only by pins get KiCad's automatic names, such as `Net-(R1-Pad1)`, and a lone pin gets `unconnected-(R1-Pad1)`. A KiCad-exported netlist fixture is the authority for tie-breaks and automatic names. Comparison covers net names and their pin sets, not the `.net` file's bytes.
 - The netlist is the one interface between the logical and physical views, and also the input to `sim` and `ai` verification.
 - Updating the board from the schematic is an explicit user command that applies a reviewable diff. It never runs silently.
+- On the board, two copper items of the same net connect when their copper shapes touch on a shared copper layer. Pads, tracks, vias, and zone fills all count. The ratsnest joins each net's connected clusters with a minimum spanning tree.
 
 ### Error and recovery
 
@@ -125,7 +128,7 @@ The user describes a circuit. `ai` asks the model for circuit DSL source, compil
 
 - GitHub Actions is the only build authority. Lockfiles (`Cargo.lock`, `package-lock.json`) are generated in CI and committed from CI artifacts, never written by hand.
 - Dependency versions are declared explicitly and checked against crates.io and npm.
-- `core` uses `spade` for the ratsnest's Delaunay triangulation. Its R-Tree is reserved for DRC.
+- `core` uses `spade` for the ratsnest's Delaunay triangulation and `rstar` for the R-Tree over copper that connectivity and DRC query.
 - Third-party binaries (`libngspice`, a JRE for freerouting) are downloaded in CI from pinned URLs with pinned SHA-256 checksums.
 
 ## Blueprints

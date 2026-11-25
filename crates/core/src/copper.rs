@@ -59,7 +59,11 @@ impl LayerSet {
         };
         let (low, high) = (a.min(b), a.max(b));
         let width = high - low + 1;
-        let bits = if width == 32 { u32::MAX } else { (1 << width) - 1 };
+        let bits = if width == 32 {
+            u32::MAX
+        } else {
+            (1 << width) - 1
+        };
         LayerSet(bits << low)
     }
 
@@ -109,11 +113,17 @@ pub struct PadCopper {
 /// Which item a piece of copper belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ItemId {
-    Pad { footprint: Uuid, index: usize },
+    Pad {
+        footprint: Uuid,
+        index: usize,
+    },
     Track(Uuid),
     Via(Uuid),
     /// One filled polygon of a zone on one layer.
-    Zone { zone: Uuid, fill: usize },
+    Zone {
+        zone: Uuid,
+        fill: usize,
+    },
 }
 
 /// One piece of copper.

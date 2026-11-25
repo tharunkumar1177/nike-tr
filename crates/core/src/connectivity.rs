@@ -63,7 +63,9 @@ pub fn clusters(items: &[CopperItem]) -> Vec<usize> {
             }
         }
     }
-    (0..items.len()).map(|position| sets.find(position)).collect()
+    (0..items.len())
+        .map(|position| sets.find(position))
+        .collect()
 }
 
 #[cfg(test)]
