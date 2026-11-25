@@ -75,3 +75,28 @@ Slice 7 is done, with its approved plan in the board-layout blueprint. 7a (footp
 Lessons for hand-formatted code, since nothing runs locally: rustfmt keeps a short receiver joined to its first call (`node.args()`) only at the start of a statement. After `let x =`, even `self` and `rest` go on their own line, as in `let end = self` followed by `.lines`. Copy rustfmt and Prettier hunks verbatim from the failed CI log. Prettier puts the text of a JSX element with attributes on its own line even when the element would fit on one. rustfmt breaks `assert_eq!` arguments that are wider than 60 characters together, and the same 60-character limit applies to method chains (counting the receiver) and to tuple literals. rustfmt joins a function signature onto one line whenever it fits in 100 columns. Clippy's `type_complexity` rejects inline tuple types that contain slices of tuples, so name them with a `type` alias. Commit the `lockfiles` and `ipc-bindings` artifacts whenever dependencies or ts-rs types change. A native crash (STATUS_ACCESS_VIOLATION) discards every captured test output in that binary, so check the source of the native library before guessing. Bootstrap a download pin by printing every computed hash before failing. ESLint's `react-refresh/only-export-components` rejects helper functions exported from a component file, so put them in a plain module. In Vitest, wait for the canvas viewport (the zoom readout in the status bar) before firing pointer events. rustfmt puts every struct variant of an enum on separate lines when any variant lacks a doc comment. When every variant has one, only variants whose fields are wider than 35 characters are expanded. Every `describe` block in `ui/src/App.test.tsx` that renders a canvas must stub `ResizeObserver` in its own `beforeEach`, or the viewport never fits. Clippy's `collapsible_match` wants a lone `if` inside a match arm moved into the arm's guard. ts-rs binding files can be written by hand in the generator's exact format, so the UI type-checks against new IPC types in the same push.
 
 Codebase entry points: `crates/core` (S-expressions, KiCad files, project lifecycle, undo engine), `src-tauri/src/ipc.rs` (IPC commands and ts-rs types), `src-tauri/src/library.rs` (library download, cache, and search commands), `src-tauri/src/shell.rs` (native menu), `ui/src` (React), `.github/workflows/ci.yml`.
+
+
+
+ lockfiles are produced in CI; 
+
+ Subs: 
+ global
+ Context:
+ Constraints
+ Acceptance
+ Return Format: 
+
+ Date?
+
+
+
+Implementation Plan:
+<Task>
+    - Files
+    - Actions
+    - Acceptance
+
+
+
+
