@@ -103,6 +103,7 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
     )?;
     let board_outline = item(app, "board-outline", "&Board Outline...", None, false)?;
     let layer_stackup = item(app, "layer-stackup", "&Layer Stackup...", None, false)?;
+    let design_rules = item(app, "design-rules", "&Design Rules...", None, false)?;
     let annotate_schematic = item(
         app,
         "annotate-schematic",
@@ -164,6 +165,7 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
         .item(&update_board)
         .item(&board_outline)
         .item(&layer_stackup)
+        .item(&design_rules)
         .separator()
         .item(&annotate_schematic)
         .item(&electrical_rules)
@@ -194,6 +196,7 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
             update_board,
             board_outline,
             layer_stackup,
+            design_rules,
             annotate_schematic,
             electrical_rules,
             erc_severities,

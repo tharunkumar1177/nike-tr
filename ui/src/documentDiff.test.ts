@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BoardFootprint } from "./bindings/BoardFootprint";
 import type { DocumentDiff } from "./bindings/DocumentDiff";
+import type { Xy } from "./bindings/Xy";
 import { applyDiff } from "./documentDiff";
 import {
   projectSnapshot,
@@ -29,6 +30,10 @@ describe("applyDiff", () => {
       boardOutline: null,
       stackup: null,
       ratsnest: null,
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: { ...project.history, dirty: true, canUndo: true },
     };
     const next = applyDiff(project, diff);
@@ -59,6 +64,10 @@ describe("applyDiff", () => {
       boardOutline: null,
       stackup: null,
       ratsnest: null,
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: project.history,
     };
     const next = applyDiff(project, diff);
@@ -86,6 +95,10 @@ describe("applyDiff", () => {
       boardOutline: null,
       stackup: null,
       ratsnest: null,
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: project.history,
     };
     const next = applyDiff(project, diff);
@@ -126,6 +139,10 @@ describe("applyDiff", () => {
         nets: ["/OUT", "+5V"],
         lines: [{ net: "/OUT", from: [0, 0], to: [6_000_000, 0] }],
       },
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: project.history,
     };
     const next = applyDiff(project, diff);
@@ -135,6 +152,46 @@ describe("applyDiff", () => {
       { net: "GND", from: [0, 1_000_000], to: [5_000_000, 1_000_000] },
       { net: "/OUT", from: [0, 0], to: [6_000_000, 0] },
     ]);
+  });
+
+  it("replaces routed copper and design rules from the diff", () => {
+    const project = projectSnapshot({ revision: 4 });
+    const track = {
+      uuid: "track-1",
+      start: [0, 0] as Xy,
+      end: [5_000_000, 0] as Xy,
+      widthNm: 250_000,
+      layer: "F.Cu",
+      net: "GND",
+    };
+    const designRules = { ...project.designRules, trackWidthNm: 250_000 };
+    const diff: DocumentDiff = {
+      baseRevision: 4,
+      revision: 5,
+      titleBlock: null,
+      gridSizeNm: null,
+      definitions: null,
+      instances: null,
+      wires: null,
+      junctions: null,
+      labels: null,
+      noConnects: null,
+      ercSettings: false,
+      simulationSettingsChanged: false,
+      footprints: null,
+      boardOutline: null,
+      stackup: null,
+      ratsnest: null,
+      tracks: [track],
+      vias: [],
+      zones: [],
+      designRules,
+      history: project.history,
+    };
+    const next = applyDiff(project, diff);
+    expect(next?.tracks).toEqual([track]);
+    expect(next?.designRules.trackWidthNm).toBe(250_000);
+    expect(next?.footprints).toBe(project.footprints);
   });
 
   it("rejects a diff made against another revision", () => {
@@ -156,6 +213,10 @@ describe("applyDiff", () => {
       boardOutline: null,
       stackup: null,
       ratsnest: null,
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: project.history,
     };
     expect(applyDiff(project, diff)).toBeNull();
@@ -180,6 +241,10 @@ describe("applyDiff", () => {
       boardOutline: null,
       stackup: null,
       ratsnest: null,
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: project.history,
     };
     expect(applyDiff(project, diff)).toBeNull();

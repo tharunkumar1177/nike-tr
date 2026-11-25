@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ErcViolation } from "../bindings/ErcViolation";
 import type { LibraryHit } from "../bindings/LibraryHit";
 import type { OpAnnotation } from "../bindings/OpAnnotation";
@@ -8,6 +8,7 @@ import type { ProjectSnapshot } from "../bindings/ProjectSnapshot";
 import type { SimulationProgress } from "../bindings/SimulationProgress";
 import type { Xy } from "../bindings/Xy";
 import { BOARD_GRID_NM } from "../board";
+import { copperLayerNames } from "../boardSetup";
 import { failedAnnouncement, finishedAnnouncement } from "../convergence";
 import {
   SIMULATION_PROGRESS_EVENT,
@@ -30,6 +31,7 @@ import {
 } from "../viewport";
 import { BoardCanvas } from "./BoardCanvas";
 import { ErcPanel } from "./ErcPanel";
+import { LayersPanel } from "./LayersPanel";
 import { LibraryPanel } from "./LibraryPanel";
 import { SimPanel, type SimRun } from "./SimPanel";
 import {
@@ -58,6 +60,14 @@ const NO_MARKERS: ErcMarker[] = [];
 const NO_ANNOTATIONS: OpAnnotation[] = [];
 const IDLE: SimRun = { state: "idle" };
 const ELAPSED_TICK_MS = 100;
+/** Windows narrower than this open the board view with the Layers panel closed. */
+const LAYERS_PANEL_MIN_WIDTH_PX = 900;
+const NO_LAYERS: ReadonlySet<string> = new Set();
+
+/** Whether the window is wide enough to open with the Layers panel shown. */
+function wideWindow(): boolean {
+  return window.innerWidth >= LAYERS_PANEL_MIN_WIDTH_PX;
+}
 const NO_RUN_NOTICE =
   "Simulation out of date or not found. Run a simulation to plot.";
 
@@ -84,6 +94,7 @@ interface EditorShellProps {
   onUpdateBoard: () => void;
   onEditOutline: () => void;
   onEditStackup: () => void;
+  onEditDesignRules: () => void;
   /** A one-off board message, such as the result of an update. */
   boardNotice: string | null;
   onBoardNoticeConsumed: () => void;
@@ -117,6 +128,7 @@ export function EditorShell({
   onUpdateBoard,
   onEditOutline,
   onEditStackup,
+  onEditDesignRules,
   boardNotice,
   onBoardNoticeConsumed,
   controlsDisabled,
@@ -156,7 +168,32 @@ export function EditorShell({
   const [probeMode, setProbeMode] = useState(false);
   const [toolRequest, setToolRequest] = useState<CanvasTool | null>(null);
   const [ratsnestVisible, setRatsnestVisible] = useState(true);
+  const [routeMode, setRouteMode] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(wideWindow);
+  const [activeLayer, setActiveLayer] = useState("F.Cu");
+  const [hiddenLayers, setHiddenLayers] = useState(NO_LAYERS);
   const board = view === "board";
+  const copperLayers = project.stackup.copperLayers;
+  const layers = useMemo(() => copperLayerNames(copperLayers), [copperLayers]);
+  const fallbackLayer = layers[0] ?? activeLayer;
+  const shownLayer = layers.includes(activeLayer) ? activeLayer : fallbackLayer;
+  const visibleLayers = useMemo(() => {
+    const shown = layers.filter(
+      (layer) => layer === shownLayer || !hiddenLayers.has(layer),
+    );
+    return new Set(shown);
+  }, [layers, shownLayer, hiddenLayers]);
+
+  /** Shows `layer` if the user hid it, or hides it. */
+  const toggleLayer = (layer: string) => {
+    setHiddenLayers((hidden) => {
+      const next = new Set(hidden);
+      if (!next.delete(layer)) {
+        next.add(layer);
+      }
+      return next;
+    });
+  };
   const shownViewport = board ? boardViewport : viewport;
   const zoomLabel = shownViewport ? formatZoom(shownViewport.zoom) : "—";
 
@@ -398,8 +435,13 @@ export function EditorShell({
         onUpdateBoard={onUpdateBoard}
         onEditOutline={onEditOutline}
         onEditStackup={onEditStackup}
+        onEditDesignRules={onEditDesignRules}
+        routeMode={routeMode}
+        onToggleRouteMode={() => setRouteMode((active) => !active)}
         ratsnestVisible={ratsnestVisible}
         onToggleRatsnest={() => setRatsnestVisible((shown) => !shown)}
+        layersOpen={layersOpen}
+        onToggleLayers={() => setLayersOpen((open) => !open)}
         history={project.history}
         zoomLabel={zoomLabel}
         disabled={controlsDisabled}
@@ -432,6 +474,16 @@ export function EditorShell({
               outline={project.boardOutline}
               ratsnest={project.ratsnest}
               ratsnestVisible={ratsnestVisible}
+              tracks={project.tracks}
+              vias={project.vias}
+              zones={project.zones}
+              designRules={project.designRules}
+              layers={layers}
+              visibleLayers={visibleLayers}
+              activeLayer={shownLayer}
+              onActiveLayerChange={setActiveLayer}
+              routeMode={routeMode}
+              onRouteModeChange={setRouteMode}
               notice={boardNotice}
               onNoticeConsumed={onBoardNoticeConsumed}
               onHintChange={setHint}
@@ -440,6 +492,15 @@ export function EditorShell({
               onCursorMove={setCursor}
             />
           </div>
+          {layersOpen && (
+            <LayersPanel
+              layers={layers}
+              hidden={hiddenLayers}
+              activeLayer={shownLayer}
+              onToggleVisible={toggleLayer}
+              onSetActive={setActiveLayer}
+            />
+          )}
         </main>
       ) : (
         <main className="editor__workspace">
@@ -535,6 +596,7 @@ export function EditorShell({
         gridSizeNm={board ? BOARD_GRID_NM : project.gridSizeNm}
         zoomLabel={zoomLabel}
         hint={hint}
+        layer={board ? shownLayer : null}
       />
     </div>
   );

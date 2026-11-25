@@ -1,16 +1,23 @@
 /**
- * Draws the board scene onto the board canvas: the Edge.Cuts outline, back
- * then front footprints with their pads and Reference and Value text, the
- * ratsnest, and the hover and selection boxes. The context arrives in screen
+ * Draws the board scene onto the board canvas: the Edge.Cuts outline, zone
+ * fills, tracks from the bottom layer up, vias, back then front footprints
+ * with their pads and Reference and Value text, the ratsnest, the route being
+ * drawn, and the hover and selection marks. The context arrives in screen
  * space (CSS pixels); world geometry is in board nanometers with Y down.
  */
 import type { BoardFootprint } from "./bindings/BoardFootprint";
 import type { BoardPad } from "./bindings/BoardPad";
+import type { BoardTrack } from "./bindings/BoardTrack";
+import type { BoardVia } from "./bindings/BoardVia";
+import type { BoardZone } from "./bindings/BoardZone";
 import type { OutlineGraphic } from "./bindings/OutlineGraphic";
 import type { RatsnestSegment } from "./bindings/RatsnestSegment";
+import type { RoutePiece } from "./bindings/RoutePiece";
+import type { Xy } from "./bindings/Xy";
 import { offsetFootprint, padCornerRadius } from "./board";
 import { MIN_LINE_PX } from "./drawShapes";
 import { arcThrough } from "./libraryPreview";
+import { layerColorToken } from "./routing";
 import {
   NM_PER_MM,
   type ScreenPoint,
@@ -19,15 +26,37 @@ import {
   worldToScreen,
 } from "./viewport";
 
+/** The route being drawn, as the canvas previews it. */
+export interface RoutePreview {
+  net: string | null;
+  /** The pieces fixed by clicks so far. */
+  pieces: RoutePiece[];
+  /** The leg from the last fixed corner to the cursor. */
+  pending: RoutePiece[];
+  vias: Xy[];
+  widthNm: number;
+  viaDiameterNm: number;
+  viaDrillNm: number;
+}
+
 export interface BoardScene {
   footprints: BoardFootprint[];
   outline: OutlineGraphic[];
   /** `null` while the ratsnest is hidden. */
   ratsnest: RatsnestSegment[] | null;
+  tracks: BoardTrack[];
+  vias: BoardVia[];
+  zones: BoardZone[];
+  /** The board's copper layers, top to bottom. */
+  layers: string[];
+  /** The copper layers shown; tracks and fills on other layers are left out. */
+  visibleLayers: ReadonlySet<string>;
+  /** The selected footprint, track, or via. */
   selectedUuid: string | null;
   hoverUuid: string | null;
   /** In-progress drag: the local preview offset of one footprint. */
   drag: { uuid: string; dx: number; dy: number } | null;
+  route: RoutePreview | null;
 }
 
 /** Reference and Value text height on the board. */
@@ -42,6 +71,10 @@ const HOVER_ALPHA = 0.6;
 const SELECTION_DASH = [4, 4];
 /** Clearance between a footprint's bounds and its hover or selection box. */
 const SELECTION_PADDING_PX = 4;
+/** Copper off the net being routed fades to this opacity. */
+const DIM_ALPHA = 0.35;
+/** Zone fills are their layer's color at this opacity. */
+const ZONE_FILL_ALPHA = 0.3;
 
 /** The value of a CSS custom property on the canvas. */
 function token(styles: CSSStyleDeclaration, name: string): string {
@@ -229,7 +262,149 @@ function drawFootprintText(
   context.restore();
 }
 
-/** Draws the outline, footprints, ratsnest, and the hover and selection boxes. */
+/** Traces a closed polygon through `points`. */
+function tracePolygon(
+  context: CanvasRenderingContext2D,
+  viewport: Viewport,
+  points: Xy[],
+) {
+  context.beginPath();
+  points.forEach(([x, y], index) => {
+    const at = worldToScreen(viewport, x, y);
+    if (index === 0) {
+      context.moveTo(at.x, at.y);
+    } else {
+      context.lineTo(at.x, at.y);
+    }
+  });
+  context.closePath();
+}
+
+/** Strokes one straight piece of copper `widthNm` wide with round ends. */
+function drawCopperLine(
+  context: CanvasRenderingContext2D,
+  viewport: Viewport,
+  start: Xy,
+  end: Xy,
+  widthNm: number,
+) {
+  const from = worldToScreen(viewport, start[0], start[1]);
+  const to = worldToScreen(viewport, end[0], end[1]);
+  context.lineWidth = Math.max(widthNm * pxPerNm(viewport.zoom), MIN_LINE_PX);
+  context.beginPath();
+  context.moveTo(from.x, from.y);
+  context.lineTo(to.x, to.y);
+  context.stroke();
+}
+
+/** Fills a via's ring in `color`, then punches its drill in `holeColor`. */
+function drawVia(
+  context: CanvasRenderingContext2D,
+  viewport: Viewport,
+  position: Xy,
+  diameterNm: number,
+  drillNm: number,
+  color: string,
+  holeColor: string,
+) {
+  const scale = pxPerNm(viewport.zoom);
+  const at = worldToScreen(viewport, position[0], position[1]);
+  const radius = Math.max((diameterNm / 2) * scale, MIN_PAD_PX / 2);
+  context.fillStyle = color;
+  context.beginPath();
+  context.arc(at.x, at.y, radius, 0, 2 * Math.PI);
+  context.fill();
+  context.fillStyle = holeColor;
+  context.beginPath();
+  context.arc(at.x, at.y, (drillNm / 2) * scale, 0, 2 * Math.PI);
+  context.fill();
+}
+
+/**
+ * Fills each zone's poured copper on the shown layers and outlines the zone;
+ * rule areas get a dashed outline only.
+ */
+function drawZones(
+  context: CanvasRenderingContext2D,
+  viewport: Viewport,
+  scene: BoardScene,
+  color: (layer: string) => string,
+  dimmed: (net: string | null) => boolean,
+) {
+  for (const zone of scene.zones) {
+    const shown = zone.layers.filter((layer) => scene.visibleLayers.has(layer));
+    const [first] = shown;
+    if (first === undefined) {
+      continue;
+    }
+    context.save();
+    if (dimmed(zone.net)) {
+      context.globalAlpha = DIM_ALPHA;
+    }
+    if (!zone.keepout) {
+      for (const fill of zone.fills) {
+        if (!scene.visibleLayers.has(fill.layer)) {
+          continue;
+        }
+        context.save();
+        context.globalAlpha *= ZONE_FILL_ALPHA;
+        context.fillStyle = color(fill.layer);
+        tracePolygon(context, viewport, fill.points);
+        context.fill();
+        context.restore();
+      }
+    }
+    context.strokeStyle = color(first);
+    context.lineWidth = 1;
+    if (zone.keepout) {
+      context.setLineDash(SELECTION_DASH);
+    }
+    tracePolygon(context, viewport, zone.outline);
+    context.stroke();
+    context.restore();
+  }
+}
+
+/** Draws the route being drawn: fixed pieces solid, the leg to the cursor dashed. */
+function drawRoute(
+  context: CanvasRenderingContext2D,
+  viewport: Viewport,
+  route: RoutePreview,
+  color: (layer: string) => string,
+  viaColor: string,
+  holeColor: string,
+) {
+  context.save();
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  for (const piece of route.pieces) {
+    context.strokeStyle = color(piece.layer);
+    drawCopperLine(context, viewport, piece.start, piece.end, route.widthNm);
+  }
+  context.globalAlpha = HOVER_ALPHA;
+  context.setLineDash(SELECTION_DASH);
+  for (const piece of route.pending) {
+    context.strokeStyle = color(piece.layer);
+    drawCopperLine(context, viewport, piece.start, piece.end, route.widthNm);
+  }
+  context.restore();
+  for (const via of route.vias) {
+    drawVia(
+      context,
+      viewport,
+      via,
+      route.viaDiameterNm,
+      route.viaDrillNm,
+      viaColor,
+      holeColor,
+    );
+  }
+}
+
+/**
+ * Draws the outline, zones, tracks, vias, footprints, ratsnest, the route
+ * being drawn, and the hover and selection marks.
+ */
 export function drawBoardScene(
   context: CanvasRenderingContext2D,
   viewport: Viewport,
@@ -243,7 +418,16 @@ export function drawBoardScene(
   const focus = token(styles, "--color-focus");
   const text = token(styles, "--color-text-primary");
   const hole = token(styles, "--color-canvas");
+  const viaColor = token(styles, "--color-via");
   const fontFamily = token(styles, "--font-family");
+  const layerColors = new Map<string, string>();
+  for (const layer of scene.layers) {
+    layerColors.set(layer, token(styles, layerColorToken(layer)));
+  }
+  const color = (layer: string) =>
+    layerColors.get(layer) ?? token(styles, layerColorToken(layer));
+  const route = scene.route;
+  const dimmed = (net: string | null) => route !== null && net !== route.net;
 
   context.save();
   context.lineCap = "round";
@@ -253,6 +437,42 @@ export function drawBoardScene(
     drawOutlineGraphic(context, viewport, graphic);
   }
   context.restore();
+
+  drawZones(context, viewport, scene, color, dimmed);
+
+  context.save();
+  context.lineCap = "round";
+  for (const layer of [...scene.layers].reverse()) {
+    if (!scene.visibleLayers.has(layer)) {
+      continue;
+    }
+    for (const track of scene.tracks) {
+      if (track.layer !== layer) {
+        continue;
+      }
+      const selected = track.uuid === scene.selectedUuid;
+      context.globalAlpha = dimmed(track.net) ? DIM_ALPHA : 1;
+      context.strokeStyle = selected ? focus : color(layer);
+      drawCopperLine(context, viewport, track.start, track.end, track.widthNm);
+    }
+  }
+  context.restore();
+
+  for (const via of scene.vias) {
+    const selected = via.uuid === scene.selectedUuid;
+    context.save();
+    context.globalAlpha = dimmed(via.net) ? DIM_ALPHA : 1;
+    drawVia(
+      context,
+      viewport,
+      via.position,
+      via.diameterNm,
+      via.drillNm,
+      selected ? focus : viaColor,
+      hole,
+    );
+    context.restore();
+  }
 
   const drag = scene.drag;
   const placed = scene.footprints.map((footprint) =>
@@ -269,7 +489,10 @@ export function drawBoardScene(
     const sideColor = footprint.side === "front" ? front : back;
     const padColor = selected ? focus : sideColor;
     for (const pad of footprint.pads) {
+      context.save();
+      context.globalAlpha = dimmed(pad.net) ? DIM_ALPHA : 1;
       drawPad(context, viewport, pad, padColor, hole);
+      context.restore();
     }
     const textColor = selected
       ? focus
@@ -283,15 +506,20 @@ export function drawBoardScene(
     context.save();
     context.strokeStyle = ratsnest;
     context.lineWidth = 1;
-    context.beginPath();
     for (const line of scene.ratsnest) {
       const from = worldToScreen(viewport, line.from[0], line.from[1]);
       const to = worldToScreen(viewport, line.to[0], line.to[1]);
+      context.globalAlpha = dimmed(line.net) ? DIM_ALPHA : 1;
+      context.beginPath();
       context.moveTo(from.x, from.y);
       context.lineTo(to.x, to.y);
+      context.stroke();
     }
-    context.stroke();
     context.restore();
+  }
+
+  if (route) {
+    drawRoute(context, viewport, route, color, viaColor, hole);
   }
 
   for (const footprint of drawn) {

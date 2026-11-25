@@ -8,6 +8,7 @@ import {
   EyeIcon,
   GlobalLabelIcon,
   LabelIcon,
+  LayersIcon,
   LibraryIcon,
   NoConnectIcon,
   PlayIcon,
@@ -16,6 +17,8 @@ import {
   PropertiesIcon,
   RatsnestIcon,
   RedoIcon,
+  RouteIcon,
+  RulesIcon,
   SettingsIcon,
   StackupIcon,
   StopIcon,
@@ -99,8 +102,13 @@ interface ToolbarProps {
   onUpdateBoard: () => void;
   onEditOutline: () => void;
   onEditStackup: () => void;
+  onEditDesignRules: () => void;
+  routeMode: boolean;
+  onToggleRouteMode: () => void;
   ratsnestVisible: boolean;
   onToggleRatsnest: () => void;
+  layersOpen: boolean;
+  onToggleLayers: () => void;
   history: HistoryStatus;
   zoomLabel: string;
   disabled: boolean;
@@ -131,8 +139,13 @@ export function Toolbar({
   onUpdateBoard,
   onEditOutline,
   onEditStackup,
+  onEditDesignRules,
+  routeMode,
+  onToggleRouteMode,
   ratsnestVisible,
   onToggleRatsnest,
+  layersOpen,
+  onToggleLayers,
   history,
   zoomLabel,
   disabled,
@@ -227,6 +240,23 @@ export function Toolbar({
           >
             <StackupIcon />
           </IconButton>
+          <IconButton
+            label="Design Rules"
+            disabled={disabled}
+            onClick={onEditDesignRules}
+          >
+            <RulesIcon />
+          </IconButton>
+          <span className="toolbar__separator" aria-hidden="true" />
+          <IconButton
+            label="Route track"
+            shortcut="X"
+            pressed={routeMode}
+            disabled={disabled}
+            onClick={onToggleRouteMode}
+          >
+            <RouteIcon />
+          </IconButton>
         </div>
         <div className="toolbar__group">
           <IconButton
@@ -236,6 +266,14 @@ export function Toolbar({
             onClick={onToggleRatsnest}
           >
             <RatsnestIcon />
+          </IconButton>
+          <IconButton
+            label="Layers"
+            pressed={layersOpen}
+            disabled={disabled}
+            onClick={onToggleLayers}
+          >
+            <LayersIcon />
           </IconButton>
           {zoom}
         </div>

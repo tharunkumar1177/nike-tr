@@ -33,6 +33,10 @@ export function applyDiff(
     boardOutline: diff.boardOutline ?? project.boardOutline,
     stackup: diff.stackup ?? project.stackup,
     ratsnest: applyRatsnest(project.ratsnest, diff.ratsnest),
+    tracks: diff.tracks ?? project.tracks,
+    vias: diff.vias ?? project.vias,
+    zones: diff.zones ?? project.zones,
+    designRules: diff.designRules ?? project.designRules,
     history: diff.history,
   };
 }

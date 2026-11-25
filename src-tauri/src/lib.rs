@@ -2,6 +2,7 @@ mod board;
 mod error;
 mod ipc;
 mod library;
+mod routing;
 mod settings;
 mod shell;
 mod sim;
@@ -77,6 +78,9 @@ pub fn run() {
             ipc::transform_footprints,
             ipc::edit_board_outline,
             ipc::edit_stackup,
+            ipc::edit_design_rules,
+            ipc::route_track,
+            ipc::delete_routes,
             ipc::list_recent_projects,
             ipc::remove_recent_project,
             ipc::close_window,

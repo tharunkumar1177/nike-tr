@@ -1,3 +1,4 @@
+import type { BoardDesignRules } from "./bindings/BoardDesignRules";
 import type { BoardFootprint } from "./bindings/BoardFootprint";
 import type { BoardStackup } from "./bindings/BoardStackup";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
@@ -33,6 +34,10 @@ export function projectSnapshot(
     boardOutline: [],
     stackup: newBoardStackup(),
     ratsnest: [],
+    tracks: [],
+    vias: [],
+    zones: [],
+    designRules: defaultDesignRules(),
     history: {
       dirty: false,
       canUndo: false,
@@ -41,6 +46,21 @@ export function projectSnapshot(
       redoLabel: null,
     },
     ...overrides,
+  };
+}
+
+/** KiCad's default design rules, as the core reports them for a new board. */
+export function defaultDesignRules(): BoardDesignRules {
+  return {
+    clearanceNm: 200_000,
+    minTrackWidthNm: 200_000,
+    minViaDiameterNm: 500_000,
+    minViaDrillNm: 300_000,
+    minAnnularRingNm: 100_000,
+    edgeClearanceNm: 500_000,
+    trackWidthNm: 200_000,
+    viaDiameterNm: 600_000,
+    viaDrillNm: 300_000,
   };
 }
 

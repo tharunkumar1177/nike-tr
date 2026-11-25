@@ -326,7 +326,7 @@ export function polygonProblem(points: Xy[]): string | null {
 }
 
 /** The copper layer names of a board with `copper` layers, top to bottom. */
-function copperNames(copper: number): string[] {
+export function copperLayerNames(copper: number): string[] {
   const names = ["F.Cu"];
   for (let inner = 1; inner <= copper - 2; inner++) {
     names.push(`In${inner}.Cu`);
@@ -342,7 +342,7 @@ function copperNames(copper: number): string[] {
  * core, starting with prepreg.
  */
 export function stackupPreview(copper: number): StackupRow[] {
-  const names = copperNames(copper);
+  const names = copperLayerNames(copper);
   const dielectrics = Math.max(names.length - 1, 1);
   const remaining =
     BOARD_THICKNESS_NM -

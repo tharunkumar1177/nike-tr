@@ -23,6 +23,10 @@ use crate::board::{
 };
 use crate::error::{AppError, AppErrorKind};
 use crate::library::{LibraryState, read_index};
+use crate::routing::{
+    BoardDesignRules, BoardTrack, BoardVia, BoardZone, TrackRoute, board_tracks, board_vias,
+    board_zones,
+};
 use crate::settings::{self, Settings};
 use crate::shell;
 use crate::sim::SimState;
@@ -152,6 +156,10 @@ pub struct ProjectSnapshot {
     pub stackup: BoardStackup,
     /// Every ratsnest line on the board.
     pub ratsnest: Vec<RatsnestSegment>,
+    pub tracks: Vec<BoardTrack>,
+    pub vias: Vec<BoardVia>,
+    pub zones: Vec<BoardZone>,
+    pub design_rules: BoardDesignRules,
     pub history: HistoryStatus,
 }
 
@@ -181,6 +189,10 @@ impl ProjectSnapshot {
             board_outline: board_outline(board),
             stackup: board_stackup(board),
             ratsnest: ratsnest_segments(Ratsnest::new(board).lines()),
+            tracks: board_tracks(board),
+            vias: board_vias(board),
+            zones: board_zones(board),
+            design_rules: BoardDesignRules::from(session.design_rules()),
             history: HistoryStatus::from(session),
         }
     }
@@ -267,6 +279,11 @@ pub struct DocumentDiff {
     pub stackup: Option<BoardStackup>,
     /// The ratsnest of the nets whose pads moved, appeared, or disappeared.
     pub ratsnest: Option<RatsnestUpdate>,
+    /// Every track, via, and zone when any of them changed.
+    pub tracks: Option<Vec<BoardTrack>>,
+    pub vias: Option<Vec<BoardVia>>,
+    pub zones: Option<Vec<BoardZone>>,
+    pub design_rules: Option<BoardDesignRules>,
     pub history: HistoryStatus,
 }
 
@@ -298,6 +315,12 @@ fn document_diff(
         board_outline: changes.board_outline.then(|| board_outline(board)),
         stackup: changes.stackup.then(|| board_stackup(board)),
         ratsnest: None,
+        tracks: changes.routes.then(|| board_tracks(board)),
+        vias: changes.routes.then(|| board_vias(board)),
+        zones: changes.routes.then(|| board_zones(board)),
+        design_rules: changes
+            .design_rules
+            .then(|| BoardDesignRules::from(session.design_rules())),
         history: HistoryStatus::from(session),
     }
 }
@@ -793,7 +816,7 @@ impl Inner {
         self.revision = self.revision.wrapping_add(1);
         let session = self.session.as_ref().ok_or_else(AppError::no_project)?;
         let mut diff = document_diff(session, base_revision, self.revision, changes);
-        if changes.footprints {
+        if changes.footprints || changes.routes {
             let nets = self.ratsnest.update(session.project().board());
             if !nets.is_empty() {
                 let lines = ratsnest_segments(self.ratsnest.net_lines(&nets));
@@ -1102,6 +1125,54 @@ pub fn edit_stackup(
     let copper = usize::try_from(copper_layers).unwrap_or(usize::MAX);
     let mut inner = state.lock();
     let changes = inner.session_mut()?.edit_stackup(copper)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Stores the board design rules in `.kicad_pro` as one undo step.
+#[tauri::command]
+pub fn edit_design_rules(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    rules: BoardDesignRules,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let changes = inner.session_mut()?.edit_design_rules(rules.into())?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Commits a finished interactive route, its tracks and vias, as one undo step.
+#[tauri::command]
+pub fn route_track(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    route: TrackRoute,
+) -> Result<(), AppError> {
+    let request = tron_core::RouteRequest::from(route);
+    let mut inner = state.lock();
+    let changes = inner
+        .session_mut()?
+        .route_track(&request, &mut Uuid::new_v4)?;
+    if changes.any() {
+        inner.publish(&app, changes)?;
+    }
+    Ok(())
+}
+
+/// Removes the tracks and vias in `uuids` as one undo step.
+#[tauri::command]
+pub fn delete_routes(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    uuids: Vec<Uuid>,
+) -> Result<(), AppError> {
+    let mut inner = state.lock();
+    let changes = inner.session_mut()?.delete_routes(&uuids)?;
     if changes.any() {
         inner.publish(&app, changes)?;
     }

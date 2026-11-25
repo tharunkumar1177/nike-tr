@@ -4,6 +4,7 @@ import type { AcQuantity } from "./bindings/AcQuantity";
 import type { AnalysisSettings } from "./bindings/AnalysisSettings";
 import type { AppErrorKind } from "./bindings/AppErrorKind";
 import type { AppInfo } from "./bindings/AppInfo";
+import type { BoardDesignRules } from "./bindings/BoardDesignRules";
 import type { BoardUpdateReview } from "./bindings/BoardUpdateReview";
 import type { BoardUpdateSettings } from "./bindings/BoardUpdateSettings";
 import type { ErcRuleSetting } from "./bindings/ErcRuleSetting";
@@ -26,6 +27,7 @@ import type { SymbolField } from "./bindings/SymbolField";
 import type { SymbolPlacement } from "./bindings/SymbolPlacement";
 import type { SymbolTransform } from "./bindings/SymbolTransform";
 import type { TraceReadout } from "./bindings/TraceReadout";
+import type { TrackRoute } from "./bindings/TrackRoute";
 import type { WaveformPoint } from "./bindings/WaveformPoint";
 import type { Xy } from "./bindings/Xy";
 
@@ -295,6 +297,21 @@ export function editBoardOutline(points: Xy[]): Promise<void> {
 /** Gives the board `copperLayers` copper layers with KiCad's default stackup. */
 export function editStackup(copperLayers: number): Promise<void> {
   return invoke<void>("edit_stackup", { copperLayers });
+}
+
+/** Stores the board design rules in the `.kicad_pro` as one undo step. */
+export function editDesignRules(rules: BoardDesignRules): Promise<void> {
+  return invoke<void>("edit_design_rules", { rules });
+}
+
+/** Commits a finished route, its tracks and vias, as one undo step. */
+export function routeTrack(route: TrackRoute): Promise<void> {
+  return invoke<void>("route_track", { route });
+}
+
+/** Removes the tracks and vias in `uuids` as one undo step. */
+export function deleteRoutes(uuids: string[]): Promise<void> {
+  return invoke<void>("delete_routes", { uuids });
 }
 
 export function listRecentProjects(): Promise<RecentProject[]> {
