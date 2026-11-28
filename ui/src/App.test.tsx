@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import type { BoardPad } from "./bindings/BoardPad";
 import type { BoardUpdateReview } from "./bindings/BoardUpdateReview";
 import type { DocumentDiff } from "./bindings/DocumentDiff";
 import type { ErcRuleSetting } from "./bindings/ErcRuleSetting";
@@ -21,9 +22,11 @@ import type { LibraryStatus } from "./bindings/LibraryStatus";
 import type { LibrarySymbol } from "./bindings/LibrarySymbol";
 import type { ProjectSnapshot } from "./bindings/ProjectSnapshot";
 import type { RecentProject } from "./bindings/RecentProject";
+import type { Xy } from "./bindings/Xy";
 import { BOARD_GRID_NM, fitBoard } from "./board";
 import { snapToGrid } from "./symbols";
 import {
+  defaultDesignRules,
   newBoardStackup,
   projectSnapshot,
   resistorFootprint,
@@ -31,6 +34,7 @@ import {
   resistorPreview,
 } from "./testData";
 import {
+  type Viewport,
   fitToSheet,
   formatZoom,
   pxPerNm,
@@ -220,6 +224,10 @@ describe("App", () => {
       boardOutline: null,
       stackup: null,
       ratsnest: null,
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: {
         dirty: true,
         canUndo: true,
@@ -833,6 +841,10 @@ describe("Symbol placement", () => {
       boardOutline: null,
       stackup: null,
       ratsnest: null,
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: {
         ...snapshot.history,
         dirty: true,
@@ -1451,6 +1463,10 @@ describe("Wiring", () => {
       boardOutline: null,
       stackup: null,
       ratsnest: null,
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: { ...snapshot.history, dirty: true },
     });
     expect(await within(panel).findByText("Out of date")).toBeTruthy();
@@ -1583,6 +1599,10 @@ describe("Wiring", () => {
       boardOutline: null,
       stackup: null,
       ratsnest: null,
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: { ...snapshot.history, dirty: true, canUndo: true },
     });
     await waitFor(() => expect(argsOf(calls, "run_erc")).toHaveLength(2));
@@ -1690,6 +1710,10 @@ describe("Wiring", () => {
       boardOutline: null,
       stackup: null,
       ratsnest: null,
+      tracks: null,
+      vias: null,
+      zones: null,
+      designRules: null,
       history: { ...snapshot.history, dirty: true },
     });
     expect(await within(panel).findByText("Out of date")).toBeTruthy();
@@ -1975,6 +1999,165 @@ describe("Board view", () => {
         "Board is empty. Set the outline (Tools > Board Outline), then F8 updates it from the schematic.",
       ),
     ).toBeTruthy();
+  });
+
+  /** R1 and an R2 10 mm to its right, whose first pad is also on /OUT. */
+  function twoResistorBoard(): ProjectSnapshot {
+    const first = resistorFootprint();
+    const pads = first.pads.map((pad, index): BoardPad => ({
+      ...pad,
+      position: [pad.position[0] + 10_000_000, pad.position[1]],
+      net: index === 0 ? "/OUT" : "GND",
+    }));
+    const second = resistorFootprint({
+      uuid: "footprint-2",
+      reference: "R2",
+      position: [30_000_000, 20_000_000],
+      pads,
+      bounds: { min: [28_520_000, 19_270_000], max: [31_480_000, 20_730_000] },
+    });
+    return projectSnapshot({ footprints: [first, second] });
+  }
+
+  /** Presses the primary button on the canvas at a board point. */
+  function clickAt(canvas: HTMLElement, viewport: Viewport, at: Xy) {
+    const point = worldToScreen(viewport, at[0], at[1]);
+    const press = { pointerId: 1, clientX: point.x, clientY: point.y };
+    fireEvent.pointerDown(canvas, { ...press, button: 0 });
+    fireEvent.pointerUp(canvas, { ...press, button: 0 });
+  }
+
+  it("routes a track with a via, keeping a refused route open", async () => {
+    const message = "The board has no net named /OUT.";
+    let attempts = 0;
+    const { calls, canvas, viewport } = await openBoard(
+      {
+        route_track: () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw Object.assign(new Error(message), {
+              kind: "invalidInput",
+              detail: null,
+            });
+          }
+          return null;
+        },
+      },
+      twoResistorBoard(),
+    );
+
+    fireEvent.keyDown(canvas, { key: "x" });
+    const routeButton = screen.getByRole("button", { name: "Route track" });
+    expect(routeButton.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen.getByText("Click a pad or track end to route. Esc: Exit"),
+    ).toBeTruthy();
+    clickAt(canvas, viewport, [20_825_000, 20_000_000]);
+    expect(await screen.findByText("Routing net /OUT")).toBeTruthy();
+    clickAt(canvas, viewport, [24_130_000, 22_860_000]);
+    fireEvent.keyDown(canvas, { key: "v" });
+    expect(await screen.findByText("Layer switched to B.Cu")).toBeTruthy();
+    expect(screen.getByText("Layer B.Cu")).toBeTruthy();
+    clickAt(canvas, viewport, [29_175_000, 20_000_000]);
+    expect(await screen.findByText(message)).toBeTruthy();
+
+    fireEvent.keyDown(canvas, { key: "Enter" });
+    expect(await screen.findByText("Route finished")).toBeTruthy();
+    const route = {
+      net: "/OUT",
+      widthNm: 200_000,
+      viaDiameterNm: 600_000,
+      viaDrillNm: 300_000,
+      pieces: [
+        {
+          start: [20_825_000, 20_000_000],
+          end: [21_270_000, 20_000_000],
+          layer: "F.Cu",
+        },
+        {
+          start: [21_270_000, 20_000_000],
+          end: [24_130_000, 22_860_000],
+          layer: "F.Cu",
+        },
+        {
+          start: [24_130_000, 22_860_000],
+          end: [26_315_000, 22_860_000],
+          layer: "B.Cu",
+        },
+        {
+          start: [26_315_000, 22_860_000],
+          end: [29_175_000, 20_000_000],
+          layer: "B.Cu",
+        },
+      ],
+      vias: [[24_130_000, 22_860_000]],
+    };
+    expect(argsOf(calls, "route_track")).toEqual([{ route }, { route }]);
+
+    fireEvent.keyDown(canvas, { key: "Escape" });
+    expect(routeButton.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("selects and deletes tracks and vias, and picks layers", async () => {
+    const snapshot = projectSnapshot({
+      footprints: [resistorFootprint()],
+      tracks: [
+        {
+          uuid: "track-1",
+          start: [20_825_000, 20_000_000],
+          end: [25_000_000, 20_000_000],
+          widthNm: 250_000,
+          layer: "F.Cu",
+          net: "/OUT",
+        },
+      ],
+      vias: [
+        {
+          uuid: "via-1",
+          position: [25_000_000, 20_000_000],
+          diameterNm: 600_000,
+          drillNm: 300_000,
+          layers: ["F.Cu", "B.Cu"],
+          net: "/OUT",
+        },
+      ],
+    });
+    const { calls, canvas, viewport } = await openBoard(
+      { delete_routes: () => null },
+      snapshot,
+    );
+    expect(screen.getByText("F.Cu track, net /OUT, 0.25 mm wide")).toBeTruthy();
+    expect(screen.getByText("Via, net /OUT, F.Cu to B.Cu")).toBeTruthy();
+
+    clickAt(canvas, viewport, [23_000_000, 20_000_000]);
+    expect(await screen.findByText("Track selected")).toBeTruthy();
+    expect(screen.getByText("Track selected. Del: Remove")).toBeTruthy();
+    fireEvent.keyDown(canvas, { key: "Delete" });
+    expect(await screen.findByText("Track deleted")).toBeTruthy();
+    clickAt(canvas, viewport, [25_000_000, 20_000_000]);
+    expect(await screen.findByText("Via selected")).toBeTruthy();
+    fireEvent.keyDown(canvas, { key: "Backspace" });
+    expect(await screen.findByText("Via deleted")).toBeTruthy();
+    expect(argsOf(calls, "delete_routes")).toEqual([
+      { uuids: ["track-1"] },
+      { uuids: ["via-1"] },
+    ]);
+
+    const panel = screen.getByRole("complementary", { name: "Layers" });
+    expect(screen.getByText("Layer F.Cu")).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("radio", { name: "B.Cu" }));
+    expect(screen.getByText("Layer B.Cu")).toBeTruthy();
+    fireEvent.keyDown(canvas, { key: "PageUp" });
+    expect(await screen.findByText("Layer switched to F.Cu")).toBeTruthy();
+    const showBack = within(panel).getByRole("button", { name: "Show B.Cu" });
+    expect(showBack.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(showBack);
+    expect(showBack.getAttribute("aria-pressed")).toBe("false");
+    const showFront = within(panel).getByRole("button", { name: "Show F.Cu" });
+    expect((showFront as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Layers" }));
+    expect(screen.queryByRole("complementary", { name: "Layers" })).toBeNull();
   });
 });
 
@@ -2417,5 +2600,40 @@ describe("Board setup dialogs", () => {
     type(dialog, "Copper layers", "2");
     fireEvent.click(applyButton(dialog));
     expect(await within(dialog).findByText(message)).toBeTruthy();
+  });
+
+  it("checks and applies new design rules", async () => {
+    const { calls, dialog } = await openDialog(
+      "design-rules",
+      "Design Rules",
+      { edit_design_rules: () => null },
+      projectSnapshot(),
+    );
+
+    const clearance = within(dialog).getByLabelText("Clearance (mm)");
+    expect((clearance as HTMLInputElement).value).toBe("0.2");
+    expect(applyButton(dialog).disabled).toBe(true);
+    type(dialog, "Clearance (mm)", "abc");
+    expect(within(dialog).getByText("Invalid millimeter number.")).toBeTruthy();
+    type(dialog, "Clearance (mm)", "0.15");
+    type(dialog, "Default via drill (mm)", "0.6");
+    expect(
+      within(dialog).getByText("Via drill must be smaller than via diameter."),
+    ).toBeTruthy();
+    expect(applyButton(dialog).disabled).toBe(true);
+    type(dialog, "Default via drill (mm)", "0.35");
+    type(dialog, "Default track width (mm)", "0.25");
+
+    fireEvent.click(applyButton(dialog));
+    const rules = {
+      ...defaultDesignRules(),
+      clearanceNm: 150_000,
+      trackWidthNm: 250_000,
+      viaDrillNm: 350_000,
+    };
+    await waitFor(() =>
+      expect(argsOf(calls, "edit_design_rules")).toEqual([{ rules }]),
+    );
+    expect(await screen.findByText("Design rules updated.")).toBeTruthy();
   });
 });

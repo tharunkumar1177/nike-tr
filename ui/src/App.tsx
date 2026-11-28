@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { AnalysisSettings } from "./bindings/AnalysisSettings";
 import type { AppInfo } from "./bindings/AppInfo";
+import type { BoardDesignRules } from "./bindings/BoardDesignRules";
 import type { ErcRuleSeverity } from "./bindings/ErcRuleSeverity";
 import type { OutlineGraphic } from "./bindings/OutlineGraphic";
 import type { ProjectProperties } from "./bindings/ProjectProperties";
@@ -18,6 +19,7 @@ import type { Xy } from "./bindings/Xy";
 import { fitBoard } from "./board";
 import { BoardOutlineDialog } from "./components/BoardOutlineDialog";
 import { BoardUpdateDialog } from "./components/BoardUpdateDialog";
+import { DesignRulesDialog } from "./components/DesignRulesDialog";
 import { EditorShell } from "./components/EditorShell";
 import { ErcSeveritiesDialog } from "./components/ErcSeveritiesDialog";
 import { ErrorDialog } from "./components/ErrorDialog";
@@ -40,6 +42,7 @@ import {
   createProject,
   editAnalysisSettings,
   editBoardOutline,
+  editDesignRules,
   editErcSeverities,
   editProjectProperties,
   editStackup,
@@ -82,6 +85,7 @@ type ModalState =
   | { type: "boardUpdate" }
   | { type: "boardOutline" }
   | { type: "layerStackup" }
+  | { type: "designRules" }
   | { type: "unsaved"; next: LeaveAction }
   | {
       type: "error";
@@ -484,6 +488,21 @@ export function App() {
     return null;
   }
 
+  /** Stores new design rules, then shows the board. */
+  async function applyDesignRules(
+    rules: BoardDesignRules,
+  ): Promise<ErrorReport | null> {
+    try {
+      await editDesignRules(rules);
+    } catch (error) {
+      return toErrorReport(error);
+    }
+    setModal(null);
+    setView("board");
+    setBoardNotice("Design rules updated.");
+    return null;
+  }
+
   function handleMenu(id: string) {
     if (busy !== null || modal !== null || libraryDialogOpen) {
       return;
@@ -549,6 +568,9 @@ export function App() {
         return;
       case "layer-stackup":
         setModal({ type: "layerStackup" });
+        return;
+      case "design-rules":
+        setModal({ type: "designRules" });
         return;
       case "annotate-schematic":
         setAnnotateTicket((ticket) => ticket + 1);
@@ -670,6 +692,14 @@ export function App() {
             onCancel={dismiss}
           />
         ) : null;
+      case "designRules":
+        return project ? (
+          <DesignRulesDialog
+            rules={project.designRules}
+            onApply={applyDesignRules}
+            onCancel={dismiss}
+          />
+        ) : null;
       case "unsaved":
         return (
           <UnsavedChangesDialog
@@ -745,6 +775,7 @@ export function App() {
         onUpdateBoard={() => setModal({ type: "boardUpdate" })}
         onEditOutline={() => setModal({ type: "boardOutline" })}
         onEditStackup={() => setModal({ type: "layerStackup" })}
+        onEditDesignRules={() => setModal({ type: "designRules" })}
         boardNotice={boardNotice}
         onBoardNoticeConsumed={() => setBoardNotice(null)}
         controlsDisabled={modal !== null || busy !== null || libraryDialogOpen}

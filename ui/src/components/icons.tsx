@@ -247,6 +247,37 @@ export function StackupIcon() {
   );
 }
 
+/** A track bending at 45 degrees between two pads: route a track. */
+export function RouteIcon() {
+  return (
+    <Icon>
+      <circle cx="5" cy="18" r="2" />
+      <circle cx="19" cy="6" r="2" />
+      <path d="M7 18h4l6.6-6.6V8" />
+    </Icon>
+  );
+}
+
+/** Two offset sheets: the copper layers. */
+export function LayersIcon() {
+  return (
+    <Icon>
+      <path d="m12 4 9 5-9 5-9-5 9-5Z" />
+      <path d="m3 14 9 5 9-5" />
+    </Icon>
+  );
+}
+
+/** A ruler: the design rules. */
+export function RulesIcon() {
+  return (
+    <Icon>
+      <rect x="3" y="8" width="18" height="8" rx="1" />
+      <path d="M7 8v3M11 8v4M15 8v3M19 8v4" />
+    </Icon>
+  );
+}
+
 /** Pads joined by thin lines: the ratsnest. */
 export function RatsnestIcon() {
   return (

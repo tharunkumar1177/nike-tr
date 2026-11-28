@@ -13,6 +13,8 @@ interface StatusBarProps {
   gridSizeNm: number;
   zoomLabel: string;
   hint?: StatusHint | null;
+  /** The active copper layer, shown in the board view. */
+  layer?: string | null;
 }
 
 function coordinate(nm: number | undefined): string {
@@ -24,6 +26,7 @@ export function StatusBar({
   gridSizeNm,
   zoomLabel,
   hint = null,
+  layer = null,
 }: StatusBarProps) {
   return (
     <footer className="status-bar" role="status" aria-live="off">
@@ -43,6 +46,7 @@ export function StatusBar({
         <span className="status-bar__item">Y {coordinate(cursor?.y)} mm</span>
       </span>
       <span className="status-bar__group">
+        {layer && <span className="status-bar__item">Layer {layer}</span>}
         <span className="status-bar__item">Grid {formatMm(gridSizeNm)} mm</span>
         <span className="status-bar__item">Zoom {zoomLabel}</span>
       </span>

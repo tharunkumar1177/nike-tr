@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::board::{BoardGraphic, OutlineShape, copper_names};
 use crate::board_update::{self, BoardUpdateOptions, UPDATE_BOARD_LABEL};
+use crate::design_rules::DesignRules;
 use crate::erc::{RuleSeverities, Violation};
 use crate::error::CoreError;
 use crate::footprint::{Footprint, flip_node, footprint_uuid, rotate_node};
@@ -21,6 +22,7 @@ use crate::manifest::{AnalysisSettings, MAX_GRID, MIN_GRID};
 use crate::outline;
 use crate::project::Project;
 use crate::project_file::ProjectFile;
+use crate::route::{self, RouteRequest, Track, Via};
 use crate::sexpr::SExpr;
 use crate::symbol::unit_count;
 use crate::units::{Angle, Nm, Point};
@@ -41,6 +43,9 @@ pub const ROTATE_FOOTPRINTS_LABEL: &str = "Rotate Footprint";
 pub const FLIP_FOOTPRINTS_LABEL: &str = "Flip Footprint";
 pub const EDIT_OUTLINE_LABEL: &str = "Edit Board Outline";
 pub const EDIT_STACKUP_LABEL: &str = "Edit Stackup";
+pub const DESIGN_RULES_LABEL: &str = "Edit Design Rules";
+pub const ROUTE_LABEL: &str = "Route Track";
+pub const DELETE_ROUTES_LABEL: &str = "Delete Track";
 /// The longest field value, such as a datasheet URL.
 pub const MAX_FIELD_VALUE_CHARS: usize = 4096;
 
@@ -319,9 +324,10 @@ impl Command {
                     changes.note_board_node(node);
                 }
             }
-            Command::SetKicadProject { after, .. } => {
+            Command::SetKicadProject { before, after } => {
                 project.set_kicad_project((**after).clone());
-                changes.erc_settings = true;
+                changes.erc_settings |= before.rule_severities() != after.rule_severities();
+                changes.design_rules |= before.design_rules() != after.design_rules();
             }
             Command::Group { commands, .. } => {
                 for command in commands {
@@ -353,6 +359,10 @@ pub struct Changes {
     pub board_outline: bool,
     /// The board's `(layers)` table, `setup` (with its stackup), or thickness changed.
     pub stackup: bool,
+    /// Tracks, vias, or zones were added, changed, or removed.
+    pub routes: bool,
+    /// The design rules in `.kicad_pro` changed.
+    pub design_rules: bool,
 }
 
 impl Changes {
@@ -367,6 +377,8 @@ impl Changes {
             || self.footprints
             || self.board_outline
             || self.stackup
+            || self.routes
+            || self.design_rules
     }
 
     /// Records what kind of board item a replaced top-level `node` is.
@@ -374,6 +386,7 @@ impl Changes {
         match node.head().unwrap_or_default() {
             "footprint" => self.footprints = true,
             "layers" | "setup" | "general" => self.stackup = true,
+            "segment" | "arc" | "via" | "zone" => self.routes = true,
             _ if is_edge_cut(node) => self.board_outline = true,
             _ => {}
         }
@@ -1232,6 +1245,81 @@ impl Session {
         }))
     }
 
+    /// The design rules the board is routed and checked with.
+    pub fn design_rules(&self) -> DesignRules {
+        self.project.kicad_project().design_rules()
+    }
+
+    /// Stores `rules` in `.kicad_pro` as one undo step. Unchanged rules record nothing.
+    pub fn edit_design_rules(&mut self, rules: DesignRules) -> Result<Changes, CoreError> {
+        rules.validate().map_err(CoreError::InvalidEdit)?;
+        if self.design_rules() == rules {
+            return Ok(Changes::default());
+        }
+        let before = self.project.kicad_project().clone();
+        let file_name = format!("{}.kicad_pro", self.project.name());
+        let after = before
+            .with_design_rules(&file_name, &rules)
+            .map_err(|reason| self.unwritable_settings(&reason))?;
+        Ok(self.execute(Command::Group {
+            label: DESIGN_RULES_LABEL.to_owned(),
+            commands: vec![Command::SetKicadProject {
+                before: Box::new(before),
+                after: Box::new(after),
+            }],
+        }))
+    }
+
+    /// Adds a finished interactive route, its tracks and vias, as one undo step. New items
+    /// get UUIDs from `fresh`. Fails when the route doesn't pass [`route::route_nodes`].
+    pub fn route_track(
+        &mut self,
+        request: &RouteRequest,
+        fresh: &mut impl FnMut() -> Uuid,
+    ) -> Result<Changes, CoreError> {
+        let board = self.project.board();
+        let nodes = route::route_nodes(board, request, fresh);
+        let nodes = nodes.map_err(CoreError::InvalidEdit)?;
+        let first = board.route_insert_index();
+        let inserted = nodes
+            .into_iter()
+            .enumerate()
+            .map(|(offset, node)| (first + offset, node))
+            .collect();
+        Ok(self.execute(Command::EditBoard {
+            label: ROUTE_LABEL.to_owned(),
+            removed: Vec::new(),
+            inserted,
+        }))
+    }
+
+    /// Removes the tracks and vias in `uuids` as one undo step. Fails when one is missing.
+    pub fn delete_routes(&mut self, uuids: &[Uuid]) -> Result<Changes, CoreError> {
+        let uuids = dedupe(uuids);
+        if uuids.is_empty() {
+            return Ok(Changes::default());
+        }
+        let removed: NodeEdits = self
+            .project
+            .board()
+            .items()
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| route_uuid(node).is_some_and(|uuid| uuids.contains(&uuid)))
+            .map(|(position, node)| (position + 1, node.clone()))
+            .collect();
+        if removed.len() != uuids.len() {
+            return Err(CoreError::InvalidEdit(
+                "A track or via to delete is no longer on the board.".to_owned(),
+            ));
+        }
+        Ok(self.execute(Command::EditBoard {
+            label: DELETE_ROUTES_LABEL.to_owned(),
+            removed,
+            inserted: Vec::new(),
+        }))
+    }
+
     /// Updates the board from the schematic as one undo step, carrying out the plan
     /// [`crate::board_update::plan_board_update`] returns for the same inputs. New
     /// footprints and the items inside them get UUIDs from `fresh`.
@@ -1496,6 +1584,15 @@ fn missing_symbol() -> CoreError {
 fn is_edge_cut(node: &SExpr) -> bool {
     node.head().is_some_and(|head| head.starts_with("gr_"))
         && child_text(node, "layer") == Some("Edge.Cuts")
+}
+
+/// The UUID of a top-level track or via node.
+fn route_uuid(node: &SExpr) -> Option<Uuid> {
+    match node.head() {
+        Some("segment") => Track::read(node).map(|track| track.uuid),
+        Some("via") => Via::read(node).map(|via| via.uuid),
+        _ => None,
+    }
 }
 
 /// The error for a selection naming a footprint the board doesn't have.
